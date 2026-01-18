@@ -1,4 +1,6 @@
 // Config file processor - handles reading/writing config files with variable substitution
+// TODO: Integrate with server startup to process config files
+#![allow(dead_code)]
 
 use crate::games::{ConfigFile, ConfigFileFormat};
 use std::collections::HashMap;

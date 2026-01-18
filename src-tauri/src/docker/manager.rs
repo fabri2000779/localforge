@@ -451,6 +451,7 @@ impl DockerManager {
     }
 
     /// Execute a command inside a running container with streaming output
+    #[allow(dead_code)]
     pub async fn exec_command<F>(
         &self,
         container_id: &str,

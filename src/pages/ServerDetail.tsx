@@ -417,53 +417,6 @@ export function ServerDetail() {
     return ['EULA', 'CREATE_CONSOLE_IN_PIPE', 'ENABLE_RCON'].includes(key);
   };
 
-  // Get quick access folders based on game type
-  const getQuickAccessFolders = () => {
-    const gameType = server?.game_type || '';
-    
-    // Game-specific folder mappings
-    const folderMappings: Record<string, Array<{ name: string; path: string; description: string; color: string }>> = {
-      'minecraft-java': [
-        { name: 'World', path: 'world', description: 'Game world files', color: 'text-yellow-400' },
-        { name: 'Config', path: 'config', description: 'Server settings', color: 'text-blue-400' },
-        { name: 'Plugins', path: 'plugins', description: 'Add-ons & mods', color: 'text-purple-400' },
-        { name: 'Logs', path: 'logs', description: 'Server logs', color: 'text-green-400' },
-      ],
-      'minecraft-bedrock': [
-        { name: 'Worlds', path: 'worlds', description: 'Game world files', color: 'text-yellow-400' },
-        { name: 'Config', path: 'config', description: 'Server settings', color: 'text-blue-400' },
-        { name: 'Behavior Packs', path: 'behavior_packs', description: 'Custom behaviors', color: 'text-purple-400' },
-        { name: 'Resource Packs', path: 'resource_packs', description: 'Textures & assets', color: 'text-cyan-400' },
-      ],
-      'valheim': [
-        { name: 'Worlds', path: 'worlds', description: 'World save files', color: 'text-yellow-400' },
-        { name: 'Backups', path: 'backups', description: 'Auto backups', color: 'text-blue-400' },
-      ],
-      'terraria': [
-        { name: 'Worlds', path: '', description: 'World files (.wld)', color: 'text-yellow-400' },
-      ],
-      'factorio': [
-        { name: 'Saves', path: 'saves', description: 'Save files', color: 'text-yellow-400' },
-        { name: 'Mods', path: 'mods', description: 'Installed mods', color: 'text-purple-400' },
-        { name: 'Config', path: 'config', description: 'Server settings', color: 'text-blue-400' },
-      ],
-      '7days': [
-        { name: 'Saves', path: 'Saves', description: 'World saves', color: 'text-yellow-400' },
-        { name: 'Mods', path: 'Mods', description: 'Installed mods', color: 'text-purple-400' },
-      ],
-      'hytale': [
-        { name: 'Worlds', path: 'universe/worlds', description: 'World files', color: 'text-yellow-400' },
-        { name: 'Mods', path: 'mods', description: 'Installed mods', color: 'text-purple-400' },
-        { name: 'Logs', path: 'logs', description: 'Server logs', color: 'text-green-400' },
-      ],
-    };
-    
-    // Return game-specific folders or generic defaults
-    return folderMappings[gameType] || [
-      { name: 'Data', path: '', description: 'Server files', color: 'text-yellow-400' },
-    ];
-  };
-
   const statusColors = {
     running: { bg: 'bg-green-500/10', border: 'border-green-500/30', text: 'text-green-500', dot: 'bg-green-500' },
     stopped: { bg: 'bg-zinc-500/10', border: 'border-zinc-500/30', text: 'text-zinc-400', dot: 'bg-zinc-500' },

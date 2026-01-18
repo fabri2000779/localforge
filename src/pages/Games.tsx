@@ -17,7 +17,6 @@ export function GamesPage() {
   
   const [editMode, setEditMode] = useState<EditMode>('none');
   const [editingGame, setEditingGame] = useState<GameConfig | null>(null);
-  const [originalGameType, setOriginalGameType] = useState<string>('');
   const [expandedGame, setExpandedGame] = useState<string | null>(null);
   const [importJson, setImportJson] = useState('');
   const [showImportDialog, setShowImportDialog] = useState(false);
@@ -48,13 +47,11 @@ export function GamesPage() {
 
   const handleStartCreate = () => {
     setEditingGame({ ...DEFAULT_GAME_CONFIG, game_type: `custom-${Date.now()}` });
-    setOriginalGameType('');
     setEditMode('create');
   };
 
   const handleStartEdit = (game: GameConfig) => {
     setEditingGame({ ...game, is_custom: true });
-    setOriginalGameType(game.game_type);
     setEditMode('edit');
   };
 
@@ -68,14 +65,12 @@ export function GamesPage() {
     if (success) {
       setEditMode('none');
       setEditingGame(null);
-      setOriginalGameType('');
     }
   };
 
   const handleCancel = () => {
     setEditMode('none');
     setEditingGame(null);
-    setOriginalGameType('');
   };
 
   const handleDelete = async (gameType: string) => {

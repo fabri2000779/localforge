@@ -5,16 +5,13 @@ import {
   Folder,
   File,
   ChevronRight,
-  ChevronLeft,
   RefreshCw,
-  Plus,
   Trash2,
   Edit3,
   Copy,
   Scissors,
   FolderPlus,
   FilePlus,
-  MoreVertical,
   X,
   Save,
   Home,
@@ -623,7 +620,9 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
                       {getFileIcon(entry)}
                       <span className={entry.is_dir ? 'font-medium' : ''}>{entry.name}</span>
                       {!entry.is_dir && isEditable(entry) && (
-                        <Edit3 size={12} className="text-zinc-600" title="Editable" />
+                        <span title="Editable">
+                          <Edit3 size={12} className="text-zinc-600" />
+                        </span>
                       )}
                     </div>
                   </td>

@@ -39,6 +39,7 @@ export function ServerCard({ server }: Props) {
     stopped: 'bg-slate-500',
     starting: 'bg-yellow-500',
     stopping: 'bg-yellow-500',
+    installing: 'bg-blue-500',
     error: 'bg-red-500',
   };
 

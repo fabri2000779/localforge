@@ -1,6 +1,6 @@
 use crate::commands::games::GamesState;
 use crate::docker::DockerManager;
-use crate::games::{build_env_vars, apply_config_variables, GameType};
+use crate::games::{build_env_vars, GameType};
 use bollard::container::{LogOutput, LogsOptions};
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use futures_util::stream::StreamExt;
