@@ -1,0 +1,42 @@
+[package]
+name = "serverwave-anywhere"
+version = "0.1.0"
+description = "Run Serverwave game servers anywhere, locally"
+authors = ["Fabrizio"]
+edition = "2021"
+
+[lib]
+name = "serverwave_anywhere_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+bollard = "0.17"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+directories = "5"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+lazy_static = "1.5"
+futures-util = "0.3"
+base64 = "0.22"
+shell-words = "1.1"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"

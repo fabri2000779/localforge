@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="wave" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1"/>
+      <stop offset="100%" style="stop-color:#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="8" fill="#18181b"/>
+  <path d="M6 16 Q10 12, 14 16 T22 16 T30 16" stroke="url(#wave)" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M2 20 Q6 16, 10 20 T18 20 T26 20" stroke="url(#wave)" stroke-width="2.5" fill="none" stroke-linecap="round" opacity="0.7"/>
+</svg>
