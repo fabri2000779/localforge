@@ -77,21 +77,47 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Decode Apple API key (.p8) for notarization
+      - name: Sanitise Apple signing secrets (macOS only)
+        # Secrets uploaded via `gh secret set` from PowerShell can ship
+        # with a UTF-8 BOM (EF BB BF) and/or trailing CR/LF that
+        # tauri-action's base64 decoder rejects with
+        # "Invalid symbol 239, offset 0". We re-export each one with
+        # those stripped so the build step gets clean values.
         if: runner.os == 'macOS'
         env:
-          APPLE_API_KEY_PATH_BASE64: ${{ secrets.APPLE_API_KEY_PATH_BASE64 }}
+          RAW_CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          RAW_CERT_PASS: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          RAW_IDENT: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          RAW_KEYCHAIN: ${{ secrets.KEYCHAIN_PASSWORD }}
+          RAW_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          RAW_KEY_ID: ${{ secrets.APPLE_API_KEY }}
+          RAW_KEY_P8: ${{ secrets.APPLE_API_KEY_PATH_BASE64 }}
         run: |
-          if [ -z "${APPLE_API_KEY_PATH_BASE64:-}" ]; then
+          sanitise() {
+            # Strip leading UTF-8 BOM, any CR/LF, and surrounding spaces.
+            printf '%s' "$1" \
+              | sed $'s/^\xEF\xBB\xBF//' \
+              | tr -d '\r\n' \
+              | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+          }
+          {
+            echo "APPLE_CERTIFICATE=$(sanitise "$RAW_CERT")"
+            echo "APPLE_CERTIFICATE_PASSWORD=$(sanitise "$RAW_CERT_PASS")"
+            echo "APPLE_SIGNING_IDENTITY=$(sanitise "$RAW_IDENT")"
+            echo "KEYCHAIN_PASSWORD=$(sanitise "$RAW_KEYCHAIN")"
+            echo "APPLE_API_ISSUER=$(sanitise "$RAW_ISSUER")"
+            echo "APPLE_API_KEY=$(sanitise "$RAW_KEY_ID")"
+          } >> "$GITHUB_ENV"
+
+          # Decode the App Store Connect .p8 file to disk for notarytool.
+          if [ -z "${RAW_KEY_P8:-}" ]; then
             echo "::warning::APPLE_API_KEY_PATH_BASE64 not set — skipping notarization."
             exit 0
           fi
           mkdir -p ~/private_keys
-          # Strip any CR/LF/whitespace/BOM that PowerShell or copy-paste may
-          # have introduced when the secret was set, then decode.
-          printf '%s' "$APPLE_API_KEY_PATH_BASE64" \
-            | tr -d '\r\n\t ' \
+          printf '%s' "$RAW_KEY_P8" \
             | sed $'s/^\xEF\xBB\xBF//' \
+            | tr -d '\r\n\t ' \
             | base64 --decode > ~/private_keys/AuthKey.p8
           if [ ! -s ~/private_keys/AuthKey.p8 ]; then
             echo "::error::Decoded AuthKey.p8 is empty — APPLE_API_KEY_PATH_BASE64 looks malformed."
@@ -103,15 +129,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS code signing
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          # macOS notarization (App Store Connect API key)
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          # APPLE_API_KEY_PATH is exported by the previous step (only on macOS)
+          # macOS signing/notarization env vars are exported (cleaned of
+          # BOM/CRLF) by the previous step; tauri-action picks them up
+          # from the process env automatically.
         with:
           tagName: ${{ github.event.inputs.version || github.ref_name }}
           releaseName: 'LocalForge ${{ github.event.inputs.version || github.ref_name }}'
