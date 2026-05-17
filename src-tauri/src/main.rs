@@ -3,32 +3,33 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod backend;
 mod commands;
 mod docker;
 mod games;
+mod persistence;
 
+use backend::BackendState;
 use commands::games::GamesState;
 use commands::server::ServerState;
+use std::sync::Arc;
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
-    // Configure logging to filter out noisy tao warnings
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| {
-            EnvFilter::new("info")
-                .add_directive("tao=error".parse().unwrap())
-                .add_directive("wry=error".parse().unwrap())
-        });
-    
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .init();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("info")
+            .add_directive("tao=error".parse().unwrap())
+            .add_directive("wry=error".parse().unwrap())
+    });
+
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(ServerState::default())
         .manage(GamesState::default())
+        .manage(BackendState::default())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
             std::fs::create_dir_all(&app_data_dir).ok();
@@ -40,6 +41,24 @@ fn main() {
                 let config_dir = home.home_dir().join("LocalForge").join("config");
                 std::fs::create_dir_all(&config_dir).ok();
             }
+
+            // Try to bring up the local backend at startup. If Docker isn't
+            // running yet this leaves `BackendState::local` as None and the
+            // UI will surface the Docker-required screen; the user's
+            // "retry" click re-runs the same connect via check_docker_status.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match backend::LocalDockerBackend::connect().await {
+                    Ok(b) => {
+                        let state: tauri::State<BackendState> = handle.state();
+                        state.install_local(Arc::new(b)).await;
+                        tracing::info!("Local Docker backend connected");
+                    }
+                    Err(e) => {
+                        tracing::warn!("Local Docker backend unavailable at startup: {}", e);
+                    }
+                }
+            });
 
             tracing::info!("LocalForge initialized");
             Ok(())

@@ -261,18 +261,18 @@ pub struct ContainerStats {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FileEntryKind {
-    File,
-    Dir,
-    Symlink,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {
     pub name: String,
     pub path: String,
-    pub kind: FileEntryKind,
+    pub is_dir: bool,
     pub size: u64,
-    pub modified: Option<chrono::DateTime<chrono::Utc>>,
+    pub modified: Option<u64>,
+    pub extension: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectoryContents {
+    pub path: String,
+    pub parent: Option<String>,
+    pub entries: Vec<FileEntry>,
 }
