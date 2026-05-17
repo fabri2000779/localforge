@@ -178,6 +178,11 @@ pub trait NodeBackend: Send + Sync {
     /// the desktop's game catalogue.
     async fn run_install(&self, id: &str, game: GameConfig) -> Result<InstallStream>;
 
+    /// Stop the server (if running), wipe its on-disk data dir, and
+    /// mark it as not-installed so the next start re-runs the install
+    /// script. The persisted [`Server`] record is preserved.
+    async fn reset_server_data(&self, id: &str) -> Result<()>;
+
     // ----- file operations on the host -----------------------------------
     //
     // Paths are absolute. For the local backend that's the user's

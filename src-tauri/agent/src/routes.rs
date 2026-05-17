@@ -44,6 +44,7 @@ pub fn router(state: AppState) -> Router {
         .route("/servers/{id}/command", post(send_command))
         .route("/servers/{id}/stream", get(stream_logs))
         .route("/servers/{id}/install/stream", get(install_stream))
+        .route("/servers/{id}/reset-data", post(reset_server_data))
         // file ops on the agent host
         .route("/fs", get(fs_list).delete(fs_delete))
         .route("/fs/read", post(fs_read))
@@ -176,6 +177,14 @@ async fn delete_server(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     s.backend.delete_server(&id).await.map_err(map_err)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn reset_server_data(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    s.backend.reset_server_data(&id).await.map_err(map_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

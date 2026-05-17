@@ -441,35 +441,20 @@ pub async fn reinstall_server(
 ) -> Result<ServerResponse, String> {
     abort_stream(&server_id, &server_state).await;
 
-    let is_local = node_is_local(node_id.as_deref());
     let backend = require_backend(&state, node_id.as_deref()).await?;
-    let _ = backend.stop_server(&server_id).await;
-
-    if !is_local {
-        return Err(
-            "Reinstall on remote nodes isn't supported yet — delete and recreate the server."
-                .to_string(),
-        );
-    }
-
-    let mut server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
 
     let _ = app.emit(
         "server-log",
         LogEvent {
             server_id: server_id.clone(),
-            line: "[LocalForge] Deleting server data...".to_string(),
+            line: "[LocalForge] Resetting server data...".to_string(),
         },
     );
 
-    if server.data_path.exists() {
-        std::fs::remove_dir_all(&server.data_path).map_err(|e| e.to_string())?;
-        std::fs::create_dir_all(&server.data_path).map_err(|e| e.to_string())?;
-    }
-
-    server.installed = false;
-    server.install_container_id = None;
-    paths::save_server(&server).map_err(|e| e.to_string())?;
+    backend
+        .reset_server_data(&server_id)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let _ = app.emit(
         "server-log",
@@ -598,12 +583,18 @@ async fn run_install_pipeline(
             Ok(InstallEvent::OauthUrl { url }) => {
                 if opened_urls.insert(url.clone()) {
                     open_url_in_browser(&url);
+                    // The console line is for the in-app log; the
+                    // event is for the top-right toast.
                     let _ = app.emit(
                         "server-log",
                         LogEvent {
                             server_id: server_id.to_string(),
                             line: format!("[LocalForge] Opened auth URL in your browser: {}", url),
                         },
+                    );
+                    let _ = app.emit(
+                        "install-oauth-opened",
+                        serde_json::json!({ "url": url, "server_id": server_id }),
                     );
                 }
             }

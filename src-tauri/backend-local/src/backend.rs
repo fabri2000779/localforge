@@ -482,6 +482,22 @@ impl NodeBackend for LocalDockerBackend {
         Ok(Box::pin(mapped))
     }
 
+    async fn reset_server_data(&self, id: &str) -> Result<()> {
+        let mut server = self.require_server(id)?;
+        if let Some(container_id) = &server.container_id {
+            let _ = self.docker.stop_container(container_id).await;
+        }
+        if server.data_path.exists() {
+            std::fs::remove_dir_all(&server.data_path).map_err(BackendError::io)?;
+        }
+        std::fs::create_dir_all(&server.data_path).map_err(BackendError::io)?;
+        server.installed = false;
+        server.install_container_id = None;
+        server.status = ServerStatus::Stopped;
+        persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
+        Ok(())
+    }
+
     async fn run_install(&self, id: &str, game: GameConfig) -> Result<InstallStream> {
         let server = self.require_server(id)?;
 

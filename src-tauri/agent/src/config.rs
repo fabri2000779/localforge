@@ -65,64 +65,92 @@ pub struct InstallOutcome {
     pub bind: String,
     pub port: u16,
     pub token: String,
-    pub fingerprint: String,
+    /// `None` when the operator brought their own CA-signed cert
+    /// (typically Let's Encrypt) — the desktop falls back to WebPKI
+    /// roots and doesn't need fingerprint pinning.
+    pub fingerprint: Option<String>,
 }
 
 impl InstallOutcome {
     pub fn pairing_summary(&self) -> String {
+        let bind = if self.bind == "0.0.0.0" {
+            "<server-public-ip>"
+        } else {
+            &self.bind
+        };
+        let fp_line = match &self.fingerprint {
+            Some(fp) => format!("  Fingerprint: {}\n", fp),
+            None => "  Fingerprint: (skipped — using a CA-signed certificate)\n".to_string(),
+        };
         format!(
             "\n\
              localforge-agent installed.\n\
-             Pairing data — copy these three lines into the desktop's \"Add Node\" form:\n\
-             \n\
-               URL:         https://{bind}:{port}\n\
-               Token:       {token}\n\
-               Fingerprint: {fp}\n\
-             \n\
+             Pairing data — paste these into the desktop's \"Add Node\" form:\n\
+             \n  URL:         https://{bind}:{port}\n  Token:       {token}\n{fp}\n\
              Config saved to {cfg}. Keep it readable only by root.\n\
              Start the service with: systemctl enable --now localforge-agent\n",
-            bind = if self.bind == "0.0.0.0" {
-                "<server-public-ip>"
-            } else {
-                &self.bind
-            },
+            bind = bind,
             port = self.port,
             token = self.token,
-            fp = self.fingerprint,
-            cfg = self.config_path.display()
+            fp = fp_line,
+            cfg = self.config_path.display(),
         )
     }
 }
 
-pub fn install(
-    config_path: &Path,
-    data_root: &Path,
-    bind: &str,
-    port: u16,
-) -> anyhow::Result<InstallOutcome> {
+pub struct InstallOptions<'a> {
+    pub config_path: &'a Path,
+    pub data_root: &'a Path,
+    pub bind: &'a str,
+    pub port: u16,
+    /// Path to an existing PEM-encoded cert (Let's Encrypt fullchain,
+    /// Cloudflare origin cert, etc.). When `Some`, `key_pem_path` must
+    /// also be provided. When `None`, a self-signed cert is generated.
+    pub cert_pem_path: Option<&'a Path>,
+    pub key_pem_path: Option<&'a Path>,
+}
+
+pub fn install(opts: InstallOptions<'_>) -> anyhow::Result<InstallOutcome> {
     // Token: 32 random hex chars prefixed for easy recognition.
     let raw = Uuid::new_v4().simple().to_string();
     let token = format!("lf_agent_{}", raw);
 
-    // Self-signed cert valid for ~5 years, scoped to the bind address.
-    let (cert_pem, key_pem, fingerprint) = tls::generate_self_signed(bind)?;
+    let (cert_pem, key_pem, fingerprint) =
+        match (opts.cert_pem_path, opts.key_pem_path) {
+            (Some(cert), Some(key)) => {
+                let cert_pem = std::fs::read_to_string(cert).map_err(|e| {
+                    anyhow::anyhow!("failed to read cert {}: {}", cert.display(), e)
+                })?;
+                let key_pem = std::fs::read_to_string(key).map_err(|e| {
+                    anyhow::anyhow!("failed to read key {}: {}", key.display(), e)
+                })?;
+                (cert_pem, key_pem, None)
+            }
+            (None, None) => {
+                let (cert, key, fp) = tls::generate_self_signed(opts.bind)?;
+                (cert, key, Some(fp))
+            }
+            _ => anyhow::bail!(
+                "both --cert-pem and --key-pem must be provided together (or neither, to auto-generate)"
+            ),
+        };
 
     let cfg = Config {
         token: token.clone(),
-        bind: bind.to_string(),
-        port,
-        data_root: data_root.to_path_buf(),
+        bind: opts.bind.to_string(),
+        port: opts.port,
+        data_root: opts.data_root.to_path_buf(),
         tls_cert_pem: cert_pem,
         tls_key_pem: key_pem,
     };
-    cfg.save(config_path)?;
+    cfg.save(opts.config_path)?;
 
-    std::fs::create_dir_all(data_root)?;
+    std::fs::create_dir_all(opts.data_root)?;
 
     Ok(InstallOutcome {
-        config_path: config_path.to_path_buf(),
-        bind: bind.to_string(),
-        port,
+        config_path: opts.config_path.to_path_buf(),
+        bind: opts.bind.to_string(),
+        port: opts.port,
         token,
         fingerprint,
     })

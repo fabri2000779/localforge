@@ -19,10 +19,6 @@ pub fn load_server(id: &str) -> std::io::Result<Server> {
     persistence::load_server(&home_root(), id)
 }
 
-pub fn save_server(server: &Server) -> std::io::Result<()> {
-    persistence::save_server(&home_root(), server)
-}
-
 pub fn delete_server_record(id: &str) -> std::io::Result<()> {
     persistence::delete_server_record(&home_root(), id)
 }

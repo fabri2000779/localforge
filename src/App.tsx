@@ -13,6 +13,7 @@ import { GamesPage } from './pages/Games';
 import { Settings } from './pages/Settings';
 import { NodesPage } from './pages/Nodes';
 import { DockerRequired } from './components/DockerRequired';
+import { OAuthToast } from './components/OAuthToast';
 import './App.css';
 
 function App() {
@@ -39,6 +40,7 @@ function App() {
       <div className="h-screen flex flex-col bg-slate-900">
         <TitleBar />
         <DockerRequired status={status} onRetry={checkStatus} />
+        <OAuthToast />
       </div>
     );
   }
@@ -62,6 +64,7 @@ function App() {
             </Routes>
           </main>
         </div>
+        <OAuthToast />
       </div>
     </BrowserRouter>
   );

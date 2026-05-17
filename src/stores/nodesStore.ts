@@ -6,13 +6,23 @@ import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import type { AddRemoteNodeRequest, DockerInfo, NodeRecord } from '../types';
 
+export interface ClusterSummary {
+  total_nodes: number;
+  online_nodes: number;
+  containers_running: number;
+  containers_total: number;
+  images: number;
+}
+
 interface NodesState {
   nodes: NodeRecord[];
   isLoading: boolean;
   error: string | null;
   activeNodeId: string;
+  clusterSummary: ClusterSummary | null;
 
   fetchNodes: () => Promise<void>;
+  fetchClusterSummary: () => Promise<void>;
   setActiveNode: (id: string) => void;
   testRemote: (req: AddRemoteNodeRequest) => Promise<DockerInfo>;
   addRemote: (req: AddRemoteNodeRequest) => Promise<NodeRecord>;
@@ -30,6 +40,7 @@ export const useNodesStore = create<NodesState>((set, get) => ({
   isLoading: false,
   error: null,
   activeNodeId: 'local',
+  clusterSummary: null,
 
   fetchNodes: async () => {
     set({ isLoading: true, error: null });
@@ -38,6 +49,15 @@ export const useNodesStore = create<NodesState>((set, get) => ({
       set({ nodes, isLoading: false });
     } catch (e) {
       set({ error: String(e), isLoading: false });
+    }
+  },
+
+  fetchClusterSummary: async () => {
+    try {
+      const summary = await invoke<ClusterSummary>('cluster_summary');
+      set({ clusterSummary: summary });
+    } catch (e) {
+      console.error('[Store] fetchClusterSummary error:', e);
     }
   },
 

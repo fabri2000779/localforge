@@ -388,6 +388,18 @@ impl NodeBackend for RemoteAgentBackend {
         ws_log_stream(self.base_url.clone(), self.token.clone(), self.tls.clone(), id).await
     }
 
+    async fn reset_server_data(&self, id: &str) -> Result<()> {
+        let url = self.endpoint(&format!("/v1/servers/{}/reset-data", id))?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(transport)?;
+        ensure_ok(resp).await
+    }
+
     async fn run_install(&self, id: &str, game: GameConfig) -> Result<InstallStream> {
         ws_install_stream(
             self.base_url.clone(),

@@ -146,3 +146,44 @@ fn shell_escape(s: &str) -> String {
 pub fn is_local(rec: &NodeRecord) -> bool {
     matches!(rec.kind, NodeKindRecord::Local)
 }
+
+#[derive(Serialize)]
+pub struct ClusterSummary {
+    pub total_nodes: usize,
+    pub online_nodes: usize,
+    pub containers_running: u64,
+    pub containers_total: u64,
+    pub images: u64,
+}
+
+/// Aggregate docker_info across every registered node (local + every
+/// reachable remote). Offline nodes are simply skipped — they count
+/// towards total_nodes but not online_nodes.
+#[tauri::command]
+pub async fn cluster_summary(state: State<'_, NodeRegistry>) -> Result<ClusterSummary, String> {
+    let records = state.list_records().await;
+    let total_nodes = records.len();
+    let mut online_nodes = 0usize;
+    let mut containers_running = 0u64;
+    let mut containers_total = 0u64;
+    let mut images = 0u64;
+
+    for rec in records {
+        if let Some(backend) = state.backend(&rec.id).await {
+            if let Ok(info) = backend.docker_info().await {
+                online_nodes += 1;
+                containers_running += info.containers_running;
+                containers_total += info.containers_total;
+                images += info.images;
+            }
+        }
+    }
+
+    Ok(ClusterSummary {
+        total_nodes,
+        online_nodes,
+        containers_running,
+        containers_total,
+        images,
+    })
+}

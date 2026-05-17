@@ -39,8 +39,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// One-shot setup: generate a fresh token + TLS cert and write the
-    /// config file. Prints the pairing URL/token/fingerprint to stdout.
+    /// One-shot setup: generate a fresh token (+ self-signed TLS cert
+    /// by default) and write the config file. Prints the pairing
+    /// URL/token/fingerprint to stdout.
     Install {
         /// Where to write the config (default: /etc/localforge/agent.toml).
         #[arg(long)]
@@ -57,6 +58,17 @@ enum Command {
         /// TCP port to listen on (default: 7878).
         #[arg(long, default_value_t = 7878)]
         port: u16,
+
+        /// Path to a CA-signed cert (e.g. Let's Encrypt fullchain.pem)
+        /// to use instead of generating a self-signed one. Requires
+        /// --key-pem too. When set, the desktop trusts the cert via
+        /// WebPKI and doesn't need fingerprint pinning.
+        #[arg(long, requires = "key_pem")]
+        cert_pem: Option<PathBuf>,
+
+        /// Path to the matching private key (PEM, PKCS#8).
+        #[arg(long, requires = "cert_pem")]
+        key_pem: Option<PathBuf>,
     },
 
     /// Serve HTTPS using the configured token + TLS cert.
@@ -80,10 +92,19 @@ async fn main() -> anyhow::Result<()> {
             data_root,
             bind,
             port,
+            cert_pem,
+            key_pem,
         } => {
             let target = cp.unwrap_or(config_path);
             let data = data_root.unwrap_or_else(|| PathBuf::from("/var/lib/localforge"));
-            let outcome = config::install(&target, &data, &bind, port)?;
+            let outcome = config::install(config::InstallOptions {
+                config_path: &target,
+                data_root: &data,
+                bind: &bind,
+                port,
+                cert_pem_path: cert_pem.as_deref(),
+                key_pem_path: key_pem.as_deref(),
+            })?;
             println!("{}", outcome.pairing_summary());
             Ok(())
         }

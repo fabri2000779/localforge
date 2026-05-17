@@ -1,7 +1,9 @@
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Server, Play, Square } from 'lucide-react';
+import { Plus, Server, Play, Square, Cloud, Wifi } from 'lucide-react';
 import { useServerStore } from '../stores/serverStore';
 import { useGamesStore } from '../stores/gamesStore';
+import { useNodesStore } from '../stores/nodesStore';
 import { ServerCard } from '../components/ServerCard';
 import { GameIcon } from '../components/GameIcon';
 
@@ -9,9 +11,19 @@ export function Home() {
   const navigate = useNavigate();
   const { servers } = useServerStore();
   const { games } = useGamesStore();
+  const { nodes, clusterSummary, fetchNodes, fetchClusterSummary } =
+    useNodesStore();
 
-  const runningServers = servers.filter(s => s.status === 'running');
-  const stoppedServers = servers.filter(s => s.status === 'stopped');
+  const runningServers = servers.filter((s) => s.status === 'running');
+  const stoppedServers = servers.filter((s) => s.status === 'stopped');
+  const remoteNodes = nodes.filter((n) => n.kind.kind === 'remote');
+
+  useEffect(() => {
+    fetchNodes();
+    fetchClusterSummary();
+    const interval = setInterval(fetchClusterSummary, 10_000);
+    return () => clearInterval(interval);
+  }, [fetchNodes, fetchClusterSummary]);
 
   return (
     <div className="animate-fade-in">
@@ -22,8 +34,8 @@ export function Home() {
         </p>
       </header>
 
-      {/* Quick Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+      {/* Quick Stats (active node) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
         <div className="card flex items-center gap-4">
           <div className="p-3 bg-blue-600/20 rounded-lg">
             <Server className="text-blue-400" size={24} />
@@ -54,6 +66,46 @@ export function Home() {
           </div>
         </div>
       </div>
+
+      {/* Cluster overview — only meaningful once a remote agent is paired */}
+      {remoteNodes.length > 0 && clusterSummary && (
+        <div className="card mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Cloud className="text-purple-400" size={18} />
+              <h2 className="text-lg font-semibold">Across all nodes</h2>
+            </div>
+            <button
+              onClick={() => navigate('/nodes')}
+              className="text-xs text-slate-500 hover:text-slate-300"
+            >
+              Manage nodes →
+            </button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <ClusterStat
+              label="Nodes online"
+              value={`${clusterSummary.online_nodes}/${clusterSummary.total_nodes}`}
+              icon={<Wifi size={14} className="text-emerald-400" />}
+            />
+            <ClusterStat
+              label="Containers running"
+              value={clusterSummary.containers_running.toString()}
+              icon={<Play size={14} className="text-emerald-400" />}
+            />
+            <ClusterStat
+              label="Containers total"
+              value={clusterSummary.containers_total.toString()}
+              icon={<Server size={14} className="text-blue-400" />}
+            />
+            <ClusterStat
+              label="Images"
+              value={clusterSummary.images.toString()}
+              icon={<Square size={14} className="text-slate-400" />}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Running Servers */}
       {runningServers.length > 0 && (
@@ -116,6 +168,26 @@ export function Home() {
           ))}
         </div>
       </section>
+    </div>
+  );
+}
+
+function ClusterStat({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="p-2 rounded-lg bg-slate-800">{icon}</div>
+      <div>
+        <div className="text-lg font-semibold">{value}</div>
+        <div className="text-xs text-slate-500">{label}</div>
+      </div>
     </div>
   );
 }
