@@ -250,21 +250,119 @@ html {
 }
 
 /* ---------------------------------------------------------------------------
- * Stat cards
+ * Hero (the title block + CTA at the very top of a page)
  * ------------------------------------------------------------------------- */
-.stat-card {
+.hero {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 2.75rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.hero-text {
+  min-width: 0;
+  flex: 1;
+}
+.hero-title {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.028em;
+  color: #f8fafc;
+  line-height: 1.1;
+}
+.hero-subtitle {
+  margin-top: 0.625rem;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--color-text-muted);
+  letter-spacing: -0.005em;
+  max-width: 38rem;
+}
+.hero-cta {
+  flex-shrink: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Overview grid (top-of-Home metrics block)
+ * ------------------------------------------------------------------------- */
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr;
   gap: 0.875rem;
-  padding: 1.125rem 1.25rem;
-  background: linear-gradient(180deg, rgba(20, 26, 38, 0.6) 0%, rgba(14, 19, 28, 0.6) 100%);
+}
+@media (min-width: 640px) {
+  .overview-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Stat cards — bigger numbers, accent-coloured left rail, more breathing room
+ * ------------------------------------------------------------------------- */
+.stat-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.25rem 1.375rem;
+  background: linear-gradient(180deg, rgba(20, 26, 38, 0.65) 0%, rgba(14, 19, 28, 0.65) 100%);
   border: 1px solid var(--color-border);
   border-radius: 0.875rem;
-  transition: border-color 150ms, transform 150ms, background-color 150ms;
+  overflow: hidden;
+  transition: border-color 150ms, transform 150ms, box-shadow 150ms;
+}
+.stat-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--stat-accent, var(--color-accent));
+  opacity: 0.7;
 }
 .stat-card:hover {
   border-color: var(--color-border-strong);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px -16px rgba(0, 0, 0, 0.55);
 }
+
+.stat-card-blue    { --stat-accent: #3b82f6; }
+.stat-card-emerald { --stat-accent: #22c55e; }
+.stat-card-slate   { --stat-accent: #64748b; }
+
+.stat-icon-large {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--stat-accent, var(--color-accent)) 14%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--stat-accent, var(--color-accent)) 18%, transparent) inset;
+}
+
+.stat-value-large {
+  font-size: 1.875rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: #f8fafc;
+  line-height: 1;
+}
+.stat-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-dim);
+  margin-top: 0.45rem;
+}
+
+/* Legacy `.stat-value` / `.stat-icon` left here for any non-Home callers. */
 .stat-icon {
   width: 2.5rem;
   height: 2.5rem;
@@ -280,14 +378,6 @@ html {
   letter-spacing: -0.025em;
   color: #f8fafc;
   line-height: 1.1;
-}
-.stat-label {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--color-text-dim);
-  margin-top: 0.25rem;
 }
 
 /* ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import {
   Wifi,
   ArrowRight,
   Sparkles,
+  Activity,
 } from 'lucide-react';
 import { useServerStore } from '../stores/serverStore';
 import { useGamesStore } from '../stores/gamesStore';
@@ -36,53 +37,66 @@ export function Home() {
 
   return (
     <div className="animate-fade-in">
-      {/* Hero */}
-      <header className="page-header flex items-center justify-between gap-6 flex-wrap">
-        <div className="min-w-0">
-          <div className="eyebrow mb-2 flex items-center gap-1.5">
+      {/* Hero — taller, more prominent. Title block on the left, CTA on
+          the right, vertically centred so the eye lands on the heading. */}
+      <header className="hero">
+        <div className="hero-text">
+          <div className="eyebrow mb-2.5 flex items-center gap-1.5">
             <Sparkles size={11} className="text-blue-400" />
             Dashboard
           </div>
-          <h1 className="page-title">Welcome to LocalForge</h1>
-          <p className="page-subtitle max-w-xl">
+          <h1 className="hero-title">Welcome to LocalForge</h1>
+          <p className="hero-subtitle">
             Spin up, manage and observe your game servers — locally or across
             remote nodes — without leaving the desktop.
           </p>
         </div>
         <button
           onClick={() => navigate('/servers/create')}
-          className="btn btn-primary shrink-0"
+          className="btn btn-primary hero-cta"
         >
           <Plus size={16} strokeWidth={2.2} />
           New server
         </button>
       </header>
 
-      {/* Quick Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-10">
-        <StatCard
-          label="Total servers"
-          value={servers.length}
-          icon={<Server size={18} className="text-blue-300" />}
-          accent="rgba(59, 130, 246, 0.14)"
-        />
-        <StatCard
-          label="Running"
-          value={runningServers.length}
-          icon={<Play size={18} className="text-emerald-300" />}
-          accent="rgba(34, 197, 94, 0.14)"
-        />
-        <StatCard
-          label="Stopped"
-          value={stoppedServers.length}
-          icon={<Square size={18} className="text-slate-400" />}
-          accent="rgba(148, 163, 184, 0.10)"
-        />
-      </div>
+      {/* Overview — three stats wrapped in their own section so they
+          read as a unit, not as three loose floating cards. */}
+      <section className="mb-10">
+        <div className="section-header">
+          <div className="section-title">
+            <Activity size={14} className="text-blue-400" />
+            Overview
+          </div>
+          <span className="text-[11px] text-slate-500 font-medium">
+            Local Docker
+          </span>
+        </div>
+        <div className="overview-grid">
+          <StatCard
+            label="Total servers"
+            value={servers.length}
+            icon={<Server size={20} className="text-blue-300" />}
+            accent="blue"
+          />
+          <StatCard
+            label="Running"
+            value={runningServers.length}
+            icon={<Play size={20} className="text-emerald-300" />}
+            accent="emerald"
+          />
+          <StatCard
+            label="Stopped"
+            value={stoppedServers.length}
+            icon={<Square size={20} className="text-slate-400" />}
+            accent="slate"
+          />
+        </div>
+      </section>
 
       {/* Cluster overview — only meaningful once a remote agent is paired */}
       {remoteNodes.length > 0 && clusterSummary && (
-        <section className="card card-elevated mb-8">
+        <section className="card card-elevated mb-10">
           <div className="section-header !mb-5">
             <div className="section-title">
               <Cloud size={15} className="text-purple-400" />
@@ -233,15 +247,13 @@ function StatCard({
   label: string;
   value: number;
   icon: React.ReactNode;
-  accent: string;
+  accent: 'blue' | 'emerald' | 'slate';
 }) {
   return (
-    <div className="stat-card">
-      <div className="stat-icon" style={{ background: accent }}>
-        {icon}
-      </div>
+    <div className={`stat-card stat-card-${accent}`}>
+      <div className="stat-icon-large">{icon}</div>
       <div className="flex-1 min-w-0">
-        <div className="stat-value tabular-nums">{value}</div>
+        <div className="stat-value-large tabular-nums">{value}</div>
         <div className="stat-label">{label}</div>
       </div>
     </div>
