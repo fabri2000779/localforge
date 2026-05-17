@@ -21,17 +21,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Universal macOS: one tauri build on the Apple Silicon runner
+          # cross-compiles to both arm64 + x86_64 and produces a fat .dmg.
+          # We do this instead of a separate macos-13 (Intel) job because
+          # macos-13 runners are scarce and routinely queue indefinitely.
           - platform: macos-latest
-            target: aarch64-apple-darwin
-            args: '--target aarch64-apple-darwin'
-          - platform: macos-13
-            target: x86_64-apple-darwin
-            args: '--target x86_64-apple-darwin'
+            target: universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: '--target universal-apple-darwin'
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            rust_targets: x86_64-unknown-linux-gnu
             args: ''
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            rust_targets: x86_64-pc-windows-msvc
             args: ''
 
     runs-on: ${{ matrix.platform }}
@@ -66,7 +70,9 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          # Universal mac needs both arches; everyone else gets the
+          # single rust triple from the matrix.
+          targets: ${{ matrix.rust_targets }}
 
       - name: Cache Cargo registry & build
         uses: Swatinem/rust-cache@v2
@@ -138,21 +144,46 @@ jobs:
           releaseBody: |
             See the assets below to download the installer for your platform.
 
+            ## Desktop
             **Windows:** `.msi` or `.exe` (NSIS)
-            **macOS:** `.dmg` (Apple Silicon or Intel)
+            **macOS:** universal `.dmg` (Apple Silicon + Intel in one file)
             **Linux:** `.AppImage` or `.deb`
 
-            ## Remote agent (Linux VPS)
+            ## Remote agent
 
-            Install on a server:
+            ### Linux (one-liner)
 
             ```bash
             curl -sSL https://github.com/fabri2000779/localforge/releases/download/${{ github.event.inputs.version || github.ref_name }}/install-agent.sh | sudo bash
             ```
 
-            Or grab the binary directly:
+            ### Windows / Windows Server
+
+            Download `localforge-agent-x86_64-pc-windows-msvc.exe`, then in an
+            elevated PowerShell:
+
+            ```powershell
+            New-Item -Type Directory C:\ProgramData\LocalForge\config -Force
+            .\localforge-agent-x86_64-pc-windows-msvc.exe install `
+              --config-path C:\ProgramData\LocalForge\config\agent.toml `
+              --data-root   C:\ProgramData\LocalForge
+            ```
+
+            That prints the pairing URL/token/fingerprint. To run as a
+            Windows Service (recommended), use `sc create` or NSSM:
+
+            ```powershell
+            sc.exe create LocalForgeAgent binPath= `
+              "C:\path\to\localforge-agent.exe --config C:\ProgramData\LocalForge\config\agent.toml serve" `
+              start= auto DisplayName= "LocalForge Agent"
+            sc.exe start LocalForgeAgent
+            ```
+
+            ### Direct binary download
+
               - `localforge-agent-x86_64-unknown-linux-gnu`
               - `localforge-agent-aarch64-unknown-linux-gnu`
+              - `localforge-agent-x86_64-pc-windows-msvc.exe`
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
@@ -166,16 +197,22 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
             cross: false
+            ext: ''
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04
             cross: true
+            ext: ''
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            cross: false
+            ext: '.exe'
 
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install cross toolchain
+      - name: Install cross toolchain (Linux arm64)
         if: matrix.cross
         run: |
           sudo apt-get update
@@ -200,10 +237,19 @@ jobs:
         # fails with "no bin target named ... in default-run packages".
         run: cargo build --release -p localforge-agent --target ${{ matrix.target }}
 
-      - name: Rename binary
+      - name: Rename binary (Unix)
+        if: runner.os != 'Windows'
         run: |
           mv src-tauri/target/${{ matrix.target }}/release/localforge-agent \
              localforge-agent-${{ matrix.target }}
+
+      - name: Rename binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Move-Item `
+            "src-tauri/target/${{ matrix.target }}/release/localforge-agent.exe" `
+            "localforge-agent-${{ matrix.target }}.exe"
 
       - name: Upload agent binary to release
         uses: softprops/action-gh-release@v2
@@ -211,7 +257,7 @@ jobs:
           tag_name: ${{ github.event.inputs.version || github.ref_name }}
           draft: true
           files: |
-            localforge-agent-${{ matrix.target }}
+            localforge-agent-${{ matrix.target }}${{ matrix.ext }}
             scripts/install-agent.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
