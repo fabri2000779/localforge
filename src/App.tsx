@@ -38,7 +38,7 @@ function App() {
   // Show Docker requirement screen if Docker is not available
   if (status && !status.running) {
     return (
-      <div className="h-screen flex flex-col bg-slate-900">
+      <div className="h-screen flex flex-col app-shell">
         <TitleBar />
         <DockerRequired status={status} onRetry={checkStatus} />
         <OAuthToast />
@@ -49,21 +49,23 @@ function App() {
 
   return (
     <BrowserRouter>
-      <div className="h-screen flex flex-col bg-slate-900">
+      <div className="h-screen flex flex-col app-shell">
         <TitleBar />
         <div className="flex flex-1 overflow-hidden">
           <Sidebar />
           <main className="main-content">
-            <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/servers" element={<Servers />} />
-              <Route path="/servers/create" element={<CreateServer />} />
-              <Route path="/servers/:id" element={<ServerDetail />} />
-              <Route path="/games" element={<GamesPage />} />
-              <Route path="/nodes" element={<NodesPage />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
+            <div className="page-container">
+              <Routes>
+                <Route path="/" element={<Home />} />
+                <Route path="/servers" element={<Servers />} />
+                <Route path="/servers/create" element={<CreateServer />} />
+                <Route path="/servers/:id" element={<ServerDetail />} />
+                <Route path="/games" element={<GamesPage />} />
+                <Route path="/nodes" element={<NodesPage />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </div>
           </main>
         </div>
         <OAuthToast />

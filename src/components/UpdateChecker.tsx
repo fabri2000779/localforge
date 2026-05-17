@@ -85,27 +85,43 @@ export function UpdateChecker() {
       : null;
 
   return (
-    <div className="fixed top-12 right-4 z-50 max-w-sm">
-      <div className="bg-slate-900 border border-blue-500/30 rounded-lg shadow-2xl p-4">
+    <div className="fixed top-12 right-4 z-50 max-w-sm animate-fade-in">
+      <div
+        className="rounded-xl shadow-2xl p-4 backdrop-blur-md"
+        style={{
+          background:
+            'linear-gradient(180deg, rgba(20, 26, 38, 0.95) 0%, rgba(14, 19, 28, 0.95) 100%)',
+          border: '1px solid rgba(59, 130, 246, 0.28)',
+          boxShadow:
+            '0 0 0 1px rgba(59, 130, 246, 0.05), 0 24px 50px -20px rgba(0, 0, 0, 0.7)',
+        }}
+      >
         <div className="flex items-start gap-3 mb-3">
-          <div className="p-2 rounded-lg bg-blue-500/15 shrink-0">
-            <Download size={16} className="text-blue-400" />
+          <div
+            className="w-9 h-9 rounded-lg shrink-0 flex items-center justify-center"
+            style={{
+              background:
+                'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(139,92,246,0.18))',
+              boxShadow: '0 0 0 1px rgba(99, 102, 241, 0.18)',
+            }}
+          >
+            <Download size={15} className="text-blue-300" />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="font-semibold text-sm">
+            <div className="font-semibold text-[13px] text-slate-100 tracking-tight">
               Update available — v{update.version}
             </div>
-            <div className="text-xs text-slate-500 mt-0.5">
-              You're on v{update.currentVersion}
+            <div className="text-[11.5px] text-slate-500 mt-0.5">
+              You&apos;re on v{update.currentVersion}
             </div>
           </div>
           {phase === 'idle' && (
             <button
               onClick={() => setDismissed(true)}
-              className="text-slate-500 hover:text-white shrink-0"
+              className="text-slate-500 hover:text-white shrink-0 -m-1 p-1 rounded transition-colors hover:bg-slate-800"
               aria-label="Dismiss"
             >
-              <X size={16} />
+              <X size={14} />
             </button>
           )}
         </div>

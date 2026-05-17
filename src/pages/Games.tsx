@@ -255,29 +255,32 @@ export function GamesPage() {
 
   return (
     <div className="animate-fade-in max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+      <header className="page-header flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold">Game Definitions</h1>
-          <p className="text-slate-400 mt-1">Manage game server templates</p>
+          <div className="eyebrow mb-2">Catalog</div>
+          <h1 className="page-title">Game Definitions</h1>
+          <p className="page-subtitle">
+            Manage game server templates — import, export, or build your own.
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={handleOpenConfigFolder} className="btn btn-secondary" title="Open config folder">
-            <FolderOpen size={18} />
+          <button onClick={handleOpenConfigFolder} className="btn btn-secondary btn-sm" title="Open config folder">
+            <FolderOpen size={14} />
           </button>
-          <button onClick={() => setShowImportDialog(true)} className="btn btn-secondary">
-            <Upload size={18} /> Import
+          <button onClick={() => setShowImportDialog(true)} className="btn btn-secondary btn-sm">
+            <Upload size={14} /> Import
           </button>
           {customGames.length > 0 && (
-            <button onClick={handleExportAll} className="btn btn-secondary">
-              {copied === 'all' ? <Check size={18} className="text-emerald-500" /> : <Download size={18} />}
+            <button onClick={handleExportAll} className="btn btn-secondary btn-sm">
+              {copied === 'all' ? <Check size={14} className="text-emerald-500" /> : <Download size={14} />}
               Export Custom
             </button>
           )}
-          <button onClick={handleStartCreate} className="btn btn-primary">
-            <Plus size={18} /> New Game
+          <button onClick={handleStartCreate} className="btn btn-primary btn-sm">
+            <Plus size={14} strokeWidth={2.2} /> New Game
           </button>
         </div>
-      </div>
+      </header>
 
       {error && (
         <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 flex items-center justify-between">

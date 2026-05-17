@@ -445,49 +445,75 @@ export function ServerDetail() {
   return (
     <div className="animate-fade-in">
       {/* Header with Back Button and Address */}
-      <div className="flex items-center justify-between mb-6">
-        <button onClick={() => navigate('/servers')} className="flex items-center gap-2 text-zinc-400 hover:text-white transition-colors">
-          <ArrowLeft size={20} /> Back to Servers
+      <div className="flex items-center justify-between mb-5 gap-4 flex-wrap">
+        <button
+          onClick={() => navigate('/servers')}
+          className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-slate-400 hover:text-white transition-colors"
+        >
+          <ArrowLeft size={14} strokeWidth={2.2} /> Back to Servers
         </button>
-        
+
         {/* Connection Address */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 px-4 py-2 bg-zinc-800 rounded-lg border border-zinc-700">
-            <Network size={16} className="text-cyan-400" />
-            <span className="text-sm text-zinc-400">Connect:</span>
-            <code className="font-mono font-semibold text-white">{serverAddress}</code>
-            <button 
-              onClick={() => copyToClipboard(serverAddress, 'local')}
-              className="ml-2 p-1 hover:bg-zinc-700 rounded transition-colors"
-              title="Copy address"
-            >
-              {copied === 'local' ? <Check size={14} className="text-green-500" /> : <Copy size={14} className="text-zinc-400" />}
-            </button>
-          </div>
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--color-surface)] rounded-lg border border-[var(--color-border)]">
+          <Network size={13} className="text-cyan-400" />
+          <span className="text-[11px] uppercase tracking-wider font-semibold text-slate-500">
+            Connect
+          </span>
+          <code className="font-mono text-[12.5px] font-medium text-slate-100">
+            {serverAddress}
+          </code>
+          <button
+            onClick={() => copyToClipboard(serverAddress, 'local')}
+            className="ml-1 p-1 hover:bg-slate-700/60 rounded transition-colors"
+            title="Copy address"
+          >
+            {copied === 'local' ? (
+              <Check size={12} className="text-emerald-400" />
+            ) : (
+              <Copy size={12} className="text-slate-400" />
+            )}
+          </button>
         </div>
       </div>
 
       {/* Server Info Card */}
-      <div className="card mb-6">
-        <div className="flex items-start gap-6">
+      <div className="card card-elevated mb-6">
+        <div className="flex items-start gap-5 flex-wrap">
           {/* Icon & Name */}
-          <div className="flex items-center gap-4 flex-1">
-            <GameIcon 
-              icon={gameConfig?.icon || '🎮'} 
+          <div className="flex items-center gap-4 flex-1 min-w-0">
+            <GameIcon
+              icon={gameConfig?.icon || '🎮'}
               logoUrl={gameConfig?.logo_url}
               name={gameConfig?.name || server.game_type}
               size="xl"
             />
-            <div>
-              <h1 className="text-2xl font-bold">{server.name}</h1>
-              <p className="text-zinc-400 text-sm">{gameConfig?.name || server.game_type}</p>
+            <div className="min-w-0">
+              <div className="eyebrow mb-1">Server</div>
+              <h1 className="text-2xl font-bold tracking-tight text-slate-100 truncate">
+                {server.name}
+              </h1>
+              <p className="text-slate-400 text-[13px] truncate">
+                {gameConfig?.name || server.game_type}
+              </p>
             </div>
           </div>
-          
+
           {/* Status Badge */}
-          <div className={`px-4 py-2 rounded-lg ${status.bg} ${status.border} border flex items-center gap-2`}>
-            <span className={`w-2 h-2 rounded-full ${status.dot} ${server.status === 'running' || server.status === 'starting' ? 'animate-pulse' : ''}`}></span>
-            <span className={`font-medium capitalize ${status.text}`}>{server.status}</span>
+          <div
+            className={`px-3 py-1.5 rounded-lg ${status.bg} ${status.border} border flex items-center gap-2 shrink-0`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${status.dot} ${
+                server.status === 'running' || server.status === 'starting'
+                  ? 'animate-pulse'
+                  : ''
+              }`}
+            />
+            <span
+              className={`text-[11px] uppercase tracking-wider font-semibold ${status.text}`}
+            >
+              {server.status}
+            </span>
           </div>
         </div>
 

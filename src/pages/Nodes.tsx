@@ -68,42 +68,48 @@ export function NodesPage() {
 
   return (
     <div className="animate-fade-in max-w-4xl">
-      <header className="flex items-center justify-between mb-8">
+      <header className="page-header flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-bold">Nodes</h1>
-          <p className="text-slate-400 mt-2">
-            Local Docker plus any remote LocalForge agents you've paired.
+          <div className="eyebrow mb-2">Infrastructure</div>
+          <h1 className="page-title">Nodes</h1>
+          <p className="page-subtitle">
+            Local Docker plus any remote LocalForge agents you&apos;ve paired.
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
-            className="btn btn-secondary text-sm"
+            className="btn btn-secondary btn-sm"
             onClick={fetchNodes}
             disabled={isLoading}
             title="Refresh"
           >
             <RefreshCw
-              size={16}
+              size={13}
               className={isLoading ? 'animate-spin' : undefined}
             />
             Refresh
           </button>
           <button
-            className="btn btn-primary text-sm"
+            className="btn btn-primary btn-sm"
             onClick={() => setWizardOpen(true)}
           >
-            <Plus size={16} /> Add node
+            <Plus size={13} strokeWidth={2.2} /> Add node
           </button>
         </div>
       </header>
 
       <div className="space-y-3">
         {nodes.length === 0 ? (
-          <div className="card text-center py-12">
-            <Server size={36} className="mx-auto text-slate-600 mb-3" />
-            <h2 className="text-lg font-semibold mb-1">No nodes yet</h2>
-            <p className="text-sm text-slate-400">
-              The local Docker daemon will show up here once it's reachable.
+          <div className="card card-elevated text-center py-12 flex flex-col items-center">
+            <div className="w-12 h-12 rounded-xl bg-slate-800/70 inline-flex items-center justify-center mb-4">
+              <Server size={22} className="text-slate-500" />
+            </div>
+            <h2 className="text-base font-semibold text-slate-100 mb-1">
+              No nodes yet
+            </h2>
+            <p className="text-sm text-slate-400 max-w-sm">
+              The local Docker daemon will show up here once it&apos;s
+              reachable.
             </p>
           </div>
         ) : (

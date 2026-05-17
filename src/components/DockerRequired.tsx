@@ -1,4 +1,4 @@
-import { RefreshCw, Download } from 'lucide-react';
+import { RefreshCw, Download, AlertCircle } from 'lucide-react';
 import type { DockerStatus } from '../types';
 
 interface Props {
@@ -8,20 +8,49 @@ interface Props {
 
 export function DockerRequired({ status, onRetry }: Props) {
   return (
-    <div className="flex-1 flex items-center justify-center p-8 bg-slate-900">
-      <div className="max-w-lg text-center animate-fade-in">
-        <div className="text-6xl mb-6">🐳</div>
-        <h1 className="text-3xl font-bold mb-4">Docker Required</h1>
-        <p className="text-slate-400 mb-6">
+    <div className="flex-1 flex items-center justify-center p-8 main-content">
+      <div className="max-w-lg w-full text-center animate-fade-in">
+        <div
+          className="w-16 h-16 rounded-2xl mx-auto mb-6 flex items-center justify-center"
+          style={{
+            background:
+              'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(99,102,241,0.18))',
+            boxShadow:
+              '0 0 0 1px rgba(99, 102, 241, 0.22), 0 18px 40px -16px rgba(59,130,246,0.45)',
+          }}
+        >
+          <svg viewBox="0 0 24 24" fill="none" className="w-9 h-9">
+            <path
+              d="M5 12.5h2v2H5v-2zm0-3h2v2H5v-2zm3 3h2v2H8v-2zm0-3h2v2H8v-2zm3 3h2v2h-2v-2zm0-3h2v2h-2v-2zm3 3h2v2h-2v-2zm-3-6h2v2h-2v-2z"
+              fill="#93c5fd"
+            />
+            <path
+              d="M21.5 13c-.4-.3-1.3-.4-2-.3-.1-.6-.5-1.2-1-1.6l-.4-.3-.3.4c-.6.8-.8 2.1-.2 2.9-.2.1-.7.4-1.6.4H2.6c-.3 1.5-.1 4.6 2.1 6.2 1.6 1.2 4 1.7 6.7 1.4 5.9-.7 9.4-4.6 10.3-9.6-.1 0-.1 0-.2-.1l.1.1z"
+              fill="#60a5fa"
+            />
+          </svg>
+        </div>
+
+        <h1 className="text-2xl font-bold tracking-tight text-slate-100 mb-2">
+          Docker is required
+        </h1>
+        <p className="text-sm text-slate-400 mb-6 max-w-md mx-auto leading-relaxed">
           LocalForge uses Docker to run game servers in isolated containers.
-          {status.error && (
-            <span className="block mt-2 text-red-400 text-sm">
-              Error: {status.error}
-            </span>
-          )}
         </p>
 
-        <div className="space-y-4">
+        {status.error && (
+          <div className="card mb-5 text-left flex items-start gap-3 !p-3.5 !border-red-900/40 !bg-red-950/20">
+            <AlertCircle
+              size={15}
+              className="text-red-400 shrink-0 mt-0.5"
+            />
+            <div className="text-[12.5px] text-red-300 break-all font-mono">
+              {status.error}
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-3">
           {!status.available ? (
             <a
               href="https://www.docker.com/products/docker-desktop/"
@@ -29,31 +58,37 @@ export function DockerRequired({ status, onRetry }: Props) {
               rel="noopener noreferrer"
               className="btn btn-primary w-full justify-center"
             >
-              <Download size={20} />
+              <Download size={15} strokeWidth={2.2} />
               Install Docker Desktop
             </a>
           ) : (
-            <div className="card text-left">
-              <h3 className="font-semibold mb-2">Docker is installed but not running</h3>
-              <p className="text-sm text-slate-400">
-                Please start Docker Desktop and wait for it to fully initialize.
+            <div className="card !text-left !py-4">
+              <h3 className="font-semibold text-sm text-slate-100 mb-1">
+                Docker is installed but not running
+              </h3>
+              <p className="text-[12.5px] text-slate-400 leading-relaxed">
+                Start Docker Desktop and wait for it to fully initialize, then
+                check again.
               </p>
             </div>
           )}
 
-          <button onClick={onRetry} className="btn btn-secondary w-full justify-center">
-            <RefreshCw size={20} />
-            Check Again
+          <button
+            onClick={onRetry}
+            className="btn btn-secondary w-full justify-center"
+          >
+            <RefreshCw size={15} />
+            Check again
           </button>
         </div>
 
-        <div className="mt-8 p-4 bg-slate-800 rounded-lg text-left">
-          <h4 className="font-medium mb-2 text-sm">Why Docker?</h4>
-          <ul className="text-xs text-slate-400 space-y-1">
-            <li>• Isolated environments for each game server</li>
-            <li>• No Java/Python/runtime conflicts</li>
-            <li>• Easy cleanup - just delete the container</li>
-            <li>• Same experience on Windows, Mac, and Linux</li>
+        <div className="mt-8 card !text-left !py-4 !px-5">
+          <div className="eyebrow mb-2">Why Docker?</div>
+          <ul className="text-[12.5px] text-slate-400 space-y-1.5 leading-relaxed">
+            <li>· Isolated environments for each game server</li>
+            <li>· No Java / Python / runtime conflicts</li>
+            <li>· Easy cleanup — just delete the container</li>
+            <li>· Same experience on Windows, Mac and Linux</li>
           </ul>
         </div>
       </div>

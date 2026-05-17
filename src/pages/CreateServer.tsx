@@ -138,41 +138,52 @@ export function CreateServer() {
     <div className="animate-fade-in max-w-3xl">
       <button
         onClick={() => navigate(-1)}
-        className="flex items-center gap-2 text-slate-400 hover:text-white mb-6 transition-colors"
+        className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-slate-400 hover:text-white mb-5 transition-colors"
       >
-        <ArrowLeft size={20} />
+        <ArrowLeft size={14} strokeWidth={2.2} />
         Back
       </button>
 
-      <header className="mb-8">
-        <h1 className="text-3xl font-bold">Create Server</h1>
-        <p className="text-slate-400 mt-2">Choose a game and configure your server</p>
+      <header className="page-header">
+        <div className="eyebrow mb-2">New server</div>
+        <h1 className="page-title">Create Server</h1>
+        <p className="page-subtitle">
+          Choose a game and configure your server in a few steps.
+        </p>
       </header>
 
       {!selectedGame ? (
         <section>
-          <h2 className="text-xl font-semibold mb-4">Select a Game</h2>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <div className="section-header">
+            <div className="section-title">Select a game</div>
+            <span className="text-[11.5px] text-slate-500">
+              {games.length} templates
+            </span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             {games.map((game) => (
-              <div
+              <button
                 key={game.game_type}
                 onClick={() => setSelectedGame(game.game_type)}
-                className="card cursor-pointer hover:border-blue-500 transition-colors"
+                className="game-tile group"
               >
-                <div className="mb-3">
-                  <GameIcon 
-                    icon={game.icon} 
-                    logoUrl={game.logo_url} 
-                    name={game.name}
-                    size="lg"
-                  />
+                <GameIcon
+                  icon={game.icon}
+                  logoUrl={game.logo_url}
+                  name={game.name}
+                  size="lg"
+                  className="mb-3"
+                />
+                <h3 className="font-semibold text-[13.5px] text-slate-100">
+                  {game.name}
+                </h3>
+                <p className="text-[11.5px] text-slate-500 mt-1.5 line-clamp-2 leading-snug">
+                  {game.description}
+                </p>
+                <div className="mt-3 flex items-center gap-2 text-[10.5px] uppercase tracking-wider font-semibold text-slate-500">
+                  <span>Min {game.min_ram_mb} MB</span>
                 </div>
-                <h3 className="font-semibold">{game.name}</h3>
-                <p className="text-xs text-slate-500 mt-1">{game.description}</p>
-                <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
-                  <span>Min: {game.min_ram_mb}MB RAM</span>
-                </div>
-              </div>
+              </button>
             ))}
           </div>
         </section>

@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Play, Square, Trash2, Terminal } from 'lucide-react';
+import { Play, Square, Trash2, Network, ArrowRight } from 'lucide-react';
 import type { Server } from '../types';
 import { useServerStore } from '../stores/serverStore';
 import { useGamesStore } from '../stores/gamesStore';
@@ -10,11 +10,29 @@ interface Props {
   server: Server;
 }
 
+const STATUS_LABEL: Record<Server['status'], string> = {
+  running: 'Running',
+  stopped: 'Stopped',
+  starting: 'Starting',
+  stopping: 'Stopping',
+  installing: 'Installing',
+  error: 'Error',
+};
+
+const STATUS_CLASS: Record<Server['status'], string> = {
+  running: 'status-running',
+  stopped: 'status-stopped',
+  starting: 'status-starting',
+  stopping: 'status-starting',
+  installing: 'status-starting',
+  error: 'status-error',
+};
+
 export function ServerCard({ server }: Props) {
   const navigate = useNavigate();
   const { startServer, stopServer, deleteServer, isLoading } = useServerStore();
   const { games } = useGamesStore();
-  
+
   const gameConfig = findGameConfig(games, server.game_type);
 
   const handleStart = async (e: React.MouseEvent) => {
@@ -29,69 +47,78 @@ export function ServerCard({ server }: Props) {
 
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm(`Delete server "${server.name}"? Your world data will be preserved.`)) {
+    if (
+      confirm(
+        `Delete server "${server.name}"? Your world data will be preserved.`,
+      )
+    ) {
       await deleteServer(server.id);
     }
   };
 
-  const statusColors = {
-    running: 'bg-emerald-500',
-    stopped: 'bg-slate-500',
-    starting: 'bg-yellow-500',
-    stopping: 'bg-yellow-500',
-    installing: 'bg-blue-500',
-    error: 'bg-red-500',
-  };
-
-  const statusDot = statusColors[server.status] || statusColors.stopped;
-  const isAnimated = server.status === 'running' || server.status === 'starting';
-
   return (
     <div
       onClick={() => navigate(`/servers/${server.id}`)}
-      className="card cursor-pointer hover:border-slate-600 transition-all group"
+      className="server-card group"
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ')
+          navigate(`/servers/${server.id}`);
+      }}
     >
-      <div className="flex items-start justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <GameIcon 
-            icon={gameConfig?.icon || '🎮'} 
-            logoUrl={gameConfig?.logo_url}
-            name={gameConfig?.name || server.game_type}
-            size="lg"
-          />
-          <div>
-            <h3 className="font-semibold text-lg">{server.name}</h3>
-            <p className="text-sm text-slate-500">{gameConfig?.name || server.game_type}</p>
+      <div className="flex items-start gap-3.5">
+        <GameIcon
+          icon={gameConfig?.icon || '🎮'}
+          logoUrl={gameConfig?.logo_url}
+          name={gameConfig?.name || server.game_type}
+          size="lg"
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <h3 className="font-semibold text-[15px] text-slate-100 truncate leading-tight">
+                {server.name}
+              </h3>
+              <p className="text-[12px] text-slate-500 mt-0.5 truncate">
+                {gameConfig?.name || server.game_type}
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className={`status-dot ${STATUS_CLASS[server.status]}`} />
+              <span className="text-[11px] uppercase tracking-wider font-semibold text-slate-400">
+                {STATUS_LABEL[server.status]}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 text-[12px] text-slate-500 mt-3">
+            <span className="inline-flex items-center gap-1.5">
+              <Network size={12} className="text-slate-600" />
+              <span className="font-mono tabular-nums">:{server.port}</span>
+            </span>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className={`w-2.5 h-2.5 rounded-full ${statusDot} ${isAnimated ? 'animate-pulse' : ''}`}></span>
-          <span className="text-sm text-slate-400 capitalize">{server.status}</span>
-        </div>
       </div>
 
-      <div className="flex items-center gap-2 text-sm text-slate-500 mb-4">
-        <Terminal size={14} />
-        <span>Port {server.port}</span>
-      </div>
-
-      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+      {/* Actions — reveal on hover, but always render so layout doesn't shift */}
+      <div className="server-card-actions">
         {server.status === 'stopped' ? (
           <button
             onClick={handleStart}
             disabled={isLoading}
-            className="btn btn-success text-sm py-1"
+            className="btn btn-success btn-sm"
           >
-            <Play size={16} />
+            <Play size={12} strokeWidth={2.5} />
             Start
           </button>
         ) : server.status === 'running' ? (
           <button
             onClick={handleStop}
             disabled={isLoading}
-            className="btn btn-secondary text-sm py-1"
+            className="btn btn-secondary btn-sm"
           >
-            <Square size={16} />
+            <Square size={12} strokeWidth={2.5} />
             Stop
           </button>
         ) : null}
@@ -99,10 +126,16 @@ export function ServerCard({ server }: Props) {
         <button
           onClick={handleDelete}
           disabled={isLoading || server.status === 'running'}
-          className="btn btn-danger text-sm py-1 ml-auto"
+          className="btn btn-danger btn-sm"
+          aria-label="Delete server"
         >
-          <Trash2 size={16} />
+          <Trash2 size={12} strokeWidth={2.2} />
         </button>
+
+        <span className="ml-auto inline-flex items-center gap-1 text-[11.5px] font-medium text-slate-500 group-hover:text-blue-300 transition-colors">
+          Open
+          <ArrowRight size={11} />
+        </span>
       </div>
     </div>
   );
