@@ -28,15 +28,21 @@ jobs:
           - platform: macos-latest
             target: universal-apple-darwin
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-            args: '--target universal-apple-darwin'
+            # --bundles dmg skips the intermediate .app.tar.gz artifact
+            args: '--target universal-apple-darwin --bundles dmg'
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             rust_targets: x86_64-unknown-linux-gnu
-            args: ''
+            # .deb for Debian/Ubuntu, .AppImage for everywhere else, .rpm
+            # for RHEL/Fedora users. Three distinct distros worth of
+            # users; not noise.
+            args: '--bundles deb,appimage,rpm'
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             rust_targets: x86_64-pc-windows-msvc
-            args: ''
+            # NSIS .exe only — the .msi is enterprise-y and confuses
+            # end users who already see an installer right next to it.
+            args: '--bundles nsis'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -145,9 +151,9 @@ jobs:
             See the assets below to download the installer for your platform.
 
             ## Desktop
-            **Windows:** `.msi` or `.exe` (NSIS)
+            **Windows:** `.exe` (NSIS installer)
             **macOS:** universal `.dmg` (Apple Silicon + Intel in one file)
-            **Linux:** `.AppImage` or `.deb`
+            **Linux:** `.deb` (Debian/Ubuntu), `.rpm` (RHEL/Fedora) or `.AppImage` (everywhere)
 
             ## Remote agent
 
