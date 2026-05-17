@@ -32,7 +32,7 @@ jobs:
             # payload the installed app downloads to patch itself);
             # `dmg` is for first-time installs.
             args: '--target universal-apple-darwin --bundles app,dmg'
-            updater_glob: 'src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz*'
+            bundle_root: 'src-tauri/target/universal-apple-darwin/release/bundle'
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             rust_targets: x86_64-unknown-linux-gnu
@@ -40,13 +40,13 @@ jobs:
             # .AppImage.tar.gz (updater); deb + rpm cover distro
             # package managers.
             args: '--bundles deb,appimage,rpm'
-            updater_glob: 'src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz*'
+            bundle_root: 'src-tauri/target/release/bundle'
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             rust_targets: x86_64-pc-windows-msvc
             # nsis produces both .exe (installer) and .nsis.zip (updater).
             args: '--bundles nsis'
-            updater_glob: 'src-tauri/target/release/bundle/nsis/*.nsis.zip*'
+            bundle_root: 'src-tauri/target/release/bundle'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -141,7 +141,15 @@ jobs:
           fi
           echo "APPLE_API_KEY_PATH=$HOME/private_keys/AuthKey.p8" >> "$GITHUB_ENV"
 
-      - name: Build and release Tauri app
+      - name: Build Tauri app (no upload)
+        # We deliberately don't pass `tagName` / `releaseName` / etc. here
+        # because tauri-action's built-in upload only ships the *installer*
+        # bundles (.dmg, .exe, .AppImage, .deb, .rpm) and then DELETES the
+        # *updater* bundles (.app.tar.gz, .AppImage.tar.gz, .nsis.zip) and
+        # all .sig files from disk — which is the opposite of what we
+        # need to publish a working auto-updater. So we let tauri-action
+        # do the build only, then upload everything ourselves in the
+        # next step before any cleanup can happen.
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -149,91 +157,128 @@ jobs:
           # BOM/CRLF) by the previous step; tauri-action picks them up
           # from the process env automatically.
           # Tauri updater signing — tauri-action signs each bundle into a
-          # .sig file and generates latest.json automatically when these
-          # are present.
+          # .sig file when these are present.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.event.inputs.version || github.ref_name }}
-          releaseName: 'LocalForge ${{ github.event.inputs.version || github.ref_name }}'
-          releaseBody: |
-            See the assets below to download the installer for your platform.
-
-            ## Desktop
-            **Windows:** `.exe` (NSIS installer)
-            **macOS:** universal `.dmg` (Apple Silicon + Intel in one file)
-            **Linux:** `.deb` (Debian/Ubuntu), `.rpm` (RHEL/Fedora) or `.AppImage` (everywhere)
-
-            ## Remote agent
-
-            ### Linux (one-liner)
-
-            ```bash
-            curl -sSL https://github.com/fabri2000779/localforge/releases/download/${{ github.event.inputs.version || github.ref_name }}/install-agent.sh | sudo bash
-            ```
-
-            ### Windows / Windows Server (one-liner)
-
-            In an **elevated** PowerShell:
-
-            ```powershell
-            iex "& { $(irm https://github.com/fabri2000779/localforge/releases/download/${{ github.event.inputs.version || github.ref_name }}/install-agent.ps1) }"
-            ```
-
-            The script downloads the binary to `C:\Program Files\LocalForge`,
-            writes its config to `C:\ProgramData\LocalForge\config\agent.toml`
-            (with ACLs locked to SYSTEM + Administrators), generates a
-            self-signed TLS cert + bearer token, and registers the agent
-            as a scheduled task that auto-starts at boot under
-            `NT AUTHORITY\SYSTEM`. Pass `-InstallAsService` to register
-            via `sc.exe` instead (wrap with NSSM for full SCM support).
-
-            Requires Docker Desktop or Docker Engine for Windows already
-            installed.
-
-            ### Direct binary download
-
-              - `localforge-agent-x86_64-unknown-linux-gnu`
-              - `localforge-agent-aarch64-unknown-linux-gnu`
-              - `localforge-agent-x86_64-pc-windows-msvc.exe`
-          releaseDraft: true
-          prerelease: false
           args: ${{ matrix.args }}
 
-      - name: Upload updater bundle + signature
-        # tauri-action only uploads the "installer" bundles per --bundles
-        # flag; the .tar.gz/.zip updater payloads and their .sig companions
-        # get dropped on the floor. Pick them up here and attach to the
-        # draft so the consolidation job can build latest.json from them.
-        #
-        # We use `gh release upload` (in bash, including on Windows via
-        # git-bash) instead of softprops/action-gh-release@v2 because the
-        # latter silently fails to expand globs like `*.tar.gz*` even
-        # though the files exist on disk.
+      - name: Ensure draft release exists
+        # Idempotent — every matrix job races to create it but only the
+        # first one wins; the others see the existing release and skip.
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.inputs.version || github.ref_name }}
-          GLOB: ${{ matrix.updater_glob }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; leaving it untouched."
+            exit 0
+          fi
+          # Build notes from a heredoc, then substitute __TAG__ before
+          # passing to gh create. Using a single-quoted heredoc avoids
+          # bash expanding things like the backticks and $(irm ...) inside
+          # the PowerShell snippet.
+          notes_template=$(cat <<'NOTES'
+          See the assets below to download the installer for your platform.
+
+          ## Desktop
+          **Windows:** `.exe` (NSIS installer)
+          **macOS:** universal `.dmg` (Apple Silicon + Intel in one file)
+          **Linux:** `.deb` (Debian/Ubuntu), `.rpm` (RHEL/Fedora) or `.AppImage` (everywhere)
+
+          ## Remote agent
+
+          ### Linux (one-liner)
+
+          ```bash
+          curl -sSL https://github.com/fabri2000779/localforge/releases/download/__TAG__/install-agent.sh | sudo bash
+          ```
+
+          ### Windows / Windows Server (one-liner)
+
+          In an **elevated** PowerShell:
+
+          ```powershell
+          iex "& { $(irm https://github.com/fabri2000779/localforge/releases/download/__TAG__/install-agent.ps1) }"
+          ```
+
+          The script downloads the binary to `C:\Program Files\LocalForge`,
+          writes its config to `C:\ProgramData\LocalForge\config\agent.toml`
+          (with ACLs locked to SYSTEM + Administrators), generates a
+          self-signed TLS cert + bearer token, and registers the agent
+          as a scheduled task that auto-starts at boot under
+          `NT AUTHORITY\SYSTEM`. Pass `-InstallAsService` to register
+          via `sc.exe` instead (wrap with NSSM for full SCM support).
+
+          Requires Docker Desktop or Docker Engine for Windows already
+          installed.
+
+          ### Direct binary download
+
+            - `localforge-agent-x86_64-unknown-linux-gnu`
+            - `localforge-agent-aarch64-unknown-linux-gnu`
+            - `localforge-agent-x86_64-pc-windows-msvc.exe`
+          NOTES
+          )
+          notes_body="${notes_template//__TAG__/$TAG}"
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --title "LocalForge $TAG" \
+            --notes "$notes_body"
+
+      - name: Upload all bundles + signatures
+        # Walk the bundle tree and push every installer, updater payload
+        # and .sig file to the draft release. `--clobber` makes the call
+        # idempotent so we can safely re-run a single matrix job.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.version || github.ref_name }}
+          BUNDLE_ROOT: ${{ matrix.bundle_root }}
         run: |
           set -euo pipefail
           shopt -s nullglob
 
-          # Resolve the glob via the shell so multi-segment patterns work.
-          # shellcheck disable=SC2206 — intentional word splitting.
-          files=( $GLOB )
-
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "::error::No files matched glob: $GLOB"
-            echo "Listing bundle parent dir for debugging:"
-            ls -la "$(dirname "$GLOB")" || true
+          if [ ! -d "$BUNDLE_ROOT" ]; then
+            echo "::error::Bundle root not found: $BUNDLE_ROOT"
+            ls -la src-tauri/target/ 2>/dev/null || true
             exit 1
           fi
 
-          echo "Found ${#files[@]} files to upload:"
+          # Collect every artifact tauri-cli produced into a bash array.
+          # Filter out lower-case dupes that tauri-cli emits alongside
+          # the CamelCase ones (e.g. local-forge_0.1.0_amd64.deb) so we
+          # don't pollute the release with duplicate assets.
+          files=()
+          while IFS= read -r -d '' f; do
+            base=$(basename "$f")
+            case "$base" in
+              local-forge[._-]*) continue ;;
+            esac
+            files+=( "$f" )
+          done < <(find "$BUNDLE_ROOT" -maxdepth 3 -type f \
+            \( -name '*.deb' -o -name '*.rpm' \
+               -o -name '*.AppImage' -o -name '*.AppImage.tar.gz' \
+               -o -name '*.dmg' -o -name '*.app.tar.gz' \
+               -o -name '*-setup.exe' -o -name '*.msi' -o -name '*.nsis.zip' \
+               -o -name '*.sig' \) \
+            -print0)
+
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No bundle files found under $BUNDLE_ROOT"
+            find "$BUNDLE_ROOT" -maxdepth 3 -type f -print 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "Uploading ${#files[@]} files:"
           printf '  - %s\n' "${files[@]}"
 
-          gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$TAG" "${files[@]}" \
+            --repo "$GITHUB_REPOSITORY" --clobber
 
   agent:
     name: Build agent (${{ matrix.target }})
