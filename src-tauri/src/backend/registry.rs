@@ -231,11 +231,6 @@ impl NodeRegistry {
         self.inner.read().await.backends.get(id).cloned()
     }
 
-    /// Convenience for the very common "use the local backend" code path.
-    pub async fn local(&self) -> Option<DynBackend> {
-        self.backend(&NodeId::local()).await
-    }
-
     /// Re-attempt connection to a remote node (used by the "reconnect"
     /// button on offline nodes).
     pub async fn reconnect(&self, id: &NodeId) -> anyhow::Result<()> {

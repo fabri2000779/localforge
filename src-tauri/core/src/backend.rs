@@ -11,7 +11,7 @@
 
 use crate::types::{
     ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
-    Server, ServerStatus,
+    InstallEvent, Server, ServerStatus,
 };
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
@@ -78,6 +78,37 @@ pub struct LogLine {
 /// Boxed log stream, `'static` so it can outlive the backend Arc.
 pub type LogStream = BoxStream<'static, Result<LogLine>>;
 
+/// Boxed install-event stream. Each item is an [`InstallEvent`] yielded
+/// while the install script runs; the stream ends with a `Done` event
+/// (carrying the exit code) or an `Err` if the underlying transport
+/// died.
+pub type InstallStream = BoxStream<'static, Result<InstallEvent>>;
+
+/// Detect an OAuth-style URL embedded in an install-script log line.
+/// Matches whitespace-separated tokens that start with `https://` and
+/// contain one of the common auth keywords. Returns the first match
+/// stripped of surrounding quotes/brackets.
+pub fn detect_oauth_url(line: &str) -> Option<String> {
+    for word in line.split_whitespace() {
+        if !word.starts_with("https://") {
+            continue;
+        }
+        let lower = word.to_ascii_lowercase();
+        if lower.contains("oauth")
+            || lower.contains("auth")
+            || lower.contains("login")
+            || lower.contains("verify")
+            || lower.contains("device")
+        {
+            return Some(
+                word.trim_matches(|c| c == '"' || c == '\'' || c == '<' || c == '>' || c == ',')
+                    .to_string(),
+            );
+        }
+    }
+    None
+}
+
 /// The node operations contract. This is the read-only / file-management
 /// surface — server lifecycle (start/stop/install) and live streaming
 /// land in subsequent phases.
@@ -140,6 +171,12 @@ pub trait NodeBackend: Send + Sync {
     /// Continuous stream of new log lines for the running container.
     /// The stream ends when the container stops or the caller drops it.
     async fn stream_logs(&self, id: &str) -> Result<LogStream>;
+
+    /// Run the game's install script in a one-shot container, streaming
+    /// progress events. Game metadata (script, image, volume path) is
+    /// supplied by the caller because the agent doesn't keep a copy of
+    /// the desktop's game catalogue.
+    async fn run_install(&self, id: &str, game: GameConfig) -> Result<InstallStream>;
 
     // ----- file operations on the host -----------------------------------
     //

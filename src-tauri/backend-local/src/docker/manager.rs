@@ -20,6 +20,7 @@ pub use localforge_core::{ContainerStats, DockerInfo, PortConfig, PortProtocol, 
 #[derive(Error, Debug)]
 #[allow(dead_code)]
 pub enum DockerError {
+
     #[error("Docker connection error: {0}")]
     ConnectionError(#[from] bollard::errors::Error),
 
@@ -33,6 +34,7 @@ pub enum DockerError {
     AttachFailed(String),
 }
 
+#[derive(Clone)]
 pub struct DockerManager {
     docker: Docker,
 }

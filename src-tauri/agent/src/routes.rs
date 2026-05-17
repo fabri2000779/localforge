@@ -11,10 +11,10 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{middleware, Json, Router};
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use localforge_core::types::{
     ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
-    Server, ServerStatus,
+    InstallEvent, Server, ServerStatus,
 };
 use localforge_core::NodeBackend;
 use serde::{Deserialize, Serialize};
@@ -43,6 +43,7 @@ pub fn router(state: AppState) -> Router {
         .route("/servers/{id}/logs", get(get_logs))
         .route("/servers/{id}/command", post(send_command))
         .route("/servers/{id}/stream", get(stream_logs))
+        .route("/servers/{id}/install/stream", get(install_stream))
         // file ops on the agent host
         .route("/fs", get(fs_list).delete(fs_delete))
         .route("/fs/read", post(fs_read))
@@ -304,6 +305,90 @@ async fn handle_log_socket(mut socket: WebSocket, state: AppState, server_id: St
             break;
         }
     }
+}
+
+// ===========================================================================
+// Install streaming via WebSocket
+// ===========================================================================
+
+async fn install_stream(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    ws.on_upgrade(move |socket| handle_install_socket(socket, s, id))
+}
+
+#[derive(Deserialize)]
+struct InstallInit {
+    game: GameConfig,
+}
+
+async fn handle_install_socket(mut socket: WebSocket, state: AppState, server_id: String) {
+    // Wait for the first text frame carrying the game config.
+    let init: InstallInit = loop {
+        match socket.recv().await {
+            Some(Ok(Message::Text(text))) => match serde_json::from_str::<InstallInit>(&text) {
+                Ok(init) => break init,
+                Err(e) => {
+                    let _ = socket
+                        .send(Message::Text(
+                            serde_json::json!({ "kind": "error", "message": format!("bad init frame: {}", e) })
+                                .to_string()
+                                .into(),
+                        ))
+                        .await;
+                    return;
+                }
+            },
+            Some(Ok(Message::Close(_))) | None => return,
+            _ => continue,
+        }
+    };
+
+    let mut stream = match state.backend.run_install(&server_id, init.game).await {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = socket
+                .send(Message::Text(
+                    serde_json::to_string(&serde_json::json!({
+                        "kind": "error",
+                        "message": e.to_string()
+                    }))
+                    .unwrap_or_default()
+                    .into(),
+                ))
+                .await;
+            return;
+        }
+    };
+
+    while let Some(item) = stream.next().await {
+        let (payload, is_done) = match item {
+            Ok(ev) => {
+                let done = matches!(ev, InstallEvent::Done { .. });
+                let payload = serde_json::to_string(&ev).unwrap_or_else(|e| {
+                    serde_json::json!({ "kind": "error", "message": e.to_string() }).to_string()
+                });
+                (payload, done)
+            }
+            Err(e) => (
+                serde_json::json!({
+                    "kind": "error",
+                    "message": e.to_string()
+                })
+                .to_string(),
+                true,
+            ),
+        };
+        if socket.send(Message::Text(payload.into())).await.is_err() {
+            break;
+        }
+        if is_done {
+            break;
+        }
+    }
+    let _ = socket.close().await;
 }
 
 // ===========================================================================

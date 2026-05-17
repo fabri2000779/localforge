@@ -12,11 +12,14 @@ mod pinning;
 pub use pinning::{FingerprintVerifier, FingerprintError, PinnedFingerprint};
 
 use async_trait::async_trait;
+use futures_util::sink::SinkExt;
 use futures_util::stream::{self, BoxStream, StreamExt};
-use localforge_core::backend::{BackendError, LogLine, LogStream, NodeBackend, Result};
+use localforge_core::backend::{
+    BackendError, InstallStream, LogLine, LogStream, NodeBackend, Result,
+};
 use localforge_core::types::{
     ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
-    Server, ServerStatus,
+    InstallEvent, Server, ServerStatus,
 };
 use rustls::ClientConfig;
 use serde::{Deserialize, Serialize};
@@ -385,6 +388,17 @@ impl NodeBackend for RemoteAgentBackend {
         ws_log_stream(self.base_url.clone(), self.token.clone(), self.tls.clone(), id).await
     }
 
+    async fn run_install(&self, id: &str, game: GameConfig) -> Result<InstallStream> {
+        ws_install_stream(
+            self.base_url.clone(),
+            self.token.clone(),
+            self.tls.clone(),
+            id,
+            game,
+        )
+        .await
+    }
+
     // ---- file ops --------------------------------------------------------
 
     async fn list_files(&self, path: &str) -> Result<DirectoryContents> {
@@ -507,6 +521,94 @@ fn urlencoding(s: &str) -> String {
 // ===========================================================================
 // WebSocket log streaming
 // ===========================================================================
+
+async fn ws_install_stream(
+    base_url: Url,
+    token: String,
+    tls: Arc<ClientConfig>,
+    server_id: &str,
+    game: GameConfig,
+) -> Result<InstallStream> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::handshake::client::Request;
+    use tokio_tungstenite::tungstenite::http::HeaderValue;
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::{connect_async_tls_with_config, Connector};
+
+    let mut ws_url = base_url.clone();
+    let scheme = match base_url.scheme() {
+        "https" => "wss",
+        "http" => "ws",
+        other => {
+            return Err(BackendError::invalid(format!(
+                "unsupported scheme: {}",
+                other
+            )))
+        }
+    };
+    ws_url
+        .set_scheme(scheme)
+        .map_err(|_| BackendError::Other("failed to swap URL scheme".into()))?;
+    ws_url.set_path(&format!("/v1/servers/{}/install/stream", server_id));
+
+    let mut request: Request = ws_url
+        .as_str()
+        .into_client_request()
+        .map_err(|e| BackendError::Transport(e.to_string()))?;
+    request.headers_mut().insert(
+        "Authorization",
+        HeaderValue::try_from(format!("Bearer {}", token))
+            .map_err(|e| BackendError::Other(e.to_string()))?,
+    );
+
+    let connector = Connector::Rustls(tls);
+    let (mut ws_stream, _resp) =
+        connect_async_tls_with_config(request, None, false, Some(connector))
+            .await
+            .map_err(|e| BackendError::Transport(e.to_string()))?;
+
+    // Send the first frame with the game config.
+    let init = serde_json::json!({ "game": game }).to_string();
+    ws_stream
+        .send(Message::Text(init.into()))
+        .await
+        .map_err(|e| BackendError::Transport(e.to_string()))?;
+
+    let mapped: BoxStream<'static, Result<InstallEvent>> = ws_stream
+        .filter_map(|item| async move {
+            match item {
+                Ok(Message::Text(text)) => {
+                    // Detect an error frame and bubble it as Err; otherwise
+                    // parse as InstallEvent.
+                    #[derive(serde::Deserialize)]
+                    struct ErrFrame {
+                        kind: String,
+                        message: Option<String>,
+                    }
+                    if let Ok(err) = serde_json::from_str::<ErrFrame>(&text) {
+                        if err.kind == "error" {
+                            return Some(Err(BackendError::Other(
+                                err.message.unwrap_or_else(|| "agent error".to_string()),
+                            )));
+                        }
+                    }
+                    match serde_json::from_str::<InstallEvent>(&text) {
+                        Ok(ev) => Some(Ok(ev)),
+                        Err(e) => Some(Err(BackendError::Transport(format!(
+                            "bad install frame: {}",
+                            e
+                        )))),
+                    }
+                }
+                Ok(Message::Close(_)) => None,
+                Ok(_) => None,
+                Err(e) => Some(Err(BackendError::Transport(e.to_string()))),
+            }
+        })
+        .boxed();
+
+    Ok(mapped)
+}
 
 async fn ws_log_stream(
     base_url: Url,

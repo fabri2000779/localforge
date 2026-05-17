@@ -196,7 +196,10 @@ export const useServerStore = create<ServerState>((set, get) => ({
     set({ isLoading: true, error: null, logs: [] });
     try {
       await get().attachToServer(serverId);
-      await invoke<ServerResponse>('reinstall_server', { serverId });
+      await invoke<ServerResponse>('reinstall_server', {
+        serverId,
+        nodeId: currentNodeId(),
+      });
       await get().fetchServers();
       set({ isLoading: false });
     } catch (error) {
@@ -209,7 +212,10 @@ export const useServerStore = create<ServerState>((set, get) => ({
     set({ isLoading: true, error: null, logs: [] });
     try {
       await get().attachToServer(serverId);
-      await invoke<ServerResponse>('update_server_game', { serverId });
+      await invoke<ServerResponse>('update_server_game', {
+        serverId,
+        nodeId: currentNodeId(),
+      });
       await get().fetchServers();
       set({ isLoading: false });
     } catch (error) {
@@ -220,7 +226,10 @@ export const useServerStore = create<ServerState>((set, get) => ({
 
   checkNeedsInstall: async (serverId) => {
     try {
-      return await invoke<boolean>('check_needs_install', { serverId });
+      return await invoke<boolean>('check_needs_install', {
+        serverId,
+        nodeId: currentNodeId(),
+      });
     } catch (error) {
       console.error('[Store] checkNeedsInstall error:', error);
       return false;

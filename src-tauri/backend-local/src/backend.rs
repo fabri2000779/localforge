@@ -10,14 +10,17 @@ use crate::persistence;
 use async_trait::async_trait;
 use bollard::container::{LogOutput, LogsOptions};
 use futures_util::stream::{self, StreamExt};
-use localforge_core::backend::{BackendError, LogLine, LogStream, NodeBackend, Result};
+use localforge_core::backend::{
+    BackendError, InstallStream, LogLine, LogStream, NodeBackend, Result,
+};
 use localforge_core::types::{
     ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
-    Server, ServerStatus,
+    InstallEvent, Server, ServerStatus,
 };
-use localforge_core::{build_env_vars, PortConfig as CorePortConfig};
+use localforge_core::{build_env_vars, detect_oauth_url, PortConfig as CorePortConfig};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 pub struct LocalDockerBackend {
@@ -479,6 +482,61 @@ impl NodeBackend for LocalDockerBackend {
         Ok(Box::pin(mapped))
     }
 
+    async fn run_install(&self, id: &str, game: GameConfig) -> Result<InstallStream> {
+        let server = self.require_server(id)?;
+
+        // No install script => mark installed and emit a one-shot Done.
+        let install_script = match game.install_script.clone() {
+            Some(s) if !s.is_empty() => s,
+            _ => {
+                let mut s = server.clone();
+                s.installed = true;
+                persistence::save_server(&self.data_root, &s).map_err(BackendError::io)?;
+                let (tx, rx) = tokio::sync::mpsc::channel(1);
+                let _ = tx.send(Ok(InstallEvent::Done { exit_code: 0 })).await;
+                drop(tx);
+                return Ok(Box::pin(ReceiverStream::new(rx)));
+            }
+        };
+
+        let install_image = game
+            .install_image
+            .clone()
+            .unwrap_or_else(|| game.docker_image.clone());
+        let volume_path = game.volume_path.clone();
+
+        // Mark Installing in the persisted record so the UI's status
+        // queries surface it even if a refresh happens mid-install.
+        let mut server = server;
+        server.status = ServerStatus::Installing;
+        persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<InstallEvent>>(64);
+        let docker = self.docker.clone();
+        let data_root = self.data_root.clone();
+        let server_id = server.id.clone();
+        let server_data_path = server.data_path.clone();
+
+        tokio::spawn(async move {
+            let install_result = run_install_inner(
+                docker,
+                data_root,
+                server_id,
+                server_data_path,
+                install_image,
+                volume_path,
+                install_script,
+                tx.clone(),
+            )
+            .await;
+            if let Err(e) = install_result {
+                let _ = tx.send(Err(e)).await;
+            }
+        });
+
+        Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+
     async fn file_info(&self, path: &str) -> Result<FileEntry> {
         let p = PathBuf::from(path);
         let metadata = std::fs::metadata(&p).map_err(BackendError::io)?;
@@ -519,5 +577,72 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
             std::fs::copy(&entry_path, &dst_path)?;
         }
     }
+    Ok(())
+}
+
+/// The actual install pipeline. Lives outside the impl so it can be
+/// spawned onto its own task without borrowing `&self`.
+#[allow(clippy::too_many_arguments)]
+async fn run_install_inner(
+    docker: DockerManager,
+    data_root: PathBuf,
+    server_id: String,
+    server_data_path: PathBuf,
+    install_image: String,
+    volume_path: String,
+    install_script: String,
+    tx: tokio::sync::mpsc::Sender<Result<InstallEvent>>,
+) -> Result<()> {
+    // Persist the install container id as soon as the helper creates
+    // it, so log recovery works if the install is interrupted.
+    let id_for_callback = server_id.clone();
+    let data_root_for_callback = data_root.clone();
+    let on_container_created = move |container_id: &str| {
+        if let Ok(mut srv) = persistence::load_server(&data_root_for_callback, &id_for_callback) {
+            srv.install_container_id = Some(container_id.to_string());
+            let _ = persistence::save_server(&data_root_for_callback, &srv);
+        }
+    };
+
+    // Channel adapter: DockerManager::run_script takes a sync callback,
+    // but we want to emit events on an async mpsc. blocking_send is
+    // fine here because the callback runs on a worker thread spawned by
+    // bollard's log reader.
+    let tx_lines = tx.clone();
+    let on_output = move |line: String| {
+        if let Some(url) = detect_oauth_url(&line) {
+            let _ = tx_lines.blocking_send(Ok(InstallEvent::OauthUrl { url }));
+        }
+        let _ = tx_lines.blocking_send(Ok(InstallEvent::Log { line }));
+    };
+
+    let (exit_code, install_container_id) = docker
+        .run_script(
+            &install_image,
+            &server_data_path,
+            &volume_path,
+            &install_script,
+            on_container_created,
+            on_output,
+        )
+        .await
+        .map_err(BackendError::docker)?;
+
+    // Clean up the install container (best-effort).
+    let _ = docker.remove_install_container(&install_container_id).await;
+
+    // Update the persisted server record with the install outcome.
+    if let Ok(mut srv) = persistence::load_server(&data_root, &server_id) {
+        srv.install_container_id = None;
+        if exit_code == 0 {
+            srv.installed = true;
+            srv.status = ServerStatus::Stopped;
+        } else {
+            srv.status = ServerStatus::Error;
+        }
+        let _ = persistence::save_server(&data_root, &srv);
+    }
+
+    let _ = tx.send(Ok(InstallEvent::Done { exit_code })).await;
     Ok(())
 }

@@ -276,3 +276,27 @@ pub struct DirectoryContents {
     pub parent: Option<String>,
     pub entries: Vec<FileEntry>,
 }
+
+// ---------------------------------------------------------------------------
+// Install pipeline events
+// ---------------------------------------------------------------------------
+
+/// Streamed event emitted while a server's install script runs. The
+/// agent serialises these over its install WebSocket and the desktop's
+/// run_install Tauri command fans them out: `Log` lines become
+/// `server-log` Tauri events, `OAuthUrl` opens the user's local
+/// browser, and `Done` signals end-of-install with the script's exit
+/// code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InstallEvent {
+    Log {
+        line: String,
+    },
+    OauthUrl {
+        url: String,
+    },
+    Done {
+        exit_code: i64,
+    },
+}
