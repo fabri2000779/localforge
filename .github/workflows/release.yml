@@ -157,27 +157,24 @@ jobs:
             curl -sSL https://github.com/fabri2000779/localforge/releases/download/${{ github.event.inputs.version || github.ref_name }}/install-agent.sh | sudo bash
             ```
 
-            ### Windows / Windows Server
+            ### Windows / Windows Server (one-liner)
 
-            Download `localforge-agent-x86_64-pc-windows-msvc.exe`, then in an
-            elevated PowerShell:
-
-            ```powershell
-            New-Item -Type Directory C:\ProgramData\LocalForge\config -Force
-            .\localforge-agent-x86_64-pc-windows-msvc.exe install `
-              --config-path C:\ProgramData\LocalForge\config\agent.toml `
-              --data-root   C:\ProgramData\LocalForge
-            ```
-
-            That prints the pairing URL/token/fingerprint. To run as a
-            Windows Service (recommended), use `sc create` or NSSM:
+            In an **elevated** PowerShell:
 
             ```powershell
-            sc.exe create LocalForgeAgent binPath= `
-              "C:\path\to\localforge-agent.exe --config C:\ProgramData\LocalForge\config\agent.toml serve" `
-              start= auto DisplayName= "LocalForge Agent"
-            sc.exe start LocalForgeAgent
+            iex "& { $(irm https://github.com/fabri2000779/localforge/releases/download/${{ github.event.inputs.version || github.ref_name }}/install-agent.ps1) }"
             ```
+
+            The script downloads the binary to `C:\Program Files\LocalForge`,
+            writes its config to `C:\ProgramData\LocalForge\config\agent.toml`
+            (with ACLs locked to SYSTEM + Administrators), generates a
+            self-signed TLS cert + bearer token, and registers the agent
+            as a scheduled task that auto-starts at boot under
+            `NT AUTHORITY\SYSTEM`. Pass `-InstallAsService` to register
+            via `sc.exe` instead (wrap with NSSM for full SCM support).
+
+            Requires Docker Desktop or Docker Engine for Windows already
+            installed.
 
             ### Direct binary download
 
@@ -259,5 +256,6 @@ jobs:
           files: |
             localforge-agent-${{ matrix.target }}${{ matrix.ext }}
             scripts/install-agent.sh
+            scripts/install-agent.ps1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
