@@ -28,21 +28,25 @@ jobs:
           - platform: macos-latest
             target: universal-apple-darwin
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-            # --bundles dmg skips the intermediate .app.tar.gz artifact
-            args: '--target universal-apple-darwin --bundles dmg'
+            # `app` is required by the updater (it's the .app.tar.gz
+            # payload the installed app downloads to patch itself);
+            # `dmg` is for first-time installs.
+            args: '--target universal-apple-darwin --bundles app,dmg'
+            updater_glob: 'src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz*'
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             rust_targets: x86_64-unknown-linux-gnu
-            # .deb for Debian/Ubuntu, .AppImage for everywhere else, .rpm
-            # for RHEL/Fedora users. Three distinct distros worth of
-            # users; not noise.
+            # appimage produces both .AppImage (installer) and
+            # .AppImage.tar.gz (updater); deb + rpm cover distro
+            # package managers.
             args: '--bundles deb,appimage,rpm'
+            updater_glob: 'src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz*'
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             rust_targets: x86_64-pc-windows-msvc
-            # NSIS .exe only — the .msi is enterprise-y and confuses
-            # end users who already see an installer right next to it.
+            # nsis produces both .exe (installer) and .nsis.zip (updater).
             args: '--bundles nsis'
+            updater_glob: 'src-tauri/target/release/bundle/nsis/*.nsis.zip*'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -196,6 +200,20 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
+      - name: Upload updater bundle + signature
+        # tauri-action only uploads the "installer" bundles per
+        # --bundles flag; the .tar.gz/.zip updater payloads and their
+        # .sig companions get dropped on the floor. Pick them up here
+        # and attach to the draft so the consolidation job can build
+        # latest.json from them.
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version || github.ref_name }}
+          draft: true
+          files: ${{ matrix.updater_glob }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   agent:
     name: Build agent (${{ matrix.target }})
     strategy:
@@ -268,5 +286,103 @@ jobs:
             localforge-agent-${{ matrix.target }}${{ matrix.ext }}
             scripts/install-agent.sh
             scripts/install-agent.ps1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Compose latest.json once every desktop matrix job has uploaded its
+  # signed updater bundle. The plugin-updater on installed clients
+  # polls this file to discover new versions.
+  # ---------------------------------------------------------------------------
+  updater-manifest:
+    name: Generate updater manifest
+    needs: [build]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Compose latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.version || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+
+          # Pull every .sig file the build matrix uploaded.
+          mkdir -p sigs
+          gh release download "$TAG" --repo "$REPO" --pattern '*.sig' --dir sigs
+          ls -la sigs
+
+          # Helper: find the first file in sigs/ matching a glob.
+          pick() {
+            local pattern="$1"
+            for f in sigs/$pattern; do
+              if [ -f "$f" ]; then
+                echo "$f"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          # Each platform's updater payload + signature.
+          MAC_SIG=$(pick '*.app.tar.gz.sig' || true)
+          LINUX_SIG=$(pick '*.AppImage.tar.gz.sig' || pick '*.AppImage.sig' || true)
+          WIN_SIG=$(pick '*.nsis.zip.sig' || pick '*-setup.exe.sig' || true)
+
+          # Discover the matching bundle URLs by listing release assets.
+          assets_json=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets')
+
+          find_url() {
+            local pattern="$1"
+            echo "$assets_json" | jq -r ".[] | select(.name | test(\"$pattern\")) | .url" | head -n1
+          }
+
+          MAC_URL=$(find_url '\\.app\\.tar\\.gz$' || true)
+          LINUX_URL=$(find_url '\\.AppImage\\.tar\\.gz$' || true)
+          WIN_URL=$(find_url '\\.nsis\\.zip$' || true)
+
+          read_sig() { [ -n "$1" ] && [ -f "$1" ] && cat "$1" || echo ""; }
+
+          MAC_SIG_CONTENT=$(read_sig "$MAC_SIG")
+          LINUX_SIG_CONTENT=$(read_sig "$LINUX_SIG")
+          WIN_SIG_CONTENT=$(read_sig "$WIN_SIG")
+
+          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          NOTES="See release notes at https://github.com/${REPO}/releases/tag/${TAG}"
+
+          # Build platforms object dynamically to skip missing entries.
+          platforms="{}"
+          add_platform() {
+            local key="$1" sig="$2" url="$3"
+            if [ -n "$sig" ] && [ -n "$url" ]; then
+              platforms=$(jq -c \
+                --arg k "$key" --arg s "$sig" --arg u "$url" \
+                '. + {($k): {signature: $s, url: $u}}' <<<"$platforms")
+            else
+              echo "::warning::missing sig or url for $key (sig=${sig:+yes}/no, url=${url:+yes}/no)"
+            fi
+          }
+          add_platform "darwin-x86_64"    "$MAC_SIG_CONTENT"   "$MAC_URL"
+          add_platform "darwin-aarch64"   "$MAC_SIG_CONTENT"   "$MAC_URL"
+          add_platform "linux-x86_64"     "$LINUX_SIG_CONTENT" "$LINUX_URL"
+          add_platform "windows-x86_64"   "$WIN_SIG_CONTENT"   "$WIN_URL"
+
+          jq -n \
+            --arg v "$VERSION" \
+            --arg n "$NOTES" \
+            --arg d "$PUB_DATE" \
+            --argjson p "$platforms" \
+            '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > latest.json
+
+          echo "--- latest.json ---"
+          cat latest.json
+
+      - name: Upload latest.json
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version || github.ref_name }}
+          draft: true
+          files: latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
