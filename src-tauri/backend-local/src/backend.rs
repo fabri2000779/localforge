@@ -11,8 +11,9 @@ use async_trait::async_trait;
 use bollard::container::{LogOutput, LogsOptions};
 use futures_util::stream::{self, StreamExt};
 use localforge_core::backend::{
-    BackendError, InstallStream, LogLine, LogStream, NodeBackend, Result,
+    BackendError, ByteStream, InstallStream, LogLine, LogStream, NodeBackend, Result,
 };
+use tokio::io::AsyncWriteExt;
 use localforge_core::types::{
     ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
     InstallEvent, Server, ServerStatus,
@@ -551,6 +552,31 @@ impl NodeBackend for LocalDockerBackend {
         });
 
         Ok(Box::pin(ReceiverStream::new(rx)))
+    }
+
+    async fn download_file(&self, path: &str) -> Result<ByteStream> {
+        let file = tokio::fs::File::open(path).await.map_err(BackendError::io)?;
+        let stream = tokio_util::io::ReaderStream::new(file)
+            .map(|r| r.map_err(BackendError::io));
+        Ok(Box::pin(stream))
+    }
+
+    async fn upload_file(&self, path: &str, mut body: ByteStream) -> Result<()> {
+        // Make sure the destination directory exists.
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(BackendError::io)?;
+        }
+        let mut file = tokio::fs::File::create(path)
+            .await
+            .map_err(BackendError::io)?;
+        while let Some(chunk) = body.next().await {
+            let bytes = chunk?;
+            file.write_all(&bytes).await.map_err(BackendError::io)?;
+        }
+        file.flush().await.map_err(BackendError::io)?;
+        Ok(())
     }
 
     async fn file_info(&self, path: &str) -> Result<FileEntry> {

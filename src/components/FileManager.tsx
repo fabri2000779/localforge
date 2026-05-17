@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-shell';
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { listen } from '@tauri-apps/api/event';
 import {
   Folder,
   File,
@@ -25,7 +27,11 @@ import {
   Database,
   Settings,
   Check,
+  Upload,
+  Download,
+  Loader2,
 } from 'lucide-react';
+import { useNodesStore } from '../stores/nodesStore';
 
 interface FileEntry {
   name: string;
@@ -156,6 +162,113 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
   const [editingFile, setEditingFile] = useState<{ path: string; name: string; content: string; original: string } | null>(null);
   const [editorSaving, setEditorSaving] = useState(false);
 
+  // Active chunked transfers (keyed by transfer_id).
+  type TransferInfo = {
+    direction: 'upload' | 'download';
+    path: string;
+    bytes: number;
+    totalBytes?: number;
+    label: string;
+  };
+  const [transfers, setTransfers] = useState<Record<string, TransferInfo>>({});
+
+  // Active node id is needed for the transfer commands so we can target
+  // either the local node or whichever remote is currently selected.
+  const activeNodeId = useNodesStore((s) => s.activeNodeId);
+
+  // Listen for streamed progress events from the Rust transfer
+  // commands and update the on-screen progress bar live.
+  useEffect(() => {
+    const unlistenPromise = listen<{
+      id: string;
+      direction: 'upload' | 'download';
+      path: string;
+      bytes: number;
+    }>('file-transfer-progress', (event) => {
+      const p = event.payload;
+      setTransfers((prev) => {
+        const existing = prev[p.id];
+        if (!existing) return prev;
+        return {
+          ...prev,
+          [p.id]: { ...existing, bytes: p.bytes },
+        };
+      });
+    });
+    return () => {
+      unlistenPromise.then((fn) => fn());
+    };
+  }, []);
+
+  const handleUpload = async () => {
+    const picked = await openDialog({ multiple: false });
+    if (!picked || typeof picked !== 'string') return;
+
+    const fileName = picked.split(/[/\\]/).pop() ?? 'upload.bin';
+    const destPath = `${currentPath.replace(/[/\\]+$/, '')}/${fileName}`;
+    const id = crypto.randomUUID();
+
+    setTransfers((prev) => ({
+      ...prev,
+      [id]: {
+        direction: 'upload',
+        path: destPath,
+        bytes: 0,
+        label: fileName,
+      },
+    }));
+
+    try {
+      await invoke<number>('upload_file_from_local', {
+        transferId: id,
+        srcPath: picked,
+        destPath,
+        nodeId: activeNodeId,
+      });
+      loadDirectory(currentPath);
+    } catch (e) {
+      setError(`Upload failed: ${e}`);
+    } finally {
+      setTransfers((prev) => {
+        const { [id]: _gone, ...rest } = prev;
+        return rest;
+      });
+    }
+  };
+
+  const handleDownload = async (entry: FileEntry) => {
+    const destPath = await saveDialog({ defaultPath: entry.name });
+    if (!destPath || typeof destPath !== 'string') return;
+
+    const id = crypto.randomUUID();
+    setTransfers((prev) => ({
+      ...prev,
+      [id]: {
+        direction: 'download',
+        path: destPath,
+        bytes: 0,
+        totalBytes: entry.size,
+        label: entry.name,
+      },
+    }));
+
+    try {
+      await invoke<number>('download_file_to_local', {
+        transferId: id,
+        srcPath: entry.path,
+        destPath,
+        nodeId: activeNodeId,
+      });
+    } catch (e) {
+      setError(`Download failed: ${e}`);
+    } finally {
+      setTransfers((prev) => {
+        const { [id]: _gone, ...rest } = prev;
+        return rest;
+      });
+    }
+  };
+
   // Load directory contents
   const loadDirectory = useCallback(async (path: string) => {
     setLoading(true);
@@ -175,7 +288,6 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
 
   // Initial load
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadDirectory(rootPath);
   }, [rootPath, loadDirectory]);
 
@@ -500,6 +612,34 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
         >
           <FolderPlus size={18} />
         </button>
+
+        <div className="w-px h-5 bg-zinc-700 mx-1" />
+
+        <button
+          onClick={handleUpload}
+          className="p-1.5 rounded hover:bg-zinc-700"
+          title="Upload file into this directory"
+        >
+          <Upload size={18} />
+        </button>
+        {(() => {
+          const sel = getSelectedEntries();
+          const onlyFile = sel.length === 1 && !sel[0].is_dir ? sel[0] : null;
+          return (
+            <button
+              onClick={() => onlyFile && handleDownload(onlyFile)}
+              disabled={!onlyFile}
+              className="p-1.5 rounded hover:bg-zinc-700 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+              title={
+                onlyFile
+                  ? `Download "${onlyFile.name}" to your computer`
+                  : 'Select exactly one file to download'
+              }
+            >
+              <Download size={18} />
+            </button>
+          );
+        })()}
         
         {selectedItems.size > 0 && (
           <>
@@ -845,6 +985,56 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
           </div>
         </div>
       )}
+
+      {/* Chunked transfer progress overlay */}
+      {Object.keys(transfers).length > 0 && (
+        <div className="fixed bottom-4 right-4 z-40 space-y-2 max-w-sm">
+          {Object.entries(transfers).map(([id, t]) => {
+            const total = t.totalBytes ?? 0;
+            const pct = total > 0 ? Math.min(100, (t.bytes / total) * 100) : null;
+            return (
+              <div
+                key={id}
+                className="bg-slate-900 border border-slate-700 rounded-lg shadow-xl p-3"
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  {t.direction === 'upload' ? (
+                    <Upload size={14} className="text-blue-400 shrink-0" />
+                  ) : (
+                    <Download size={14} className="text-emerald-400 shrink-0" />
+                  )}
+                  <div className="text-xs font-medium truncate flex-1">
+                    {t.direction === 'upload' ? 'Uploading' : 'Downloading'} —{' '}
+                    {t.label}
+                  </div>
+                  <Loader2 size={12} className="animate-spin text-slate-500" />
+                </div>
+                <div className="h-1.5 bg-slate-800 rounded overflow-hidden">
+                  <div
+                    className={`h-full ${
+                      t.direction === 'upload'
+                        ? 'bg-blue-500'
+                        : 'bg-emerald-500'
+                    } ${pct === null ? 'animate-pulse' : ''} transition-all`}
+                    style={{ width: pct !== null ? `${pct}%` : '100%' }}
+                  />
+                </div>
+                <div className="text-[10px] text-slate-500 mt-1 font-mono">
+                  {formatBytes(t.bytes)}
+                  {total > 0 ? ` / ${formatBytes(total)}` : ''}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }

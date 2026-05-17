@@ -26,6 +26,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(ServerState::default())
         .manage(GamesState::default())
         .manage(NodeRegistry::default())
@@ -99,6 +100,8 @@ fn main() {
             commands::files::move_path,
             commands::files::copy_path,
             commands::files::get_file_info,
+            commands::files::download_file_to_local,
+            commands::files::upload_file_from_local,
             commands::nodes::list_nodes,
             commands::nodes::test_remote_node,
             commands::nodes::add_remote_node,

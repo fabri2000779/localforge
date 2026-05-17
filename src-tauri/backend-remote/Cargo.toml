@@ -26,6 +26,7 @@ webpki-roots = "1"
 tokio = { workspace = true }
 futures-util = { workspace = true }
 async-trait = { workspace = true }
+bytes = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

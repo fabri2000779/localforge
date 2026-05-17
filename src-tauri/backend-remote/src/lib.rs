@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use futures_util::sink::SinkExt;
 use futures_util::stream::{self, BoxStream, StreamExt};
 use localforge_core::backend::{
-    BackendError, InstallStream, LogLine, LogStream, NodeBackend, Result,
+    BackendError, ByteStream, InstallStream, LogLine, LogStream, NodeBackend, Result,
 };
 use localforge_core::types::{
     ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
@@ -508,6 +508,45 @@ impl NodeBackend for RemoteAgentBackend {
     async fn file_info(&self, path: &str) -> Result<FileEntry> {
         self.get(&format!("/v1/fs/info?path={}", urlencoding(path)))
             .await
+    }
+
+    async fn download_file(&self, path: &str) -> Result<ByteStream> {
+        let url = self.endpoint(&format!("/v1/fs/download?path={}", urlencoding(path)))?;
+        let resp = self
+            .http
+            .get(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(transport)?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(status_to_backend_error(status, &body));
+        }
+        let stream = resp
+            .bytes_stream()
+            .map(|r| r.map_err(|e| BackendError::Transport(e.to_string())));
+        Ok(Box::pin(stream))
+    }
+
+    async fn upload_file(&self, path: &str, body: ByteStream) -> Result<()> {
+        let url = self.endpoint(&format!("/v1/fs/upload?path={}", urlencoding(path)))?;
+        // reqwest wants a stream of Result<Bytes, std::io::Error> for
+        // wrap_stream; map our BackendError into io::Error so the
+        // streaming body builder is happy.
+        let mapped =
+            body.map(|r| r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+        let resp = self
+            .http
+            .put(url)
+            .bearer_auth(&self.token)
+            .header("content-type", "application/octet-stream")
+            .body(reqwest::Body::wrap_stream(mapped))
+            .send()
+            .await
+            .map_err(transport)?;
+        ensure_ok(resp).await
     }
 }
 

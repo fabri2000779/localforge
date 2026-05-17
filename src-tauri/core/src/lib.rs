@@ -13,7 +13,7 @@ mod config_processor;
 pub use config_processor::apply_config_variables;
 
 pub use backend::{
-    detect_oauth_url, BackendError, InstallStream, LogLine, LogStream, NodeBackend,
+    detect_oauth_url, BackendError, ByteStream, InstallStream, LogLine, LogStream, NodeBackend,
     Result as BackendResult,
 };
 pub use games::{build_env_vars, get_builtin_games, resolve_startup};

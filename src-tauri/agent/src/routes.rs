@@ -5,13 +5,14 @@
 //! local Docker logic land in `localforge-backend-local` once and serve
 //! both the desktop and the agent.
 
+use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{get, patch, post, put};
 use axum::{middleware, Json, Router};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use localforge_core::types::{
     ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
     InstallEvent, Server, ServerStatus,
@@ -55,6 +56,8 @@ pub fn router(state: AppState) -> Router {
         .route("/fs/move", post(fs_move))
         .route("/fs/copy", post(fs_copy))
         .route("/fs/info", get(fs_info))
+        .route("/fs/download", get(fs_download))
+        .route("/fs/upload", put(fs_upload))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_bearer,
@@ -421,6 +424,47 @@ async fn fs_info(
     Query(q): Query<PathQuery>,
 ) -> Result<Json<FileEntry>, ApiError> {
     s.backend.file_info(&q.path).await.map(Json).map_err(map_err)
+}
+
+async fn fs_download(
+    State(s): State<AppState>,
+    Query(q): Query<PathQuery>,
+) -> Result<Response, ApiError> {
+    let stream = s
+        .backend
+        .download_file(&q.path)
+        .await
+        .map_err(map_err)?
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()));
+    let filename = std::path::Path::new(&q.path)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download.bin".to_string());
+    let body = Body::from_stream(stream);
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", filename),
+        )
+        .body(body)
+        .map_err(|e| ApiError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: e.to_string(),
+        })
+}
+
+async fn fs_upload(
+    State(s): State<AppState>,
+    Query(q): Query<PathQuery>,
+    body: Body,
+) -> Result<StatusCode, ApiError> {
+    let stream = body
+        .into_data_stream()
+        .map_err(|e| localforge_core::BackendError::Transport(e.to_string()))
+        .boxed();
+    s.backend.upload_file(&q.path, stream).await.map_err(map_err)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn fs_delete(

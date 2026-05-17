@@ -84,6 +84,11 @@ pub type LogStream = BoxStream<'static, Result<LogLine>>;
 /// died.
 pub type InstallStream = BoxStream<'static, Result<InstallEvent>>;
 
+/// Stream of file chunks for upload/download. Uses [`bytes::Bytes`] for
+/// zero-copy chunk passing — chunks are typically 8-64 KB depending on
+/// who feeds the stream.
+pub type ByteStream = BoxStream<'static, Result<bytes::Bytes>>;
+
 /// Detect an OAuth-style URL embedded in an install-script log line.
 /// Matches whitespace-separated tokens that start with `https://` and
 /// contain one of the common auth keywords. Returns the first match
@@ -200,4 +205,13 @@ pub trait NodeBackend: Send + Sync {
     async fn move_path(&self, from: &str, to: &str) -> Result<()>;
     async fn copy_path(&self, from: &str, to: &str) -> Result<()>;
     async fn file_info(&self, path: &str) -> Result<FileEntry>;
+
+    /// Stream a file's contents in chunks. Used by the desktop's
+    /// "Download" action to pull large worlds from a remote node
+    /// without loading the whole file into memory.
+    async fn download_file(&self, path: &str) -> Result<ByteStream>;
+
+    /// Stream a file's contents into `path`, replacing it if it exists.
+    /// Counterpart to [`download_file`].
+    async fn upload_file(&self, path: &str, body: ByteStream) -> Result<()>;
 }

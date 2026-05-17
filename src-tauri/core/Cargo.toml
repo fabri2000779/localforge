@@ -14,3 +14,4 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 futures-util = { workspace = true }
 tracing = { workspace = true }
+bytes = "1"
