@@ -10,7 +10,6 @@
 pub mod registry;
 
 pub use localforge_backend_local::LocalDockerBackend;
-pub use localforge_backend_remote::{RemoteAgentBackend, RemoteAgentConfig};
 pub use registry::{NodeKindRecord, NodeRecord, NodeRegistry};
 
 use localforge_core::NodeBackend;

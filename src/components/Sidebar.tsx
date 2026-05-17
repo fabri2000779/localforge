@@ -4,6 +4,7 @@ import { useServerStore } from '../stores/serverStore';
 import { useDockerStore } from '../stores/dockerStore';
 import { useGamesStore } from '../stores/gamesStore';
 import { useNodesStore } from '../stores/nodesStore';
+import { NodeSelector } from './NodeSelector';
 
 export function Sidebar() {
   const { servers } = useServerStore();
@@ -17,6 +18,11 @@ export function Sidebar() {
 
   return (
     <aside className="w-56 bg-slate-900/50 flex flex-col h-full border-r border-slate-800/50">
+      {/* Active node selector */}
+      <div className="px-3 py-3 border-b border-slate-800/50">
+        <NodeSelector />
+      </div>
+
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1">
         <NavLink

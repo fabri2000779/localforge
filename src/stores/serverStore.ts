@@ -1,4 +1,9 @@
-// Server store using Zustand
+// Server store using Zustand.
+//
+// Every Tauri invoke that touches a Docker daemon takes a `nodeId`
+// argument (defaulting to "local" on the Rust side). We always read the
+// active node id from nodesStore so switching nodes in the sidebar
+// automatically scopes every subsequent action to the new node.
 
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
@@ -9,6 +14,7 @@ import type {
   ServerResponse,
   LogsResponse,
 } from '../types';
+import { useNodesStore } from './nodesStore';
 
 interface LogEvent {
   server_id: string;
@@ -38,7 +44,10 @@ interface ServerState {
   startServer: (serverId: string) => Promise<void>;
   stopServer: (serverId: string) => Promise<void>;
   deleteServer: (serverId: string, deleteData?: boolean) => Promise<void>;
-  updateServerConfig: (serverId: string, config: Record<string, string>) => Promise<boolean>;
+  updateServerConfig: (
+    serverId: string,
+    config: Record<string, string>,
+  ) => Promise<boolean>;
   reinstallServer: (serverId: string) => Promise<void>;
   updateServerGame: (serverId: string) => Promise<void>;
   checkNeedsInstall: (serverId: string) => Promise<boolean>;
@@ -54,6 +63,11 @@ interface ServerState {
   clearLogs: () => void;
 }
 
+/// Read the currently-active node id from nodesStore at the moment of
+/// the invoke. We don't subscribe — each call gets a fresh value so
+/// switching nodes mid-flight doesn't strand stale calls.
+const currentNodeId = () => useNodesStore.getState().activeNodeId;
+
 export const useServerStore = create<ServerState>((set, get) => ({
   servers: [],
   selectedServer: null,
@@ -68,7 +82,9 @@ export const useServerStore = create<ServerState>((set, get) => ({
   fetchServers: async () => {
     set({ isLoading: true, error: null });
     try {
-      const servers = await invoke<Server[]>('list_servers');
+      const servers = await invoke<Server[]>('list_servers', {
+        nodeId: currentNodeId(),
+      });
       set({ servers, isLoading: false });
       const selected = get().selectedServer;
       if (selected) {
@@ -84,13 +100,19 @@ export const useServerStore = create<ServerState>((set, get) => ({
   createServer: async (request) => {
     set({ isLoading: true, error: null });
     try {
-      const response = await invoke<ServerResponse>('create_server', { request });
+      const response = await invoke<ServerResponse>('create_server', {
+        request,
+        nodeId: currentNodeId(),
+      });
       if (response.success && response.server) {
         await get().fetchServers();
         set({ isLoading: false });
         return response.server;
       } else {
-        set({ error: response.error || 'Failed to create server', isLoading: false });
+        set({
+          error: response.error || 'Failed to create server',
+          isLoading: false,
+        });
         return null;
       }
     } catch (error) {
@@ -103,7 +125,10 @@ export const useServerStore = create<ServerState>((set, get) => ({
     set({ isLoading: true, error: null, logs: [] });
     try {
       await get().attachToServer(serverId);
-      await invoke<ServerResponse>('start_server', { serverId });
+      await invoke<ServerResponse>('start_server', {
+        serverId,
+        nodeId: currentNodeId(),
+      });
       await get().fetchServers();
       get().startStatsPolling(serverId);
       set({ isLoading: false });
@@ -117,7 +142,10 @@ export const useServerStore = create<ServerState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       get().stopStatsPolling();
-      await invoke<ServerResponse>('stop_server', { serverId });
+      await invoke<ServerResponse>('stop_server', {
+        serverId,
+        nodeId: currentNodeId(),
+      });
       await get().detachFromServer(serverId);
       await get().fetchServers();
       set({ isLoading: false, stats: null, isStreaming: false });
@@ -131,7 +159,11 @@ export const useServerStore = create<ServerState>((set, get) => ({
     try {
       get().stopStatsPolling();
       await get().detachFromServer(serverId);
-      await invoke<ServerResponse>('delete_server', { serverId, deleteData });
+      await invoke<ServerResponse>('delete_server', {
+        serverId,
+        deleteData,
+        nodeId: currentNodeId(),
+      });
       const selected = get().selectedServer;
       if (selected?.id === serverId) set({ selectedServer: null });
       await get().fetchServers();
@@ -143,7 +175,11 @@ export const useServerStore = create<ServerState>((set, get) => ({
 
   updateServerConfig: async (serverId, config) => {
     try {
-      const response = await invoke<ServerResponse>('update_server_config', { serverId, config });
+      const response = await invoke<ServerResponse>('update_server_config', {
+        serverId,
+        config,
+        nodeId: currentNodeId(),
+      });
       if (response.success) {
         await get().fetchServers();
         return true;
@@ -195,7 +231,11 @@ export const useServerStore = create<ServerState>((set, get) => ({
 
   sendCommand: async (serverId, command) => {
     try {
-      const result = await invoke<string>('send_command', { serverId, command });
+      const result = await invoke<string>('send_command', {
+        serverId,
+        command,
+        nodeId: currentNodeId(),
+      });
       return result;
     } catch (error) {
       console.error('[Store] sendCommand error:', error);
@@ -206,7 +246,11 @@ export const useServerStore = create<ServerState>((set, get) => ({
 
   fetchLogs: async (serverId) => {
     try {
-      const response = await invoke<LogsResponse>('get_server_logs', { serverId, lines: 500 });
+      const response = await invoke<LogsResponse>('get_server_logs', {
+        serverId,
+        lines: 500,
+        nodeId: currentNodeId(),
+      });
       set({ logs: response.logs });
     } catch (error) {
       console.error('[Store] fetchLogs error:', error);
@@ -215,7 +259,10 @@ export const useServerStore = create<ServerState>((set, get) => ({
 
   fetchStats: async (serverId) => {
     try {
-      const stats = await invoke<ContainerStats>('get_server_stats', { serverId });
+      const stats = await invoke<ContainerStats>('get_server_stats', {
+        serverId,
+        nodeId: currentNodeId(),
+      });
       set({ stats });
     } catch {
       // Silently ignore stats errors
@@ -223,8 +270,6 @@ export const useServerStore = create<ServerState>((set, get) => ({
   },
 
   attachToServer: async (serverId) => {
-    console.log('[Store] attachToServer called:', serverId);
-    
     const { logUnlisten } = get();
     if (logUnlisten) {
       logUnlisten();
@@ -240,9 +285,10 @@ export const useServerStore = create<ServerState>((set, get) => ({
 
       set({ logUnlisten: unlisten, isStreaming: true });
 
-      console.log('[Store] Invoking attach_server...');
-      await invoke('attach_server', { serverId });
-      console.log('[Store] attach_server complete');
+      await invoke('attach_server', {
+        serverId,
+        nodeId: currentNodeId(),
+      });
     } catch (error) {
       console.error('[Store] attachToServer error:', error);
       set({ isStreaming: false });
@@ -265,7 +311,10 @@ export const useServerStore = create<ServerState>((set, get) => ({
   startStatsPolling: (serverId) => {
     get().stopStatsPolling();
     get().fetchStats(serverId);
-    const interval = window.setInterval(() => get().fetchStats(serverId), 2000);
+    const interval = window.setInterval(
+      () => get().fetchStats(serverId),
+      2000,
+    );
     set({ statsInterval: interval });
   },
 
@@ -280,3 +329,27 @@ export const useServerStore = create<ServerState>((set, get) => ({
   clearError: () => set({ error: null }),
   clearLogs: () => set({ logs: [] }),
 }));
+
+// Re-fetch the server list whenever the active node changes so the UI
+// always reflects the servers on the node the user is currently looking
+// at. Detach any active log stream first — it belongs to the old node.
+let lastActive = useNodesStore.getState().activeNodeId;
+useNodesStore.subscribe((state) => {
+  if (state.activeNodeId !== lastActive) {
+    lastActive = state.activeNodeId;
+    const store = useServerStore.getState();
+    if (store.logUnlisten) {
+      store.logUnlisten();
+    }
+    store.stopStatsPolling();
+    useServerStore.setState({
+      servers: [],
+      selectedServer: null,
+      logs: [],
+      stats: null,
+      logUnlisten: null,
+      isStreaming: false,
+    });
+    store.fetchServers();
+  }
+});

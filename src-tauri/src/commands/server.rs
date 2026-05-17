@@ -1,17 +1,19 @@
 //! Server lifecycle Tauri commands.
 //!
 //! Most commands are thin wrappers around the active [`NodeBackend`]
-//! pulled out of [`NodeRegistry`]. The legacy install-script logic still
-//! lives here because it needs to open OAuth URLs in the user's local
-//! browser — that's a desktop-only concern and migrates to the agent
-//! protocol in a later phase.
+//! pulled out of [`NodeRegistry`] using the supplied `nodeId` (which
+//! defaults to "local"). The legacy install-script logic still lives
+//! here because it needs to open OAuth URLs in the user's local browser
+//! — that's a desktop-only concern and only runs against the local node.
 
 use crate::backend::NodeRegistry;
 use crate::commands::games::GamesState;
-use localforge_backend_local::DockerManager;
+use crate::commands::require_backend;
 use crate::paths;
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use futures_util::stream::StreamExt;
+use localforge_backend_local::DockerManager;
+use localforge_core::NodeId;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -30,26 +32,24 @@ pub struct ServerState {
     pub streams: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
 }
 
-async fn require_backend(
-    state: &State<'_, NodeRegistry>,
-) -> Result<Arc<dyn localforge_core::NodeBackend>, String> {
-    state
-        .local()
-        .await
-        .ok_or_else(|| "Local backend not connected".to_string())
+fn node_is_local(node_id: Option<&str>) -> bool {
+    node_id
+        .map(|s| s == NodeId::LOCAL || s.is_empty())
+        .unwrap_or(true)
 }
 
 // ===========================================================================
 // CRUD + lifecycle
 // ===========================================================================
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn create_server(
     request: CreateServerRequest,
+    node_id: Option<String>,
     state: State<'_, NodeRegistry>,
     games_state: State<'_, GamesState>,
 ) -> Result<ServerResponse, String> {
-    let backend = require_backend(&state).await?;
+    let backend = require_backend(&state, node_id.as_deref()).await?;
 
     let game = {
         let games_manager = games_state.manager.lock().await;
@@ -73,37 +73,44 @@ pub async fn create_server(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn start_server(
     server_id: String,
+    node_id: Option<String>,
     app: AppHandle,
     state: State<'_, NodeRegistry>,
     server_state: State<'_, ServerState>,
     games_state: State<'_, GamesState>,
 ) -> Result<ServerResponse, String> {
-    // First-launch install: if the game has an install script and the
-    // server hasn't run it yet, run it before starting.
-    let needs_install = {
-        let mut server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
-        if server.installed {
-            false
-        } else {
-            let games_manager = games_state.manager.lock().await;
-            let has_install = games_manager
-                .get_game(&server.game_type)
-                .and_then(|g| g.install_script.clone())
-                .map(|s| !s.is_empty())
-                .unwrap_or(false);
-            if !has_install {
-                server.installed = true;
-                paths::save_server(&server).map_err(|e| e.to_string())?;
-            }
-            has_install
-        }
-    };
+    let is_local = node_is_local(node_id.as_deref());
+    let backend = require_backend(&state, node_id.as_deref()).await?;
 
-    if needs_install {
-        run_install_script_internal(&server_id, &app, &games_state).await?;
+    // First-launch install: only auto-runnable for local nodes (the
+    // install pipeline lives on the desktop because it opens OAuth URLs
+    // in the user's browser). On remote nodes we just try to start; if
+    // the container fails it's because install hasn't been run yet — UX
+    // for that lands in a later phase.
+    if is_local {
+        let needs_install = {
+            let mut server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
+            if server.installed {
+                false
+            } else {
+                let games_manager = games_state.manager.lock().await;
+                let has_install = games_manager
+                    .get_game(&server.game_type)
+                    .and_then(|g| g.install_script.clone())
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+                if !has_install {
+                    server.installed = true;
+                    paths::save_server(&server).map_err(|e| e.to_string())?;
+                }
+                has_install
+            }
+        };
+        if needs_install {
+            run_install_script_internal(&server_id, &app, &games_state).await?;
+        }
     }
 
-    let backend = require_backend(&state).await?;
     let status = backend
         .start_server(&server_id)
         .await
@@ -114,7 +121,15 @@ pub async fn start_server(
         start_log_stream(&server_id, backend.clone(), app, &server_state).await;
     }
 
-    let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
+    let server = if is_local {
+        paths::load_server(&server_id).map_err(|e| e.to_string())?
+    } else {
+        backend
+            .get_server(&server_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("server '{}' not found on remote node", server_id))?
+    };
     Ok(ServerResponse {
         success: true,
         server: Some(server),
@@ -125,6 +140,7 @@ pub async fn start_server(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn stop_server(
     server_id: String,
+    node_id: Option<String>,
     state: State<'_, NodeRegistry>,
     server_state: State<'_, ServerState>,
     games_state: State<'_, GamesState>,
@@ -133,29 +149,39 @@ pub async fn stop_server(
     // the stop sequence.
     abort_stream(&server_id, &server_state).await;
 
+    let is_local = node_is_local(node_id.as_deref());
+    let backend = require_backend(&state, node_id.as_deref()).await?;
+
     // If the game defines a graceful stop_command, send it and wait a few
-    // seconds before forcing the container down.
-    {
+    // seconds before forcing the container down. Game metadata lookup is
+    // a desktop concern, so we only check it for local nodes — remote
+    // agents have their own copy of the game catalogue.
+    if is_local {
         let games_manager = games_state.manager.lock().await;
         if let Ok(server) = paths::load_server(&server_id) {
             if let Some(game) = games_manager.get_game(&server.game_type) {
                 if !game.stop_command.is_empty() {
-                    if let Some(backend) = state.local().await {
-                        let _ = backend.send_command(&server_id, &game.stop_command).await;
-                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                    }
+                    let _ = backend.send_command(&server_id, &game.stop_command).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
             }
         }
     }
 
-    let backend = require_backend(&state).await?;
     backend
         .stop_server(&server_id)
         .await
         .map_err(|e| e.to_string())?;
 
-    let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
+    let server = if is_local {
+        paths::load_server(&server_id).map_err(|e| e.to_string())?
+    } else {
+        backend
+            .get_server(&server_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("server '{}' not found on remote node", server_id))?
+    };
     Ok(ServerResponse {
         success: true,
         server: Some(server),
@@ -167,16 +193,19 @@ pub async fn stop_server(
 pub async fn delete_server(
     server_id: String,
     delete_data: Option<bool>,
+    node_id: Option<String>,
     state: State<'_, NodeRegistry>,
     server_state: State<'_, ServerState>,
 ) -> Result<ServerResponse, String> {
     abort_stream(&server_id, &server_state).await;
 
-    let backend = require_backend(&state).await?;
+    let is_local = node_is_local(node_id.as_deref());
+    let backend = require_backend(&state, node_id.as_deref()).await?;
 
     // The backend's delete_server always wipes the data dir; if the caller
-    // wants to keep data, fall back to a stop-only path.
-    if delete_data.unwrap_or(true) {
+    // wants to keep data, fall back to a stop-only path. The keep-data
+    // option is only supported on local — for remote we always wipe.
+    if delete_data.unwrap_or(true) || !is_local {
         backend
             .delete_server(&server_id)
             .await
@@ -185,7 +214,6 @@ pub async fn delete_server(
         let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
         if let Some(container_id) = &server.container_id {
             let _ = backend.stop_server(&server_id).await;
-            // Remove just the container, keep the data on disk.
             let docker = DockerManager::new().await.map_err(|e| e.to_string())?;
             let _ = docker.remove_container(container_id).await;
         }
@@ -199,9 +227,12 @@ pub async fn delete_server(
     })
 }
 
-#[tauri::command]
-pub async fn list_servers(state: State<'_, NodeRegistry>) -> Result<Vec<Server>, String> {
-    let backend = require_backend(&state).await?;
+#[tauri::command(rename_all = "camelCase")]
+pub async fn list_servers(
+    node_id: Option<String>,
+    state: State<'_, NodeRegistry>,
+) -> Result<Vec<Server>, String> {
+    let backend = require_backend(&state, node_id.as_deref()).await?;
     let mut servers = backend.list_servers().await.map_err(|e| e.to_string())?;
     // Refresh live status from Docker for non-installing servers.
     for server in servers.iter_mut() {
@@ -219,16 +250,23 @@ pub async fn list_servers(state: State<'_, NodeRegistry>) -> Result<Vec<Server>,
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_server_status(
     server_id: String,
+    node_id: Option<String>,
     state: State<'_, NodeRegistry>,
 ) -> Result<ServerStatus, String> {
-    let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
-    if server.status == ServerStatus::Installing {
-        return Ok(ServerStatus::Installing);
+    let backend = require_backend(&state, node_id.as_deref()).await?;
+
+    // Local fast path: read the record from disk to honour an in-progress
+    // install before hitting Docker.
+    if node_is_local(node_id.as_deref()) {
+        let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
+        if server.status == ServerStatus::Installing {
+            return Ok(ServerStatus::Installing);
+        }
+        if server.container_id.is_none() {
+            return Ok(ServerStatus::Stopped);
+        }
     }
-    if server.container_id.is_none() {
-        return Ok(ServerStatus::Stopped);
-    }
-    let backend = require_backend(&state).await?;
+
     backend
         .server_status(&server_id)
         .await
@@ -239,15 +277,22 @@ pub async fn get_server_status(
 pub async fn send_command(
     server_id: String,
     command: String,
+    node_id: Option<String>,
     state: State<'_, NodeRegistry>,
 ) -> Result<String, String> {
-    let backend = require_backend(&state).await?;
+    let is_local = node_is_local(node_id.as_deref());
+    let backend = require_backend(&state, node_id.as_deref()).await?;
+
     if backend.send_command(&server_id, &command).await.is_ok() {
         return Ok("Command sent".to_string());
     }
 
-    // Minecraft fallback: containers that disable stdin still let us push a
-    // command through `mc-send-to-console` (parkervcp/yolks ships it).
+    // Minecraft fallback: only meaningful on local where we can hit the
+    // Docker socket directly to run the `mc-send-to-console` helper.
+    // Remote nodes either accept the bare stdin write or they don't.
+    if !is_local {
+        return Err("Remote node refused the command".to_string());
+    }
     let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
     let container_id = server.container_id.ok_or("No container ID")?;
     let docker = DockerManager::new().await.map_err(|e| e.to_string())?;
@@ -258,9 +303,10 @@ pub async fn send_command(
 pub async fn get_server_logs(
     server_id: String,
     lines: Option<u32>,
+    node_id: Option<String>,
     state: State<'_, NodeRegistry>,
 ) -> Result<LogsResponse, String> {
-    let backend = require_backend(&state).await?;
+    let backend = require_backend(&state, node_id.as_deref()).await?;
     let n = lines.unwrap_or(500) as usize;
     let logs = backend
         .get_logs(&server_id, n)
@@ -272,10 +318,11 @@ pub async fn get_server_logs(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_server_stats(
     server_id: String,
+    node_id: Option<String>,
     state: State<'_, NodeRegistry>,
 ) -> Result<localforge_core::ContainerStats, String> {
-    let backend = require_backend(&state).await?;
-    backend
+    require_backend(&state, node_id.as_deref())
+        .await?
         .get_stats(&server_id)
         .await
         .map_err(|e| e.to_string())
@@ -284,10 +331,11 @@ pub async fn get_server_stats(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_server_disk_usage(
     server_id: String,
+    node_id: Option<String>,
     state: State<'_, NodeRegistry>,
 ) -> Result<u64, String> {
-    let backend = require_backend(&state).await?;
-    backend
+    require_backend(&state, node_id.as_deref())
+        .await?
         .get_disk_usage(&server_id)
         .await
         .map_err(|e| e.to_string())
@@ -297,10 +345,11 @@ pub async fn get_server_disk_usage(
 pub async fn update_server_config(
     server_id: String,
     config: HashMap<String, String>,
+    node_id: Option<String>,
     state: State<'_, NodeRegistry>,
 ) -> Result<ServerResponse, String> {
-    let backend = require_backend(&state).await?;
-    let server = backend
+    let server = require_backend(&state, node_id.as_deref())
+        .await?
         .update_server_config(&server_id, config)
         .await
         .map_err(|e| e.to_string())?;
@@ -318,11 +367,12 @@ pub async fn update_server_config(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn attach_server(
     server_id: String,
+    node_id: Option<String>,
     app: AppHandle,
     state: State<'_, NodeRegistry>,
     server_state: State<'_, ServerState>,
 ) -> Result<(), String> {
-    let backend = require_backend(&state).await?;
+    let backend = require_backend(&state, node_id.as_deref()).await?;
     start_log_stream(&server_id, backend, app, &server_state).await;
     Ok(())
 }
@@ -352,10 +402,13 @@ async fn start_log_stream(
                 while let Some(item) = stream.next().await {
                     match item {
                         Ok(log) => {
-                            let _ = app.emit("server-log", LogEvent {
-                                server_id: log.server_id,
-                                line: log.line,
-                            });
+                            let _ = app.emit(
+                                "server-log",
+                                LogEvent {
+                                    server_id: log.server_id,
+                                    line: log.line,
+                                },
+                            );
                         }
                         Err(e) => {
                             tracing::warn!("log stream error for {}: {}", sid_owned, e);
@@ -382,10 +435,10 @@ async fn abort_stream(server_id: &str, state: &State<'_, ServerState>) {
 }
 
 // ===========================================================================
-// Install / reinstall / update — still on DockerManager direct because
-// the OAuth-URL auto-open behaviour needs to run on the desktop, not on
-// the remote node. The agent will surface OAuth events through a
-// different channel in a later phase.
+// Install / reinstall / update — local-node only because the OAuth-URL
+// auto-open behaviour runs on the desktop. The agent will surface OAuth
+// events through a separate channel in a later phase, at which point the
+// remote install path lands here too.
 // ===========================================================================
 
 #[tauri::command(rename_all = "camelCase")]
@@ -419,10 +472,13 @@ pub async fn reinstall_server(
         let _ = backend.stop_server(&server_id).await;
     }
 
-    let _ = app.emit("server-log", LogEvent {
-        server_id: server_id.clone(),
-        line: "[LocalForge] Deleting server data...".to_string(),
-    });
+    let _ = app.emit(
+        "server-log",
+        LogEvent {
+            server_id: server_id.clone(),
+            line: "[LocalForge] Deleting server data...".to_string(),
+        },
+    );
 
     if server.data_path.exists() {
         std::fs::remove_dir_all(&server.data_path).map_err(|e| e.to_string())?;
@@ -433,10 +489,13 @@ pub async fn reinstall_server(
     server.install_container_id = None;
     paths::save_server(&server).map_err(|e| e.to_string())?;
 
-    let _ = app.emit("server-log", LogEvent {
-        server_id: server_id.clone(),
-        line: "[LocalForge] Server data cleared. Starting reinstallation...".to_string(),
-    });
+    let _ = app.emit(
+        "server-log",
+        LogEvent {
+            server_id: server_id.clone(),
+            line: "[LocalForge] Server data cleared. Starting reinstallation...".to_string(),
+        },
+    );
 
     let server = run_install_script_internal(&server_id, &app, &games_state).await?;
     Ok(ServerResponse {
@@ -459,10 +518,13 @@ pub async fn update_server_game(
         let _ = backend.stop_server(&server_id).await;
     }
 
-    let _ = app.emit("server-log", LogEvent {
-        server_id: server_id.clone(),
-        line: "[LocalForge] Starting update (running install script)...".to_string(),
-    });
+    let _ = app.emit(
+        "server-log",
+        LogEvent {
+            server_id: server_id.clone(),
+            line: "[LocalForge] Starting update (running install script)...".to_string(),
+        },
+    );
 
     let server = run_install_script_internal(&server_id, &app, &games_state).await?;
     Ok(ServerResponse {
@@ -572,13 +634,9 @@ async fn run_install_script_internal(
                                     .args(["/c", "start", "", &url])
                                     .spawn();
                                 #[cfg(target_os = "macos")]
-                                let _ = std::process::Command::new("open")
-                                    .arg(&url)
-                                    .spawn();
+                                let _ = std::process::Command::new("open").arg(&url).spawn();
                                 #[cfg(target_os = "linux")]
-                                let _ = std::process::Command::new("xdg-open")
-                                    .arg(&url)
-                                    .spawn();
+                                let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
                                 opened.insert(url);
                             }
                         }
