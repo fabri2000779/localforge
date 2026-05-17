@@ -2,8 +2,9 @@
 //! and re-connect remote agents.
 
 use crate::backend::{NodeKindRecord, NodeRecord, NodeRegistry};
+use crate::commands::require_backend;
 use localforge_backend_remote::RemoteAgentConfig;
-use localforge_core::{DockerInfo, NodeId};
+use localforge_core::{DockerInfo, NodeId, NodeStats};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use uuid::Uuid;
@@ -154,6 +155,20 @@ pub struct ClusterSummary {
     pub containers_running: u64,
     pub containers_total: u64,
     pub images: u64,
+}
+
+/// Host-level metrics for a specific node — CPU%, mem, disk, uptime.
+/// Used by the Nodes page to render per-node health gauges.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_node_stats(
+    node_id: Option<String>,
+    state: State<'_, NodeRegistry>,
+) -> Result<NodeStats, String> {
+    require_backend(&state, node_id.as_deref())
+        .await?
+        .node_stats()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Aggregate docker_info across every registered node (local + every

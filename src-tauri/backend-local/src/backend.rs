@@ -13,20 +13,28 @@ use futures_util::stream::{self, StreamExt};
 use localforge_core::backend::{
     BackendError, ByteStream, InstallStream, LogLine, LogStream, NodeBackend, Result,
 };
-use tokio::io::AsyncWriteExt;
 use localforge_core::types::{
     ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
-    InstallEvent, Server, ServerStatus,
+    InstallEvent, NodeStats, Server, ServerStatus,
 };
 use localforge_core::{build_env_vars, detect_oauth_url, PortConfig as CorePortConfig};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+use sysinfo::{Disks, System};
+use tokio::io::AsyncWriteExt;
+use tokio::sync::RwLock;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 pub struct LocalDockerBackend {
     docker: DockerManager,
     data_root: PathBuf,
+    /// Long-lived sysinfo snapshot, refreshed by a background task so
+    /// CPU readings are accurate (sysinfo needs two refreshes ~200ms
+    /// apart to compute per-CPU deltas).
+    system: Arc<RwLock<System>>,
 }
 
 impl LocalDockerBackend {
@@ -45,7 +53,30 @@ impl LocalDockerBackend {
             .map_err(BackendError::io)?;
         std::fs::create_dir_all(persistence::servers_config_dir(&data_root))
             .map_err(BackendError::io)?;
-        Ok(Self { docker, data_root })
+
+        let system = Arc::new(RwLock::new(System::new_all()));
+        {
+            // Prime CPU readings — first refresh always reports 0%.
+            let mut s = system.write().await;
+            s.refresh_cpu_usage();
+            s.refresh_memory();
+        }
+        // Background refresh loop. Lives until the backend is dropped.
+        let bg = system.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                let mut s = bg.write().await;
+                s.refresh_cpu_usage();
+                s.refresh_memory();
+            }
+        });
+
+        Ok(Self {
+            docker,
+            data_root,
+            system,
+        })
     }
 
     /// Borrow the configured data root.
@@ -72,6 +103,69 @@ impl NodeBackend for LocalDockerBackend {
 
     async fn docker_info(&self) -> Result<DockerInfo> {
         self.docker.get_info().await.map_err(BackendError::docker)
+    }
+
+    async fn node_stats(&self) -> Result<NodeStats> {
+        let s = self.system.read().await;
+
+        // CPU% averaged across all logical cores.
+        let cpus = s.cpus();
+        let cpu_count = cpus.len() as u32;
+        let cpu_percent = if cpu_count > 0 {
+            cpus.iter().map(|c| c.cpu_usage()).sum::<f32>() / cpu_count as f32
+        } else {
+            0.0
+        };
+
+        let memory_total_bytes = s.total_memory();
+        let memory_used_bytes = s.used_memory();
+        let swap_total_bytes = s.total_swap();
+        let swap_used_bytes = s.used_swap();
+
+        // Disk stats: pick the mount point that's the longest prefix of
+        // the data root path — that's the filesystem where the server
+        // data lives.
+        let disks = Disks::new_with_refreshed_list();
+        let data_root_str = self.data_root.to_string_lossy().to_string();
+        let mut best_match: Option<&sysinfo::Disk> = None;
+        let mut best_len = 0usize;
+        for disk in disks.list() {
+            let mount = disk.mount_point().to_string_lossy().to_string();
+            if data_root_str.starts_with(&mount) && mount.len() >= best_len {
+                best_len = mount.len();
+                best_match = Some(disk);
+            }
+        }
+        let (disk_total_bytes, disk_used_bytes) = if let Some(d) = best_match {
+            let total = d.total_space();
+            let free = d.available_space();
+            (total, total.saturating_sub(free))
+        } else {
+            (0, 0)
+        };
+
+        let uptime_secs = System::uptime();
+        let load_avg_1m = {
+            let la = System::load_average();
+            if la.one.is_finite() && la.one > 0.0 {
+                Some(la.one)
+            } else {
+                None
+            }
+        };
+
+        Ok(NodeStats {
+            cpu_percent,
+            cpu_count,
+            memory_used_bytes,
+            memory_total_bytes,
+            swap_used_bytes,
+            swap_total_bytes,
+            disk_used_bytes,
+            disk_total_bytes,
+            uptime_secs,
+            load_avg_1m,
+        })
     }
 
     // ---- server read-side ------------------------------------------------

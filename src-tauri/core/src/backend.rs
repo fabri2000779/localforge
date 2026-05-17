@@ -11,7 +11,7 @@
 
 use crate::types::{
     ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
-    InstallEvent, Server, ServerStatus,
+    InstallEvent, NodeStats, Server, ServerStatus,
 };
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
@@ -126,6 +126,11 @@ pub trait NodeBackend: Send + Sync {
 
     /// Docker daemon information (or equivalent on the remote node).
     async fn docker_info(&self) -> Result<DockerInfo>;
+
+    /// Host-level metrics (CPU%, mem, disk, uptime) for the node.
+    /// Implementations cache a sysinfo snapshot in the background so
+    /// readings are accurate without per-call delays.
+    async fn node_stats(&self) -> Result<NodeStats>;
 
     // ----- server read-side -----------------------------------------------
 

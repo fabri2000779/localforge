@@ -138,6 +138,19 @@ export interface AddRemoteNodeRequest {
   fingerprint?: string | null;
 }
 
+export interface NodeStats {
+  cpu_percent: number;
+  cpu_count: number;
+  memory_used_bytes: number;
+  memory_total_bytes: number;
+  swap_used_bytes: number;
+  swap_total_bytes: number;
+  disk_used_bytes: number;
+  disk_total_bytes: number;
+  uptime_secs: number;
+  load_avg_1m: number | null;
+}
+
 export const DEFAULT_GAME_CONFIG: GameConfig = {
   game_type: '',
   name: '',

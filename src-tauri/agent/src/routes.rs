@@ -15,7 +15,7 @@ use axum::{middleware, Json, Router};
 use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use localforge_core::types::{
     ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
-    InstallEvent, Server, ServerStatus,
+    InstallEvent, NodeStats, Server, ServerStatus,
 };
 use localforge_core::NodeBackend;
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,7 @@ pub fn router(state: AppState) -> Router {
     let protected = Router::new()
         // health + info
         .route("/info", get(get_info))
+        .route("/node/stats", get(get_node_stats))
         // server CRUD + lifecycle
         .route("/servers", get(list_servers).post(create_server))
         .route("/servers/{id}", get(get_server).delete(delete_server))
@@ -128,6 +129,10 @@ fn map_err(e: localforge_core::BackendError) -> ApiError {
 
 async fn get_info(State(s): State<AppState>) -> Result<Json<DockerInfo>, ApiError> {
     s.backend.docker_info().await.map(Json).map_err(map_err)
+}
+
+async fn get_node_stats(State(s): State<AppState>) -> Result<Json<NodeStats>, ApiError> {
+    s.backend.node_stats().await.map(Json).map_err(map_err)
 }
 
 async fn list_servers(State(s): State<AppState>) -> Result<Json<Vec<Server>>, ApiError> {

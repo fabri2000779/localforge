@@ -109,6 +109,7 @@ fn main() {
             commands::nodes::reconnect_node,
             commands::nodes::agent_install_command,
             commands::nodes::cluster_summary,
+            commands::nodes::get_node_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -256,6 +256,26 @@ pub struct ContainerStats {
     pub memory_percent: f64,
 }
 
+/// Host-level metrics for a node — surfaces the underlying VPS health
+/// (CPU/RAM/disk pressure) rather than just Docker's view of itself.
+/// Disk numbers correspond to the filesystem that holds the configured
+/// data_root.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeStats {
+    pub cpu_percent: f32,
+    pub cpu_count: u32,
+    pub memory_used_bytes: u64,
+    pub memory_total_bytes: u64,
+    pub swap_used_bytes: u64,
+    pub swap_total_bytes: u64,
+    pub disk_used_bytes: u64,
+    pub disk_total_bytes: u64,
+    pub uptime_secs: u64,
+    /// 1-minute load average. `None` on Windows where load-avg isn't a
+    /// thing the kernel exposes.
+    pub load_avg_1m: Option<f64>,
+}
+
 // ---------------------------------------------------------------------------
 // File manager types
 // ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ use localforge_core::backend::{
 };
 use localforge_core::types::{
     ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
-    InstallEvent, Server, ServerStatus,
+    InstallEvent, NodeStats, Server, ServerStatus,
 };
 use rustls::ClientConfig;
 use serde::{Deserialize, Serialize};
@@ -286,6 +286,10 @@ impl NodeBackend for RemoteAgentBackend {
 
     async fn docker_info(&self) -> Result<DockerInfo> {
         self.get("/v1/info").await
+    }
+
+    async fn node_stats(&self) -> Result<NodeStats> {
+        self.get("/v1/node/stats").await
     }
 
     async fn list_servers(&self) -> Result<Vec<Server>> {
