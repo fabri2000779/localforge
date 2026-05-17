@@ -37,8 +37,8 @@ export function Home() {
   return (
     <div className="animate-fade-in">
       {/* Hero */}
-      <header className="page-header flex items-start justify-between gap-6 flex-wrap">
-        <div>
+      <header className="page-header flex items-end justify-between gap-6 flex-wrap">
+        <div className="min-w-0">
           <div className="eyebrow mb-2 flex items-center gap-1.5">
             <Sparkles size={11} className="text-blue-400" />
             Dashboard
@@ -51,7 +51,7 @@ export function Home() {
         </div>
         <button
           onClick={() => navigate('/servers/create')}
-          className="btn btn-primary"
+          className="btn btn-primary shrink-0 self-end"
         >
           <Plus size={16} strokeWidth={2.2} />
           New server

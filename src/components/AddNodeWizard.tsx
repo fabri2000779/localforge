@@ -353,24 +353,32 @@ function InstallStep({
         pairing values you'll paste back in the next step.
       </p>
 
-      <div className="relative">
-        <pre className="bg-slate-950 border border-slate-800 rounded-lg p-4 text-xs font-mono text-slate-200 overflow-x-auto whitespace-pre-wrap break-all">
+      <div className="relative bg-slate-950 border border-slate-800 rounded-lg overflow-hidden">
+        {/* Toolbar with copy button — separated so the command never has to
+            share horizontal space with the button, and the long curl
+            URL wraps cleanly inside the code block below. */}
+        <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800/80 bg-slate-900/50">
+          <span className="text-[10.5px] uppercase tracking-wider font-semibold text-slate-500">
+            One-liner
+          </span>
+          <button
+            onClick={onCopy}
+            className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+          >
+            {copied ? (
+              <>
+                <Check size={12} className="text-emerald-400" /> Copied
+              </>
+            ) : (
+              <>
+                <Copy size={12} /> Copy
+              </>
+            )}
+          </button>
+        </div>
+        <pre className="p-3.5 text-[12px] leading-relaxed font-mono text-slate-200 whitespace-pre-wrap [overflow-wrap:anywhere]">
 {command || '# building command…'}
         </pre>
-        <button
-          onClick={onCopy}
-          className="absolute top-3 right-3 flex items-center gap-1.5 text-xs px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300"
-        >
-          {copied ? (
-            <>
-              <Check size={14} className="text-emerald-400" /> Copied
-            </>
-          ) : (
-            <>
-              <Copy size={14} /> Copy
-            </>
-          )}
-        </button>
       </div>
 
       <details className="text-xs text-slate-500">
