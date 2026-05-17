@@ -144,6 +144,11 @@ jobs:
           # macOS signing/notarization env vars are exported (cleaned of
           # BOM/CRLF) by the previous step; tauri-action picks them up
           # from the process env automatically.
+          # Tauri updater signing — tauri-action signs each bundle into a
+          # .sig file and generates latest.json automatically when these
+          # are present.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.event.inputs.version || github.ref_name }}
           releaseName: 'LocalForge ${{ github.event.inputs.version || github.ref_name }}'

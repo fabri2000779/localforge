@@ -125,7 +125,7 @@ export function Home() {
       {/* Quick Create */}
       {servers.length === 0 && (
         <section className="mb-8">
-          <div className="card text-center py-12">
+          <div className="card flex flex-col items-center text-center py-12">
             <div className="text-5xl mb-4">🎮</div>
             <h2 className="text-xl font-semibold mb-2">No servers yet</h2>
             <p className="text-slate-400 mb-6">
@@ -145,23 +145,22 @@ export function Home() {
       {/* Available Games */}
       <section>
         <h2 className="text-xl font-semibold mb-4">Supported Games</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {games.map(game => (
             <div
               key={game.game_type}
               onClick={() => navigate('/servers/create', { state: { gameType: game.game_type } })}
-              className="card cursor-pointer hover:border-blue-500 transition-colors"
+              className="card cursor-pointer hover:border-blue-500/60 hover:bg-slate-800/40 transition-colors !p-4 flex flex-col"
             >
-              <div className="mb-3">
-                <GameIcon 
-                  icon={game.icon} 
-                  logoUrl={game.logo_url} 
-                  name={game.name}
-                  size="lg"
-                />
-              </div>
-              <h3 className="font-semibold">{game.name}</h3>
-              <p className="text-xs text-slate-500 mt-1 line-clamp-2">
+              <GameIcon
+                icon={game.icon}
+                logoUrl={game.logo_url}
+                name={game.name}
+                size="lg"
+                className="mb-3"
+              />
+              <h3 className="font-semibold text-sm leading-tight">{game.name}</h3>
+              <p className="text-xs text-slate-500 mt-1.5 line-clamp-2 leading-snug">
                 {game.description}
               </p>
             </div>

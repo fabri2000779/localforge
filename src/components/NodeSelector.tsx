@@ -37,31 +37,44 @@ export function NodeSelector() {
 
   return (
     <div ref={ref} className="relative">
+      <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5 pl-1">
+        Active node
+      </div>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition-colors text-left"
+        className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-slate-800/70 hover:bg-slate-800 border border-slate-700/60 transition-colors text-left"
       >
-        {active?.kind.kind === 'local' ? (
-          <Server size={16} className="text-blue-400 shrink-0" />
-        ) : (
-          <Cloud size={16} className="text-purple-400 shrink-0" />
-        )}
+        <div
+          className={`shrink-0 w-7 h-7 rounded-md flex items-center justify-center ${
+            active?.kind.kind === 'local' ? 'bg-blue-500/15' : 'bg-purple-500/15'
+          }`}
+        >
+          {active?.kind.kind === 'local' ? (
+            <Server size={14} className="text-blue-400" />
+          ) : (
+            <Cloud size={14} className="text-purple-400" />
+          )}
+        </div>
         <div className="flex-1 min-w-0">
-          <div className="text-xs text-slate-500 uppercase tracking-wide">Node</div>
-          <div className="text-sm font-medium truncate">
+          <div className="text-sm font-medium truncate text-slate-100">
             {active?.label ?? 'Loading…'}
+          </div>
+          <div className="text-[11px] text-slate-500 truncate">
+            {active?.kind.kind === 'remote'
+              ? active.kind.url
+              : 'Local Docker daemon'}
           </div>
         </div>
         <ChevronDown
           size={14}
-          className={`text-slate-500 transition-transform ${
+          className={`text-slate-500 transition-transform shrink-0 ${
             open ? 'rotate-180' : ''
           }`}
         />
       </button>
 
       {open && (
-        <div className="absolute left-0 right-0 top-full mt-1 z-30 bg-slate-900 border border-slate-700 rounded-lg shadow-xl py-1 overflow-hidden">
+        <div className="absolute left-0 right-0 top-full mt-1.5 z-30 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 overflow-hidden">
           {nodes.map((node) => {
             const isActive = node.id === activeNodeId;
             const isLocal = node.kind.kind === 'local';
@@ -72,7 +85,7 @@ export function NodeSelector() {
                   setActiveNode(node.id);
                   setOpen(false);
                 }}
-                className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-800 ${
+                className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-slate-800 ${
                   isActive ? 'bg-slate-800/60' : ''
                 }`}
               >

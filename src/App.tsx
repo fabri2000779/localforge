@@ -14,6 +14,7 @@ import { Settings } from './pages/Settings';
 import { NodesPage } from './pages/Nodes';
 import { DockerRequired } from './components/DockerRequired';
 import { OAuthToast } from './components/OAuthToast';
+import { UpdateChecker } from './components/UpdateChecker';
 import './App.css';
 
 function App() {
@@ -41,6 +42,7 @@ function App() {
         <TitleBar />
         <DockerRequired status={status} onRetry={checkStatus} />
         <OAuthToast />
+        <UpdateChecker />
       </div>
     );
   }
@@ -65,6 +67,7 @@ function App() {
           </main>
         </div>
         <OAuthToast />
+        <UpdateChecker />
       </div>
     </BrowserRouter>
   );
