@@ -436,17 +436,26 @@ jobs:
           LINUX_SIG=$(pick '*.AppImage.tar.gz.sig' || pick '*.AppImage.sig' || true)
           WIN_SIG=$(pick '*.nsis.zip.sig' || pick '*-setup.exe.sig' || true)
 
-          # Discover the matching bundle URLs by listing release assets.
-          assets_json=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets')
+          # Resolve canonical browser-download URLs from the asset names.
+          # We can't use `gh release view --json assets ... | .url` because
+          # that returns the GitHub API URL (https://api.github.com/...)
+          # and, while the release is still a draft, it points at a
+          # temporary `untagged-<sha>` slug that 404s for end users once
+          # we publish. Building the URL ourselves from the tag is stable.
+          assets_names=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name')
 
           find_url() {
             local pattern="$1"
-            echo "$assets_json" | jq -r ".[] | select(.name | test(\"$pattern\")) | .url" | head -n1
+            local name
+            name=$(printf '%s\n' "$assets_names" | grep -E "$pattern" | head -n1 || true)
+            if [ -n "$name" ]; then
+              printf 'https://github.com/%s/releases/download/%s/%s' "$REPO" "$TAG" "$name"
+            fi
           }
 
-          MAC_URL=$(find_url '\\.app\\.tar\\.gz$' || true)
-          LINUX_URL=$(find_url '\\.AppImage\\.tar\\.gz$' || true)
-          WIN_URL=$(find_url '\\.nsis\\.zip$' || true)
+          MAC_URL=$(find_url '\.app\.tar\.gz$' || true)
+          LINUX_URL=$(find_url '\.AppImage\.tar\.gz$' || true)
+          WIN_URL=$(find_url '\.nsis\.zip$' || true)
 
           read_sig() { [ -n "$1" ] && [ -f "$1" ] && cat "$1" || echo ""; }
 
