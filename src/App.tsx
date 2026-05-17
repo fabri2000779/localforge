@@ -11,6 +11,7 @@ import { CreateServer } from './pages/CreateServer';
 import { ServerDetail } from './pages/ServerDetail';
 import { GamesPage } from './pages/Games';
 import { Settings } from './pages/Settings';
+import { NodesPage } from './pages/Nodes';
 import { DockerRequired } from './components/DockerRequired';
 import './App.css';
 
@@ -55,6 +56,7 @@ function App() {
               <Route path="/servers/create" element={<CreateServer />} />
               <Route path="/servers/:id" element={<ServerDetail />} />
               <Route path="/games" element={<GamesPage />} />
+              <Route path="/nodes" element={<NodesPage />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

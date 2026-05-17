@@ -2,7 +2,7 @@
 //! so the same code path works for local and remote nodes once we add
 //! per-node routing in Phase 3.
 
-use crate::backend::{BackendState, LocalDockerBackend};
+use crate::backend::{NodeRegistry, LocalDockerBackend};
 use crate::paths;
 use std::sync::Arc;
 use tauri::State;
@@ -15,7 +15,7 @@ pub use localforge_core::{DockerInfo, DockerStatus};
 /// command will retry the connection — that's what the "retry" button
 /// on the Docker-required screen invokes.
 #[tauri::command]
-pub async fn check_docker_status(state: State<'_, BackendState>) -> Result<DockerStatus, String> {
+pub async fn check_docker_status(state: State<'_, NodeRegistry>) -> Result<DockerStatus, String> {
     // Fast path: backend already connected.
     if let Some(backend) = state.local().await {
         return match backend.ping().await {
@@ -62,7 +62,7 @@ pub async fn check_docker_status(state: State<'_, BackendState>) -> Result<Docke
 
 /// Get Docker daemon information for the local node.
 #[tauri::command]
-pub async fn get_docker_info(state: State<'_, BackendState>) -> Result<DockerInfo, String> {
+pub async fn get_docker_info(state: State<'_, NodeRegistry>) -> Result<DockerInfo, String> {
     let backend = state
         .local()
         .await

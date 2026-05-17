@@ -117,6 +117,27 @@ export interface CreateServerRequest {
   memory_mb?: number;
 }
 
+// ---------------------------------------------------------------------------
+// Node / multi-host types
+// ---------------------------------------------------------------------------
+
+export type NodeKind =
+  | { kind: 'local' }
+  | { kind: 'remote'; url: string; fingerprint: string | null };
+
+export interface NodeRecord {
+  id: string;
+  label: string;
+  kind: NodeKind;
+}
+
+export interface AddRemoteNodeRequest {
+  label: string;
+  url: string;
+  token: string;
+  fingerprint?: string | null;
+}
+
 export const DEFAULT_GAME_CONFIG: GameConfig = {
   game_type: '',
   name: '',

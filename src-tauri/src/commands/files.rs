@@ -1,11 +1,11 @@
 //! File-manager Tauri commands. Thin wrappers delegating to the active
 //! [`NodeBackend`] so file ops on local and remote nodes share one path.
 
-use crate::backend::{BackendState, DynBackend};
+use crate::backend::{NodeRegistry, DynBackend};
 use localforge_core::{DirectoryContents, FileEntry};
 use tauri::State;
 
-async fn backend(state: &State<'_, BackendState>) -> Result<DynBackend, String> {
+async fn backend(state: &State<'_, NodeRegistry>) -> Result<DynBackend, String> {
     state
         .local()
         .await
@@ -15,7 +15,7 @@ async fn backend(state: &State<'_, BackendState>) -> Result<DynBackend, String> 
 #[tauri::command]
 pub async fn list_directory(
     path: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<DirectoryContents, String> {
     backend(&state)
         .await?
@@ -27,7 +27,7 @@ pub async fn list_directory(
 #[tauri::command]
 pub async fn read_file_text(
     path: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<String, String> {
     backend(&state)
         .await?
@@ -40,7 +40,7 @@ pub async fn read_file_text(
 pub async fn write_file_text(
     path: String,
     content: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<(), String> {
     backend(&state)
         .await?
@@ -52,7 +52,7 @@ pub async fn write_file_text(
 #[tauri::command]
 pub async fn create_file(
     path: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<(), String> {
     backend(&state)
         .await?
@@ -64,7 +64,7 @@ pub async fn create_file(
 #[tauri::command]
 pub async fn create_directory(
     path: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<(), String> {
     backend(&state)
         .await?
@@ -76,7 +76,7 @@ pub async fn create_directory(
 #[tauri::command]
 pub async fn delete_path(
     path: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<(), String> {
     backend(&state)
         .await?
@@ -89,7 +89,7 @@ pub async fn delete_path(
 pub async fn rename_path(
     from: String,
     to: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<(), String> {
     backend(&state)
         .await?
@@ -102,7 +102,7 @@ pub async fn rename_path(
 pub async fn move_path(
     from: String,
     to: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<(), String> {
     backend(&state)
         .await?
@@ -115,7 +115,7 @@ pub async fn move_path(
 pub async fn copy_path(
     from: String,
     to: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<(), String> {
     backend(&state)
         .await?
@@ -127,7 +127,7 @@ pub async fn copy_path(
 #[tauri::command]
 pub async fn get_file_info(
     path: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<FileEntry, String> {
     backend(&state)
         .await?

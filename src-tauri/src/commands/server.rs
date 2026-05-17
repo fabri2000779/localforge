@@ -1,12 +1,12 @@
 //! Server lifecycle Tauri commands.
 //!
 //! Most commands are thin wrappers around the active [`NodeBackend`]
-//! pulled out of [`BackendState`]. The legacy install-script logic still
+//! pulled out of [`NodeRegistry`]. The legacy install-script logic still
 //! lives here because it needs to open OAuth URLs in the user's local
 //! browser — that's a desktop-only concern and migrates to the agent
 //! protocol in a later phase.
 
-use crate::backend::BackendState;
+use crate::backend::NodeRegistry;
 use crate::commands::games::GamesState;
 use localforge_backend_local::DockerManager;
 use crate::paths;
@@ -31,7 +31,7 @@ pub struct ServerState {
 }
 
 async fn require_backend(
-    state: &State<'_, BackendState>,
+    state: &State<'_, NodeRegistry>,
 ) -> Result<Arc<dyn localforge_core::NodeBackend>, String> {
     state
         .local()
@@ -46,7 +46,7 @@ async fn require_backend(
 #[tauri::command]
 pub async fn create_server(
     request: CreateServerRequest,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
     games_state: State<'_, GamesState>,
 ) -> Result<ServerResponse, String> {
     let backend = require_backend(&state).await?;
@@ -74,7 +74,7 @@ pub async fn create_server(
 pub async fn start_server(
     server_id: String,
     app: AppHandle,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
     server_state: State<'_, ServerState>,
     games_state: State<'_, GamesState>,
 ) -> Result<ServerResponse, String> {
@@ -125,7 +125,7 @@ pub async fn start_server(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn stop_server(
     server_id: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
     server_state: State<'_, ServerState>,
     games_state: State<'_, GamesState>,
 ) -> Result<ServerResponse, String> {
@@ -167,7 +167,7 @@ pub async fn stop_server(
 pub async fn delete_server(
     server_id: String,
     delete_data: Option<bool>,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
     server_state: State<'_, ServerState>,
 ) -> Result<ServerResponse, String> {
     abort_stream(&server_id, &server_state).await;
@@ -200,7 +200,7 @@ pub async fn delete_server(
 }
 
 #[tauri::command]
-pub async fn list_servers(state: State<'_, BackendState>) -> Result<Vec<Server>, String> {
+pub async fn list_servers(state: State<'_, NodeRegistry>) -> Result<Vec<Server>, String> {
     let backend = require_backend(&state).await?;
     let mut servers = backend.list_servers().await.map_err(|e| e.to_string())?;
     // Refresh live status from Docker for non-installing servers.
@@ -219,7 +219,7 @@ pub async fn list_servers(state: State<'_, BackendState>) -> Result<Vec<Server>,
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_server_status(
     server_id: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<ServerStatus, String> {
     let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
     if server.status == ServerStatus::Installing {
@@ -239,7 +239,7 @@ pub async fn get_server_status(
 pub async fn send_command(
     server_id: String,
     command: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<String, String> {
     let backend = require_backend(&state).await?;
     if backend.send_command(&server_id, &command).await.is_ok() {
@@ -258,7 +258,7 @@ pub async fn send_command(
 pub async fn get_server_logs(
     server_id: String,
     lines: Option<u32>,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<LogsResponse, String> {
     let backend = require_backend(&state).await?;
     let n = lines.unwrap_or(500) as usize;
@@ -272,7 +272,7 @@ pub async fn get_server_logs(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_server_stats(
     server_id: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<localforge_core::ContainerStats, String> {
     let backend = require_backend(&state).await?;
     backend
@@ -284,7 +284,7 @@ pub async fn get_server_stats(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_server_disk_usage(
     server_id: String,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<u64, String> {
     let backend = require_backend(&state).await?;
     backend
@@ -297,7 +297,7 @@ pub async fn get_server_disk_usage(
 pub async fn update_server_config(
     server_id: String,
     config: HashMap<String, String>,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
 ) -> Result<ServerResponse, String> {
     let backend = require_backend(&state).await?;
     let server = backend
@@ -319,7 +319,7 @@ pub async fn update_server_config(
 pub async fn attach_server(
     server_id: String,
     app: AppHandle,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
     server_state: State<'_, ServerState>,
 ) -> Result<(), String> {
     let backend = require_backend(&state).await?;
@@ -406,7 +406,7 @@ pub async fn run_install_script(
 pub async fn reinstall_server(
     server_id: String,
     app: AppHandle,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
     server_state: State<'_, ServerState>,
     games_state: State<'_, GamesState>,
 ) -> Result<ServerResponse, String> {
@@ -450,7 +450,7 @@ pub async fn reinstall_server(
 pub async fn update_server_game(
     server_id: String,
     app: AppHandle,
-    state: State<'_, BackendState>,
+    state: State<'_, NodeRegistry>,
     server_state: State<'_, ServerState>,
     games_state: State<'_, GamesState>,
 ) -> Result<ServerResponse, String> {

@@ -1,16 +1,19 @@
 import { NavLink } from 'react-router-dom';
-import { Home, Server, Plus, Settings, Activity, Gamepad2 } from 'lucide-react';
+import { Home, Server, Plus, Settings, Activity, Gamepad2, Cloud } from 'lucide-react';
 import { useServerStore } from '../stores/serverStore';
 import { useDockerStore } from '../stores/dockerStore';
 import { useGamesStore } from '../stores/gamesStore';
+import { useNodesStore } from '../stores/nodesStore';
 
 export function Sidebar() {
   const { servers } = useServerStore();
   const { status, info } = useDockerStore();
   const { games } = useGamesStore();
-  
+  const { nodes } = useNodesStore();
+
   const runningCount = servers.filter(s => s.status === 'running').length;
   const customGamesCount = games.filter(g => g.is_custom).length;
+  const remoteCount = nodes.filter(n => n.kind.kind === 'remote').length;
 
   return (
     <aside className="w-56 bg-slate-900/50 flex flex-col h-full border-r border-slate-800/50">
@@ -78,6 +81,25 @@ export function Sidebar() {
           {customGamesCount > 0 && (
             <span className="ml-auto bg-blue-500/20 text-blue-400 text-xs px-2 py-0.5 rounded">
               +{customGamesCount}
+            </span>
+          )}
+        </NavLink>
+
+        <NavLink
+          to="/nodes"
+          className={({ isActive }) =>
+            `flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-sm ${
+              isActive
+                ? 'bg-blue-600 text-white'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`
+          }
+        >
+          <Cloud size={18} />
+          Nodes
+          {remoteCount > 0 && (
+            <span className="ml-auto bg-purple-500/20 text-purple-400 text-xs px-2 py-0.5 rounded">
+              +{remoteCount}
             </span>
           )}
         </NavLink>

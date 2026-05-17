@@ -8,7 +8,7 @@ mod commands;
 mod games;
 mod paths;
 
-use backend::BackendState;
+use backend::NodeRegistry;
 use commands::games::GamesState;
 use commands::server::ServerState;
 use std::sync::Arc;
@@ -28,26 +28,30 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .manage(ServerState::default())
         .manage(GamesState::default())
-        .manage(BackendState::default())
+        .manage(NodeRegistry::default())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
             std::fs::create_dir_all(&app_data_dir).ok();
 
-            // Connect the local Docker backend in the background; if Docker
-            // is offline this leaves BackendState::local as None and the UI
-            // shows the Docker-required screen.
+            // Bring up the local Docker backend and any persisted remote
+            // nodes in the background. If Docker is offline that leaves
+            // the local slot in the registry empty and the UI shows the
+            // Docker-required screen.
             let data_root = paths::home_root();
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                let state: tauri::State<NodeRegistry> = handle.state();
                 match backend::LocalDockerBackend::connect(data_root).await {
                     Ok(b) => {
-                        let state: tauri::State<BackendState> = handle.state();
                         state.install_local(Arc::new(b)).await;
                         tracing::info!("Local Docker backend connected");
                     }
                     Err(e) => {
                         tracing::warn!("Local Docker backend unavailable at startup: {}", e);
                     }
+                }
+                if let Err(e) = state.load_remotes().await {
+                    tracing::warn!("Failed to load remote nodes: {}", e);
                 }
             });
 
@@ -95,6 +99,12 @@ fn main() {
             commands::files::move_path,
             commands::files::copy_path,
             commands::files::get_file_info,
+            commands::nodes::list_nodes,
+            commands::nodes::test_remote_node,
+            commands::nodes::add_remote_node,
+            commands::nodes::remove_node,
+            commands::nodes::reconnect_node,
+            commands::nodes::agent_install_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
