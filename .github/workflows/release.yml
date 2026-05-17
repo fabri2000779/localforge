@@ -201,18 +201,39 @@ jobs:
           args: ${{ matrix.args }}
 
       - name: Upload updater bundle + signature
-        # tauri-action only uploads the "installer" bundles per
-        # --bundles flag; the .tar.gz/.zip updater payloads and their
-        # .sig companions get dropped on the floor. Pick them up here
-        # and attach to the draft so the consolidation job can build
-        # latest.json from them.
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.inputs.version || github.ref_name }}
-          draft: true
-          files: ${{ matrix.updater_glob }}
+        # tauri-action only uploads the "installer" bundles per --bundles
+        # flag; the .tar.gz/.zip updater payloads and their .sig companions
+        # get dropped on the floor. Pick them up here and attach to the
+        # draft so the consolidation job can build latest.json from them.
+        #
+        # We use `gh release upload` (in bash, including on Windows via
+        # git-bash) instead of softprops/action-gh-release@v2 because the
+        # latter silently fails to expand globs like `*.tar.gz*` even
+        # though the files exist on disk.
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.version || github.ref_name }}
+          GLOB: ${{ matrix.updater_glob }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          # Resolve the glob via the shell so multi-segment patterns work.
+          # shellcheck disable=SC2206 — intentional word splitting.
+          files=( $GLOB )
+
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No files matched glob: $GLOB"
+            echo "Listing bundle parent dir for debugging:"
+            ls -la "$(dirname "$GLOB")" || true
+            exit 1
+          fi
+
+          echo "Found ${#files[@]} files to upload:"
+          printf '  - %s\n' "${files[@]}"
+
+          gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
 
   agent:
     name: Build agent (${{ matrix.target }})
@@ -308,10 +329,16 @@ jobs:
           set -euo pipefail
           VERSION="${TAG#v}"
 
-          # Pull every .sig file the build matrix uploaded.
+          # Pull every .sig file the build matrix uploaded. `gh release
+          # download` exits non-zero when nothing matches, which would
+          # abort the whole script — we want to keep going and emit a
+          # warning instead so the failure is visible in the logs.
           mkdir -p sigs
-          gh release download "$TAG" --repo "$REPO" --pattern '*.sig' --dir sigs
-          ls -la sigs
+          if ! gh release download "$TAG" --repo "$REPO" --pattern '*.sig' --dir sigs 2>&1; then
+            echo "::warning::no .sig files matched on release $TAG — latest.json will be empty"
+          fi
+          echo "Downloaded signatures:"
+          ls -la sigs || true
 
           # Helper: find the first file in sigs/ matching a glob.
           pick() {
