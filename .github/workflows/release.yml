@@ -51,7 +51,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -72,7 +72,7 @@ jobs:
             file
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: 'npm'
@@ -336,7 +336,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install cross toolchain (Linux arm64)
         if: matrix.cross
@@ -378,16 +378,25 @@ jobs:
             "localforge-agent-${{ matrix.target }}.exe"
 
       - name: Upload agent binary to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.inputs.version || github.ref_name }}
-          draft: true
-          files: |
-            localforge-agent-${{ matrix.target }}${{ matrix.ext }}
-            scripts/install-agent.sh
-            scripts/install-agent.ps1
+        # Use `gh release upload --clobber` instead of
+        # softprops/action-gh-release@v2 — same reasons as the desktop
+        # build's upload step: portable across runners (bash on Windows
+        # via git-bash) and no Node.js 20 deprecation warning.
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.version || github.ref_name }}
+          AGENT_BIN: localforge-agent-${{ matrix.target }}${{ matrix.ext }}
+        run: |
+          set -euo pipefail
+          # Idempotent: ensure the draft exists so we can upload to it.
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
+              --title "LocalForge $TAG" --notes "See assets below."
+          fi
+          gh release upload "$TAG" \
+            "$AGENT_BIN" scripts/install-agent.sh scripts/install-agent.ps1 \
+            --repo "$GITHUB_REPOSITORY" --clobber
 
   # ---------------------------------------------------------------------------
   # Compose latest.json once every desktop matrix job has uploaded its
@@ -494,10 +503,11 @@ jobs:
           cat latest.json
 
       - name: Upload latest.json
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.inputs.version || github.ref_name }}
-          draft: true
-          files: latest.json
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" latest.json \
+            --repo "$GITHUB_REPOSITORY" --clobber

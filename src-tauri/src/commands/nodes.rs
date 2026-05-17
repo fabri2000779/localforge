@@ -100,27 +100,56 @@ pub async fn reconnect_node(
         .map_err(|e| e.to_string())
 }
 
-/// Build the copy-pasteable one-liner the user runs on their VPS. The
-/// `version` is the GitHub release tag (defaults to "latest").
+/// Both copy-pasteable one-liners (Linux + Windows) so the wizard can
+/// toggle between them without round-tripping to the backend on every
+/// click. `version` is the GitHub release tag (defaults to "latest").
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentInstallCommands {
+    pub linux: String,
+    pub windows: String,
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn agent_install_command(
     version: Option<String>,
     domain: Option<String>,
     label: Option<String>,
-) -> String {
+) -> AgentInstallCommands {
     let version = version.as_deref().unwrap_or("latest");
-    let mut env_prefix = String::new();
-    if let Some(d) = domain.as_deref().filter(|s| !s.trim().is_empty()) {
-        env_prefix.push_str(&format!("LOCALFORGE_AGENT_DOMAIN={} ", shell_escape(d.trim())));
+    let domain = domain.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let label = label.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    // Linux: env-var prefix before sudo bash. POSIX shell quoting.
+    let mut linux_env = String::new();
+    if let Some(d) = domain {
+        linux_env.push_str(&format!("LOCALFORGE_AGENT_DOMAIN={} ", shell_escape(d)));
     }
-    if let Some(l) = label.as_deref().filter(|s| !s.trim().is_empty()) {
-        env_prefix.push_str(&format!("LOCALFORGE_AGENT_LABEL={} ", shell_escape(l.trim())));
+    if let Some(l) = label {
+        linux_env.push_str(&format!("LOCALFORGE_AGENT_LABEL={} ", shell_escape(l)));
     }
-    format!(
+    let linux = format!(
         "curl -sSL https://github.com/fabri2000779/localforge/releases/download/{ver}/install-agent.sh | {env}sudo bash",
         ver = version,
-        env = env_prefix,
-    )
+        env = linux_env,
+    );
+
+    // Windows: PowerShell — must be run elevated. Assigning $env:VAR
+    // before the iex invocation passes the value through to the script.
+    let mut ps_env = String::new();
+    if let Some(d) = domain {
+        ps_env.push_str(&format!("$env:LOCALFORGE_AGENT_DOMAIN = {}; ", ps_quote(d)));
+    }
+    if let Some(l) = label {
+        ps_env.push_str(&format!("$env:LOCALFORGE_AGENT_LABEL = {}; ", ps_quote(l)));
+    }
+    let windows = format!(
+        "{env}iex \"& {{ $(irm https://github.com/fabri2000779/localforge/releases/download/{ver}/install-agent.ps1) }}\"",
+        env = ps_env,
+        ver = version,
+    );
+
+    AgentInstallCommands { linux, windows }
 }
 
 /// Compact 8-char hex id for a new node — collision risk is negligible
@@ -138,6 +167,13 @@ fn shell_escape(s: &str) -> String {
     } else {
         format!("'{}'", s.replace('\'', r"'\''"))
     }
+}
+
+/// Quote a value for PowerShell. Always single-quote so `$`, backticks
+/// and `"` inside the label don't get expanded; PowerShell's escape for
+/// a literal single-quote inside a single-quoted string is `''`.
+fn ps_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
 }
 
 /// Used by the Nodes UI to distinguish local from remote at a glance —

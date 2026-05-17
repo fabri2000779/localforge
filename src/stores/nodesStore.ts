@@ -41,7 +41,7 @@ interface NodesState {
     domain?: string;
     label?: string;
     version?: string;
-  }) => Promise<string>;
+  }) => Promise<{ linux: string; windows: string }>;
 }
 
 export const useNodesStore = create<NodesState>((set, get) => ({
@@ -110,5 +110,9 @@ export const useNodesStore = create<NodesState>((set, get) => ({
   },
 
   installCommand: async ({ domain, label, version }) =>
-    invoke<string>('agent_install_command', { domain, label, version }),
+    invoke<{ linux: string; windows: string }>('agent_install_command', {
+      domain,
+      label,
+      version,
+    }),
 }));

@@ -32,7 +32,11 @@ export function AddNodeWizard({ isOpen, onClose, onComplete }: Props) {
   const [domain, setDomain] = useState('');
 
   // Step 2
-  const [command, setCommand] = useState('');
+  const [commands, setCommands] = useState<{
+    linux: string;
+    windows: string;
+  }>({ linux: '', windows: '' });
+  const [os, setOs] = useState<'linux' | 'windows'>('linux');
   const [copied, setCopied] = useState(false);
 
   // Step 3
@@ -51,7 +55,8 @@ export function AddNodeWizard({ isOpen, onClose, onComplete }: Props) {
       setStep('configure');
       setLabel('');
       setDomain('');
-      setCommand('');
+      setCommands({ linux: '', windows: '' });
+      setOs('linux');
       setCopied(false);
       setUrl('');
       setToken('');
@@ -61,22 +66,28 @@ export function AddNodeWizard({ isOpen, onClose, onComplete }: Props) {
     }
   }, [isOpen]);
 
-  // Compute the install command whenever the user lands on step 2.
+  // Compute the install commands (both OS variants) whenever the user
+  // lands on step 2.
   useEffect(() => {
     if (step !== 'install') return;
     installCommand({
       domain: domain.trim() || undefined,
       label: label.trim() || undefined,
     })
-      .then(setCommand)
-      .catch((e) => setCommand(`# Failed to build install command: ${e}`));
+      .then(setCommands)
+      .catch((e) =>
+        setCommands({
+          linux: `# Failed to build install command: ${e}`,
+          windows: `# Failed to build install command: ${e}`,
+        }),
+      );
   }, [step, domain, label, installCommand]);
 
   if (!isOpen) return null;
 
   const copyCommand = async () => {
     try {
-      await navigator.clipboard.writeText(command);
+      await navigator.clipboard.writeText(commands[os]);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -156,7 +167,12 @@ export function AddNodeWizard({ isOpen, onClose, onComplete }: Props) {
           )}
           {step === 'install' && (
             <InstallStep
-              command={command}
+              commands={commands}
+              os={os}
+              setOs={(o) => {
+                setOs(o);
+                setCopied(false);
+              }}
               copied={copied}
               onCopy={copyCommand}
             />
@@ -336,30 +352,58 @@ function ConfigureStep(props: {
 }
 
 function InstallStep({
-  command,
+  commands,
+  os,
+  setOs,
   copied,
   onCopy,
 }: {
-  command: string;
+  commands: { linux: string; windows: string };
+  os: 'linux' | 'windows';
+  setOs: (o: 'linux' | 'windows') => void;
   copied: boolean;
   onCopy: () => void;
 }) {
+  const command = commands[os];
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-400">
-        SSH into your server and paste this command. It needs <code>sudo</code>
-        — the installer creates a system user, generates a TLS cert, registers
-        a <code>localforge-agent</code> systemd service, and prints the
-        pairing values you'll paste back in the next step.
+        {os === 'linux' ? (
+          <>
+            SSH into your server and paste this command. It needs{' '}
+            <code>sudo</code> — the installer creates a system user, generates
+            a TLS cert, registers a <code>localforge-agent</code> systemd
+            service, and prints the pairing values you&apos;ll paste back in
+            the next step.
+          </>
+        ) : (
+          <>
+            Open an <strong>elevated</strong> PowerShell on your Windows
+            server (Right-click PowerShell → "Run as administrator") and paste
+            this command. It generates a TLS cert, registers the
+            <code>localforge-agent</code> as a scheduled task, and prints the
+            pairing values you&apos;ll paste back in the next step.
+          </>
+        )}
       </p>
+
+      {/* OS toggle */}
+      <div className="inline-flex items-center gap-0.5 p-0.5 bg-slate-900 border border-slate-800 rounded-lg">
+        <OsTab active={os === 'linux'} onClick={() => setOs('linux')}>
+          <LinuxGlyph /> Linux
+        </OsTab>
+        <OsTab active={os === 'windows'} onClick={() => setOs('windows')}>
+          <WindowsGlyph /> Windows
+        </OsTab>
+      </div>
 
       <div className="relative bg-slate-950 border border-slate-800 rounded-lg overflow-hidden">
         {/* Toolbar with copy button — separated so the command never has to
-            share horizontal space with the button, and the long curl
-            URL wraps cleanly inside the code block below. */}
+            share horizontal space with the button, and the long curl /
+            iex URL wraps cleanly inside the code block below. */}
         <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800/80 bg-slate-900/50">
           <span className="text-[10.5px] uppercase tracking-wider font-semibold text-slate-500">
-            One-liner
+            {os === 'linux' ? 'bash · one-liner' : 'PowerShell · elevated'}
           </span>
           <button
             onClick={onCopy}
@@ -385,22 +429,83 @@ function InstallStep({
         <summary className="cursor-pointer hover:text-slate-400">
           What does this script actually do?
         </summary>
-        <ul className="mt-2 ml-4 list-disc space-y-1">
-          <li>Detects your distro (Debian, Ubuntu, RHEL, Fedora, Alpine, Arch, SUSE)</li>
-          <li>Installs Docker if it's not already there</li>
-          <li>Downloads the matching <code>localforge-agent</code> binary</li>
-          <li>Creates a <code>localforge</code> system user in the <code>docker</code> group</li>
-          <li>Generates a bearer token and a self-signed TLS cert</li>
-          <li>Writes <code>/etc/localforge/agent.toml</code> with mode 0600</li>
-          <li>Registers and starts a systemd service</li>
-        </ul>
+        {os === 'linux' ? (
+          <ul className="mt-2 ml-4 list-disc space-y-1">
+            <li>Detects your distro (Debian, Ubuntu, RHEL, Fedora, Alpine, Arch, SUSE)</li>
+            <li>Installs Docker if it&apos;s not already there</li>
+            <li>Downloads the matching <code>localforge-agent</code> binary</li>
+            <li>Creates a <code>localforge</code> system user in the <code>docker</code> group</li>
+            <li>Generates a bearer token and a self-signed TLS cert</li>
+            <li>Writes <code>/etc/localforge/agent.toml</code> with mode 0600</li>
+            <li>Registers and starts a systemd service</li>
+          </ul>
+        ) : (
+          <ul className="mt-2 ml-4 list-disc space-y-1">
+            <li>Checks for Docker Desktop / Engine (required before running)</li>
+            <li>Downloads the matching <code>localforge-agent.exe</code> to <code>C:\Program Files\LocalForge\</code></li>
+            <li>Generates a bearer token and a self-signed TLS cert</li>
+            <li>Writes <code>C:\ProgramData\LocalForge\config\agent.toml</code> (ACL: SYSTEM + Administrators)</li>
+            <li>Registers a scheduled task running under <code>NT AUTHORITY\SYSTEM</code> at boot (pass <code>-InstallAsService</code> for sc.exe instead)</li>
+          </ul>
+        )}
       </details>
 
       <div className="flex items-center gap-2 text-xs text-slate-500">
         <Terminal size={14} />
-        Once it finishes you'll see a "Paste these three values" block.
+        Once it finishes you&apos;ll see a &quot;Paste these three values&quot; block.
       </div>
     </div>
+  );
+}
+
+function OsTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12.5px] font-medium transition-colors ${
+        active
+          ? 'bg-slate-800 text-slate-100 shadow-sm'
+          : 'text-slate-500 hover:text-slate-200'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function LinuxGlyph() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M12.504 2c-3.07 0-3.71 2.84-3.7 4.43.01 1.43.46 2.55.46 3.6 0 1.05-1.46 2.55-2.04 3.36-1.71 2.4-1.62 5.45-1.62 6.43 0 .47-.46 1.18-1.04 1.59-.58.41-1.04.97-1.04 1.59 0 .82.96.99 1.51.99.93 0 2.46-.21 4.61-.21h.84c2.15 0 3.68.21 4.61.21.55 0 1.51-.17 1.51-.99 0-.62-.46-1.18-1.04-1.59-.58-.41-1.04-1.12-1.04-1.59 0-.98.09-4.03-1.62-6.43-.58-.81-2.04-2.31-2.04-3.36 0-1.05.45-2.17.46-3.6.01-1.59-.63-4.43-3.7-4.43z" />
+    </svg>
+  );
+}
+
+function WindowsGlyph() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M3 5.557 10.143 4.57v6.857H3V5.557zm0 12.886L10.143 19.43v-6.857H3v5.872zm7.857.987L21 21.4V12.57H10.857v6.86zm0-15.86L21 2.6v8.83H10.857V3.57z" />
+    </svg>
   );
 }
 
