@@ -45,6 +45,23 @@ pub fn load_server(server_id: &str) -> std::io::Result<Server> {
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
+pub fn save_server(server: &Server) -> std::io::Result<()> {
+    let dir = servers_config_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = server_config_path(&server.id);
+    let body = serde_json::to_string_pretty(server)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(path, body)
+}
+
+pub fn delete_server_record(server_id: &str) -> std::io::Result<()> {
+    let path = server_config_path(server_id);
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
 pub fn list_servers() -> std::io::Result<Vec<Server>> {
     let dir = servers_config_dir();
     if !dir.exists() {

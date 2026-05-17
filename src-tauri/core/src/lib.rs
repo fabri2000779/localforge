@@ -12,7 +12,7 @@ pub mod types;
 mod config_processor;
 pub use config_processor::apply_config_variables;
 
-pub use backend::{BackendError, LogLine, NodeBackend, Result as BackendResult};
+pub use backend::{BackendError, LogLine, LogStream, NodeBackend, Result as BackendResult};
 pub use games::{build_env_vars, get_builtin_games, resolve_startup};
 pub use node::{NodeId, NodeKind};
 pub use types::*;

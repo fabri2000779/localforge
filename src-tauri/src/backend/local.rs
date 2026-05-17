@@ -8,11 +8,17 @@
 use crate::docker::DockerManager;
 use crate::persistence;
 use async_trait::async_trait;
-use localforge_core::backend::{BackendError, NodeBackend, Result};
+use bollard::container::{LogOutput, LogsOptions};
+use futures_util::stream::{self, StreamExt};
+use localforge_core::backend::{BackendError, LogLine, LogStream, NodeBackend, Result};
 use localforge_core::types::{
-    ContainerStats, DirectoryContents, DockerInfo, FileEntry, Server, ServerStatus,
+    ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
+    Server, ServerStatus,
 };
+use localforge_core::{build_env_vars, PortConfig as CorePortConfig};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 pub struct LocalDockerBackend {
     docker: DockerManager,
@@ -231,6 +237,232 @@ impl NodeBackend for LocalDockerBackend {
             std::fs::copy(from, to).map_err(BackendError::io)?;
             Ok(())
         }
+    }
+
+    // ---- server lifecycle -----------------------------------------------
+
+    async fn create_server(
+        &self,
+        request: CreateServerRequest,
+        game: GameConfig,
+    ) -> Result<Server> {
+        let server_id = Uuid::new_v4().to_string()[..8].to_string();
+
+        let port = request.port.unwrap_or_else(|| {
+            game.ports
+                .first()
+                .map(|p| p.container_port)
+                .unwrap_or(25565)
+        });
+
+        let memory_mb = request.memory_mb.unwrap_or(game.recommended_ram_mb);
+
+        let data_path = persistence::servers_data_root()
+            .join(game.game_type.to_string())
+            .join(&server_id);
+
+        std::fs::create_dir_all(&data_path).map_err(BackendError::io)?;
+
+        let user_config = request.config.clone().unwrap_or_default();
+        let env = build_env_vars(&game, memory_mb, port, &user_config);
+
+        let extra_ports: Vec<CorePortConfig> =
+            game.ports.iter().skip(1).cloned().collect();
+
+        let startup_command = if game.startup.is_empty() {
+            None
+        } else {
+            let mut startup = game.startup.clone();
+            for (key, value) in &env {
+                startup = startup.replace(&format!("{{{{{}}}}}", key), value);
+            }
+            Some(startup)
+        };
+
+        let container_id = self
+            .docker
+            .create_container(
+                &server_id,
+                &game.docker_image,
+                port,
+                &data_path,
+                &env,
+                &extra_ports,
+                Some(&game.volume_path),
+                Some(memory_mb),
+                startup_command.as_deref(),
+            )
+            .await
+            .map_err(BackendError::docker)?;
+
+        let server = Server {
+            id: server_id,
+            name: request.name,
+            game_type: request.game_type,
+            status: ServerStatus::Stopped,
+            container_id: Some(container_id),
+            port,
+            memory_mb,
+            data_path,
+            created_at: chrono::Utc::now(),
+            config: user_config,
+            installed: false,
+            install_container_id: None,
+        };
+
+        persistence::save_server(&server).map_err(BackendError::io)?;
+        Ok(server)
+    }
+
+    async fn update_server_config(
+        &self,
+        id: &str,
+        config: HashMap<String, String>,
+    ) -> Result<Server> {
+        let mut server = Self::require_server(id)?;
+        server.config = config;
+        persistence::save_server(&server).map_err(BackendError::io)?;
+        Ok(server)
+    }
+
+    async fn delete_server(&self, id: &str) -> Result<()> {
+        let server = Self::require_server(id)?;
+
+        // Best-effort stop + remove of the runtime container (ignore errors —
+        // the container may already be gone).
+        if let Some(container_id) = &server.container_id {
+            let _ = self.docker.stop_container(container_id).await;
+            let _ = self.docker.remove_container(container_id).await;
+        }
+        if let Some(install_container_id) = &server.install_container_id {
+            let _ = self
+                .docker
+                .remove_install_container(install_container_id)
+                .await;
+        }
+
+        // Delete on-disk data.
+        if server.data_path.exists() {
+            std::fs::remove_dir_all(&server.data_path).map_err(BackendError::io)?;
+        }
+        persistence::delete_server_record(id).map_err(BackendError::io)?;
+        Ok(())
+    }
+
+    async fn start_server(&self, id: &str) -> Result<ServerStatus> {
+        let mut server = Self::require_server(id)?;
+        let container_id = server
+            .container_id
+            .clone()
+            .ok_or_else(|| BackendError::invalid("server has no container"))?;
+
+        self.docker
+            .start_container(&container_id)
+            .await
+            .map_err(BackendError::docker)?;
+
+        // Give the container a moment to settle before we read the status.
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        let status = self
+            .docker
+            .get_container_status(&container_id)
+            .await
+            .map_err(BackendError::docker)?;
+
+        if status == ServerStatus::Stopped || status == ServerStatus::Error {
+            return Err(BackendError::Docker("container failed to start".into()));
+        }
+
+        server.status = status.clone();
+        persistence::save_server(&server).map_err(BackendError::io)?;
+        Ok(status)
+    }
+
+    async fn stop_server(&self, id: &str) -> Result<ServerStatus> {
+        let mut server = Self::require_server(id)?;
+        let container_id = server
+            .container_id
+            .clone()
+            .ok_or_else(|| BackendError::invalid("server has no container"))?;
+
+        self.docker
+            .stop_container(&container_id)
+            .await
+            .map_err(BackendError::docker)?;
+
+        let status = self
+            .docker
+            .get_container_status(&container_id)
+            .await
+            .map_err(BackendError::docker)?;
+
+        server.status = status.clone();
+        persistence::save_server(&server).map_err(BackendError::io)?;
+        Ok(status)
+    }
+
+    async fn send_command(&self, id: &str, command: &str) -> Result<()> {
+        let server = Self::require_server(id)?;
+        let container_id = server
+            .container_id
+            .ok_or_else(|| BackendError::invalid("server has no container"))?;
+        // Newline-terminate so the container's shell/console treats it as a
+        // complete command.
+        let payload = if command.ends_with('\n') {
+            command.to_string()
+        } else {
+            format!("{}\n", command)
+        };
+        self.docker
+            .send_stdin(&container_id, &payload)
+            .await
+            .map_err(BackendError::docker)
+    }
+
+    async fn stream_logs(&self, id: &str) -> Result<LogStream> {
+        let server = Self::require_server(id)?;
+        let container_id = server
+            .container_id
+            .ok_or_else(|| BackendError::invalid("server has no container"))?;
+        let server_id = server.id.clone();
+
+        let options = Some(LogsOptions::<String> {
+            stdout: true,
+            stderr: true,
+            follow: true,
+            tail: "0".to_string(),
+            ..Default::default()
+        });
+
+        let docker_stream = self.docker.client().logs(&container_id, options);
+
+        let mapped = docker_stream.flat_map(move |item| {
+            let server_id = server_id.clone();
+            let items: Vec<std::result::Result<LogLine, BackendError>> = match item {
+                Ok(output) => {
+                    let bytes = match output {
+                        LogOutput::StdOut { message }
+                        | LogOutput::StdErr { message }
+                        | LogOutput::Console { message }
+                        | LogOutput::StdIn { message } => message,
+                    };
+                    let text = String::from_utf8_lossy(&bytes).to_string();
+                    text.lines()
+                        .filter(|l| !l.trim().is_empty())
+                        .map(|l| {
+                            Ok(LogLine {
+                                server_id: server_id.clone(),
+                                line: l.to_string(),
+                            })
+                        })
+                        .collect()
+                }
+                Err(e) => vec![Err(BackendError::Docker(e.to_string()))],
+            };
+            stream::iter(items)
+        });
+
+        Ok(Box::pin(mapped))
     }
 
     async fn file_info(&self, path: &str) -> Result<FileEntry> {

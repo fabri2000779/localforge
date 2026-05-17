@@ -10,9 +10,12 @@
 //! lands on every backend, methods get added here.
 
 use crate::types::{
-    ContainerStats, DirectoryContents, DockerInfo, FileEntry, Server, ServerStatus,
+    ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
+    Server, ServerStatus,
 };
 use async_trait::async_trait;
+use futures_util::stream::BoxStream;
+use std::collections::HashMap;
 
 pub type Result<T> = std::result::Result<T, BackendError>;
 
@@ -72,6 +75,9 @@ pub struct LogLine {
     pub line: String,
 }
 
+/// Boxed log stream, `'static` so it can outlive the backend Arc.
+pub type LogStream = BoxStream<'static, Result<LogLine>>;
+
 /// The node operations contract. This is the read-only / file-management
 /// surface — server lifecycle (start/stop/install) and live streaming
 /// land in subsequent phases.
@@ -100,6 +106,40 @@ pub trait NodeBackend: Send + Sync {
 
     /// Fetch the last `lines` log lines from the running container.
     async fn get_logs(&self, id: &str, lines: usize) -> Result<Vec<String>>;
+
+    // ----- server lifecycle ----------------------------------------------
+
+    /// Create a server record and prepare its data directory. Does **not**
+    /// start the container — call [`start_server`] for that.
+    async fn create_server(
+        &self,
+        request: CreateServerRequest,
+        game: GameConfig,
+    ) -> Result<Server>;
+
+    async fn update_server_config(
+        &self,
+        id: &str,
+        config: HashMap<String, String>,
+    ) -> Result<Server>;
+
+    /// Stop the container (if running), remove it, and delete the on-disk
+    /// data directory + persisted record.
+    async fn delete_server(&self, id: &str) -> Result<()>;
+
+    /// Start the server's container. Returns the new status after starting.
+    async fn start_server(&self, id: &str) -> Result<ServerStatus>;
+
+    /// Stop the container gracefully (sending the configured stop_command
+    /// where available before SIGTERM).
+    async fn stop_server(&self, id: &str) -> Result<ServerStatus>;
+
+    /// Send a single console command to the running container's stdin.
+    async fn send_command(&self, id: &str, command: &str) -> Result<()>;
+
+    /// Continuous stream of new log lines for the running container.
+    /// The stream ends when the container stops or the caller drops it.
+    async fn stream_logs(&self, id: &str) -> Result<LogStream>;
 
     // ----- file operations on the host -----------------------------------
     //

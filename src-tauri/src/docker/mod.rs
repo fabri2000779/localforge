@@ -2,4 +2,4 @@
 
 mod manager;
 
-pub use manager::{ContainerStats, DockerManager};
+pub use manager::DockerManager;

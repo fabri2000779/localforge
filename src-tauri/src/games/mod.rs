@@ -3,5 +3,5 @@
 
 mod manager;
 
-pub use localforge_core::{build_env_vars, GameConfig, GameType};
+pub use localforge_core::{GameConfig, GameType};
 pub use manager::GamesManager;
