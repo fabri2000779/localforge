@@ -206,14 +206,14 @@ html {
 .page-container {
   max-width: 1240px;
   margin: 0 auto;
-  padding: 2.25rem 2.25rem 4rem;
+  padding: 2.5rem 2.25rem 4.5rem;
 }
 
 /* ---------------------------------------------------------------------------
  * Page header
  * ------------------------------------------------------------------------- */
 .page-header {
-  margin-bottom: 2.25rem;
+  margin-bottom: 2.5rem;
 }
 .page-title {
   font-size: 1.75rem;

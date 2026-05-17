@@ -37,7 +37,7 @@ export function Home() {
   return (
     <div className="animate-fade-in">
       {/* Hero */}
-      <header className="page-header flex items-end justify-between gap-6 flex-wrap">
+      <header className="page-header flex items-center justify-between gap-6 flex-wrap">
         <div className="min-w-0">
           <div className="eyebrow mb-2 flex items-center gap-1.5">
             <Sparkles size={11} className="text-blue-400" />
@@ -51,7 +51,7 @@ export function Home() {
         </div>
         <button
           onClick={() => navigate('/servers/create')}
-          className="btn btn-primary shrink-0 self-end"
+          className="btn btn-primary shrink-0"
         >
           <Plus size={16} strokeWidth={2.2} />
           New server
@@ -59,7 +59,7 @@ export function Home() {
       </header>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-10">
         <StatCard
           label="Total servers"
           value={servers.length}

@@ -30,11 +30,8 @@ export function Sidebar() {
 
   return (
     <aside className="app-sidebar">
-      {/* Active node selector */}
+      {/* Active node selector — has its own "Active node" label inside */}
       <div className="px-3 pt-4 pb-3 border-b border-[var(--color-border)]">
-        <div className="sidebar-section-label !mt-0 !mb-1.5 !px-1">
-          Active node
-        </div>
         <NodeSelector />
       </div>
 
