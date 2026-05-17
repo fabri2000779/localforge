@@ -43,7 +43,7 @@ export function GamesPage() {
   useEffect(() => {
     fetchGames();
     fetchConfigPath();
-  }, []);
+  }, [fetchGames, fetchConfigPath]);
 
   const handleStartCreate = () => {
     setEditingGame({ ...DEFAULT_GAME_CONFIG, game_type: `custom-${Date.now()}` });

@@ -42,13 +42,14 @@ export function CreateServer() {
         .forEach((v) => {
           defaults[v.env] = v.default;
         });
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setConfig(defaults);
-      
+
       const defaultPort = gameConfig.ports[0]?.container_port || 25565;
       setPort(defaultPort);
-      
+
       const recommended = gameConfig.recommended_ram_mb;
-      const closest = RAM_OPTIONS.reduce((prev, curr) => 
+      const closest = RAM_OPTIONS.reduce((prev, curr) =>
         Math.abs(curr.value - recommended) < Math.abs(prev.value - recommended) ? curr : prev
       );
       setMemoryMb(closest.value);
@@ -57,7 +58,7 @@ export function CreateServer() {
 
   useEffect(() => {
     return () => clearError();
-  }, []);
+  }, [clearError]);
 
   const handleCreate = async () => {
     if (!selectedGame || !serverName.trim()) return;

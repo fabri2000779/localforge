@@ -1,4 +1,4 @@
-// TypeScript types for Serverwave Anywhere
+// TypeScript types for LocalForge
 
 export type GameType = string;
 

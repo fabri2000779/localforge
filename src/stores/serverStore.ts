@@ -217,7 +217,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
     try {
       const stats = await invoke<ContainerStats>('get_server_stats', { serverId });
       set({ stats });
-    } catch (error) {
+    } catch {
       // Silently ignore stats errors
     }
   },
@@ -257,7 +257,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
     }
     try {
       await invoke('detach_server', { serverId });
-    } catch (error) {
+    } catch {
       // Ignore
     }
   },

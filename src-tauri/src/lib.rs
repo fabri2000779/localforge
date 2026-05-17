@@ -1,4 +1,4 @@
-// Serverwave Anywhere Library
+// LocalForge Library
 // Shared types and utilities
 
 pub mod commands;

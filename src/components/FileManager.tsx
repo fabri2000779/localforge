@@ -175,6 +175,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
 
   // Initial load
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadDirectory(rootPath);
   }, [rootPath, loadDirectory]);
 

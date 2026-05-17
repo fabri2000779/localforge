@@ -212,7 +212,7 @@ pub fn get_builtin_games() -> Vec<GameConfig> {
             game_type: GameType::new("minecraft-java"),
             name: "Minecraft Java".to_string(),
             description: "The original Minecraft experience powered by Paper, a high performance Spigot fork.".to_string(),
-            docker_image: "ghcr.io/serverwavehost/game-images:java_21".to_string(),
+            docker_image: "ghcr.io/parkervcp/yolks:java_21".to_string(),
             startup: "java -Dcom.mojang.eula.agree=true -Xms128M -Xmx{{SERVER_MEMORY}}M -Dterminal.jline=false -Dterminal.ansi=true -jar {{SERVER_JARFILE}}".to_string(),
             stop_command: "stop".to_string(),
             variables: vec![
@@ -349,7 +349,7 @@ pub fn get_builtin_games() -> Vec<GameConfig> {
 # Using official Alpine with curl and jq
 set -e
 
-echo "[Serverwave] Installing required tools..."
+echo "[LocalForge] Installing required tools..."
 apk add --no-cache curl jq
 
 PROJECT=paper
@@ -357,42 +357,42 @@ SERVER_JARFILE="${SERVER_JARFILE:-server.jar}"
 MINECRAFT_VERSION="${MINECRAFT_VERSION:-latest}"
 BUILD_NUMBER="${BUILD_NUMBER:-latest}"
 
-echo "[Serverwave] Starting Paper installation..."
+echo "[LocalForge] Starting Paper installation..."
 
 # Get latest version if needed
 if [ "$MINECRAFT_VERSION" = "latest" ]; then
-    echo "[Serverwave] Fetching latest Minecraft version..."
+    echo "[LocalForge] Fetching latest Minecraft version..."
     MINECRAFT_VERSION=$(curl -s https://api.papermc.io/v2/projects/${PROJECT} | jq -r '.versions[-1]')
-    echo "[Serverwave] Latest version: ${MINECRAFT_VERSION}"
+    echo "[LocalForge] Latest version: ${MINECRAFT_VERSION}"
 else
     # Verify version exists
     VER_EXISTS=$(curl -s https://api.papermc.io/v2/projects/${PROJECT} | jq -r --arg VERSION "$MINECRAFT_VERSION" '.versions[] | select(. == $VERSION)')
     if [ -z "$VER_EXISTS" ]; then
-        echo "[Serverwave] Version ${MINECRAFT_VERSION} not found, using latest..."
+        echo "[LocalForge] Version ${MINECRAFT_VERSION} not found, using latest..."
         MINECRAFT_VERSION=$(curl -s https://api.papermc.io/v2/projects/${PROJECT} | jq -r '.versions[-1]')
     fi
-    echo "[Serverwave] Using version: ${MINECRAFT_VERSION}"
+    echo "[LocalForge] Using version: ${MINECRAFT_VERSION}"
 fi
 
 # Get latest build if needed
 if [ "$BUILD_NUMBER" = "latest" ]; then
-    echo "[Serverwave] Fetching latest build for ${MINECRAFT_VERSION}..."
+    echo "[LocalForge] Fetching latest build for ${MINECRAFT_VERSION}..."
     BUILD_NUMBER=$(curl -s https://api.papermc.io/v2/projects/${PROJECT}/versions/${MINECRAFT_VERSION} | jq -r '.builds[-1]')
-    echo "[Serverwave] Latest build: ${BUILD_NUMBER}"
+    echo "[LocalForge] Latest build: ${BUILD_NUMBER}"
 else
     # Verify build exists
     BUILD_EXISTS=$(curl -s https://api.papermc.io/v2/projects/${PROJECT}/versions/${MINECRAFT_VERSION} | jq -r --arg BUILD "$BUILD_NUMBER" '.builds[] | select(. == ($BUILD | tonumber))')
     if [ -z "$BUILD_EXISTS" ]; then
-        echo "[Serverwave] Build ${BUILD_NUMBER} not found, using latest..."
+        echo "[LocalForge] Build ${BUILD_NUMBER} not found, using latest..."
         BUILD_NUMBER=$(curl -s https://api.papermc.io/v2/projects/${PROJECT}/versions/${MINECRAFT_VERSION} | jq -r '.builds[-1]')
     fi
-    echo "[Serverwave] Using build: ${BUILD_NUMBER}"
+    echo "[LocalForge] Using build: ${BUILD_NUMBER}"
 fi
 
 JAR_NAME=${PROJECT}-${MINECRAFT_VERSION}-${BUILD_NUMBER}.jar
 DOWNLOAD_URL="https://api.papermc.io/v2/projects/${PROJECT}/versions/${MINECRAFT_VERSION}/builds/${BUILD_NUMBER}/downloads/${JAR_NAME}"
 
-echo "[Serverwave] Download details:"
+echo "[LocalForge] Download details:"
 echo "  MC Version: ${MINECRAFT_VERSION}"
 echo "  Build: ${BUILD_NUMBER}"
 echo "  JAR: ${JAR_NAME}"
@@ -400,17 +400,17 @@ echo "  URL: ${DOWNLOAD_URL}"
 
 # Backup old jar if exists
 if [ -f "${SERVER_JARFILE}" ]; then
-    echo "[Serverwave] Backing up existing ${SERVER_JARFILE}..."
+    echo "[LocalForge] Backing up existing ${SERVER_JARFILE}..."
     mv "${SERVER_JARFILE}" "${SERVER_JARFILE}.old"
 fi
 
 # Download the jar
-echo "[Serverwave] Downloading Paper..."
+echo "[LocalForge] Downloading Paper..."
 curl -L --progress-bar -o "${SERVER_JARFILE}" "${DOWNLOAD_URL}"
 
 # Download server.properties if it doesn't exist
 if [ ! -f server.properties ]; then
-    echo "[Serverwave] Creating default server.properties..."
+    echo "[LocalForge] Creating default server.properties..."
     cat > server.properties << 'EOF'
 #Minecraft server properties
 enable-jmx-monitoring=false
@@ -422,7 +422,7 @@ enable-query=true
 generator-settings={}
 enforce-secure-profile=true
 level-name=world
-motd=A Serverwave Anywhere Server
+motd=A LocalForge Server
 query.port=25565
 pvp=true
 generate-structures=true
@@ -474,10 +474,10 @@ EOF
 fi
 
 # Accept EULA
-echo "[Serverwave] Accepting EULA..."
+echo "[LocalForge] Accepting EULA..."
 echo "eula=true" > eula.txt
 
-echo "[Serverwave] Paper ${MINECRAFT_VERSION} build ${BUILD_NUMBER} installed successfully!"
+echo "[LocalForge] Paper ${MINECRAFT_VERSION} build ${BUILD_NUMBER} installed successfully!"
 "#.to_string()),
             install_image: Some("alpine:latest".to_string()),
             config_files: vec![
@@ -504,7 +504,7 @@ echo "[Serverwave] Paper ${MINECRAFT_VERSION} build ${BUILD_NUMBER} installed su
             game_type: GameType::new("sons-of-the-forest"),
             name: "Sons of the Forest".to_string(),
             description: "Survival horror game. Survive on a remote island with mutants.".to_string(),
-            docker_image: "ghcr.io/serverwavehost/game-images:wine_latest".to_string(),
+            docker_image: "ghcr.io/parkervcp/yolks:wine_latest".to_string(),
             startup: "wine ./SonsOfTheForestDS.exe -userdatapath \"/home/container/serverconfig\" -dedicatedserver.IpAddress \"0.0.0.0\" -dedicatedserver.GamePort \"{{SERVER_PORT}}\" -dedicatedserver.QueryPort \"{{QUERY_PORT}}\" -dedicatedserver.BlobSyncPort \"{{SYNC_PORT}}\" -dedicatedserver.SkipNetworkAccessibilityTest \"{{SKIP_TESTS}}\"".to_string(),
             stop_command: "^C".to_string(),
             variables: vec![
@@ -562,7 +562,7 @@ echo "[Serverwave] Paper ${MINECRAFT_VERSION} build ${BUILD_NUMBER} installed su
                     env: "SRV_NAME".to_string(),
                     name: "Server Name".to_string(),
                     description: "Name shown in server browser".to_string(),
-                    default: "A SOTF server hosted by Serverwave".to_string(),
+                    default: "A SOTF server hosted by LocalForge".to_string(),
                     system_mapping: None,
                     user_editable: true,
                     options: None,
@@ -712,7 +712,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt -y update
 apt -y --no-install-recommends install curl lib32gcc-s1 ca-certificates
 
-echo "[Serverwave] Starting Sons of the Forest installation..."
+echo "[LocalForge] Starting Sons of the Forest installation..."
 
 SERVER_PATH=/home/container
 SRCDS_APPID=2465200
@@ -728,14 +728,14 @@ cd "${SERVER_PATH}/steamcmd"
 chown -R root:root "${SERVER_PATH}"
 export HOME="${SERVER_PATH}"
 
-echo "[Serverwave] Logging into Steam..."
+echo "[LocalForge] Logging into Steam..."
 ./steamcmd.sh +login anonymous +quit
 
-echo "[Serverwave] Installing Sons of the Forest dedicated server (Windows)..."
+echo "[LocalForge] Installing Sons of the Forest dedicated server (Windows)..."
 ./steamcmd.sh +force_install_dir "${SERVER_PATH}" +login anonymous +@sSteamCmdForcePlatformType windows +app_update ${SRCDS_APPID} validate +quit
 
 # Set up Steam libraries
-echo "[Serverwave] Setting up Steam libraries..."
+echo "[LocalForge] Setting up Steam libraries..."
 mkdir -p "${SERVER_PATH}/.steam/sdk32"
 cp -v linux32/steamclient.so ../.steam/sdk32/steamclient.so
 
@@ -746,18 +746,18 @@ cp -v linux64/steamclient.so ../.steam/sdk64/steamclient.so
 mkdir -p "${SERVER_PATH}/serverconfig"
 
 if [ ! -f "${SERVER_PATH}/serverconfig/dedicatedserver.cfg" ]; then
-    echo "[Serverwave] Downloading default dedicatedserver.cfg..."
+    echo "[LocalForge] Downloading default dedicatedserver.cfg..."
     cd "${SERVER_PATH}/serverconfig/"
     curl -sSL -o dedicatedserver.cfg https://raw.githubusercontent.com/parkervcp/eggs/master/game_eggs/steamcmd_servers/sonsoftheforest/dedicatedserver.cfg
 fi
 
 if [ ! -f "${SERVER_PATH}/serverconfig/ownerswhitelist.txt" ]; then
-    echo "[Serverwave] Downloading default ownerswhitelist.txt..."
+    echo "[LocalForge] Downloading default ownerswhitelist.txt..."
     cd "${SERVER_PATH}/serverconfig/"
     curl -sSL -o ownerswhitelist.txt https://raw.githubusercontent.com/parkervcp/eggs/master/game_eggs/steamcmd_servers/sonsoftheforest/ownerswhitelist.txt
 fi
 
-echo "[Serverwave] Sons of the Forest installed successfully!"
+echo "[LocalForge] Sons of the Forest installed successfully!"
 "#.to_string()),
             install_image: Some("debian:bookworm".to_string()),
             config_files: vec![
@@ -783,7 +783,7 @@ echo "[Serverwave] Sons of the Forest installed successfully!"
             game_type: GameType::new("rust"),
             name: "Rust".to_string(),
             description: "Survival game. Gather, build, and fight to survive.".to_string(),
-            docker_image: "ghcr.io/serverwavehost/game-images:rust_latest".to_string(),
+            docker_image: "ghcr.io/parkervcp/games:rust".to_string(),
             startup: "./RustDedicated -batchmode +server.port {{SERVER_PORT}} +server.queryport {{SERVER_PORT}} +server.identity \"rust\" +rcon.ip 0.0.0.0 +rcon.port {{RCON_PORT}} +rcon.web true +server.hostname \"{{HOSTNAME}}\" +server.level \"{{LEVEL}}\" +server.description \"{{DESCRIPTION}}\" +server.url \"{{SERVER_URL}}\" +server.headerimage \"{{SERVER_IMG}}\" +server.maxplayers {{MAX_PLAYERS}} +rcon.password \"{{RCON_PASS}}\" +server.saveinterval {{SAVEINTERVAL}} +server.worldsize {{WORLD_SIZE}} +server.seed {{WORLD_SEED}} {{ADDITIONAL_ARGS}}".to_string(),
             stop_command: "quit".to_string(),
             variables: vec![
@@ -831,7 +831,7 @@ echo "[Serverwave] Sons of the Forest installed successfully!"
                     env: "HOSTNAME".to_string(),
                     name: "Server Name".to_string(),
                     description: "Name shown in server browser".to_string(),
-                    default: "A Rust server hosted by Serverwave".to_string(),
+                    default: "A Rust server hosted by LocalForge".to_string(),
                     system_mapping: None,
                     user_editable: true,
                     options: None,
@@ -841,7 +841,7 @@ echo "[Serverwave] Sons of the Forest installed successfully!"
                     env: "DESCRIPTION".to_string(),
                     name: "Description".to_string(),
                     description: "Server description (use \\n for newlines)".to_string(),
-                    default: "Powered by Serverwave".to_string(),
+                    default: "Powered by LocalForge".to_string(),
                     system_mapping: None,
                     user_editable: true,
                     options: None,
@@ -851,7 +851,7 @@ echo "[Serverwave] Sons of the Forest installed successfully!"
                     env: "SERVER_URL".to_string(),
                     name: "Website URL".to_string(),
                     description: "URL shown when clicking Visit Website".to_string(),
-                    default: "http://serverwave.com".to_string(),
+                    default: "".to_string(),
                     system_mapping: None,
                     user_editable: true,
                     options: None,
@@ -980,7 +980,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt -y update
 apt -y --no-install-recommends install curl lib32gcc-s1 ca-certificates
 
-echo "[Serverwave] Starting Rust installation..."
+echo "[LocalForge] Starting Rust installation..."
 
 SERVER_PATH=/home/container
 SRCDS_APPID=258550
@@ -996,14 +996,14 @@ cd "${SERVER_PATH}/steamcmd"
 chown -R root:root "${SERVER_PATH}"
 export HOME="${SERVER_PATH}"
 
-echo "[Serverwave] Logging into Steam..."
+echo "[LocalForge] Logging into Steam..."
 ./steamcmd.sh +login anonymous +quit
 
-echo "[Serverwave] Installing Rust dedicated server..."
+echo "[LocalForge] Installing Rust dedicated server..."
 ./steamcmd.sh +force_install_dir "${SERVER_PATH}" +login anonymous +app_update ${SRCDS_APPID} validate +quit
 
 # Set up Steam libraries
-echo "[Serverwave] Setting up Steam libraries..."
+echo "[LocalForge] Setting up Steam libraries..."
 mkdir -p "${SERVER_PATH}/.steam/sdk32"
 cp -v linux32/steamclient.so ../.steam/sdk32/steamclient.so
 
@@ -1013,10 +1013,10 @@ cp -v linux64/steamclient.so ../.steam/sdk64/steamclient.so
 # Generate random seed if needed
 if [ ! -f "${SERVER_PATH}/seed.txt" ]; then
     cat /dev/urandom | tr -dc '1-9' | fold -w 5 | head -n 1 > "${SERVER_PATH}/seed.txt"
-    echo "[Serverwave] Generated random seed: $(cat ${SERVER_PATH}/seed.txt)"
+    echo "[LocalForge] Generated random seed: $(cat ${SERVER_PATH}/seed.txt)"
 fi
 
-echo "[Serverwave] Rust installed successfully!"
+echo "[LocalForge] Rust installed successfully!"
 "#.to_string()),
             install_image: Some("debian:bookworm".to_string()),
             config_files: Vec::new(),
@@ -1028,7 +1028,7 @@ echo "[Serverwave] Rust installed successfully!"
             game_type: GameType::new("minecraft-bedrock"),
             name: "Minecraft Bedrock".to_string(),
             description: "Cross-platform Minecraft for consoles, mobile, and Windows 10/11.".to_string(),
-            docker_image: "ghcr.io/serverwavehost/game-images:debian".to_string(),
+            docker_image: "ghcr.io/parkervcp/yolks:debian".to_string(),
             startup: "./{{SERVER_BINARY}}".to_string(),
             stop_command: "stop".to_string(),
             variables: vec![
@@ -1066,53 +1066,53 @@ export DEBIAN_FRONTEND=noninteractive
 apt update
 apt install -y zip unzip wget curl
 
-echo "[Serverwave] Starting Minecraft Bedrock installation..."
+echo "[LocalForge] Starting Minecraft Bedrock installation..."
 
 # Generate random number for user agent
 RANDVERSION=$(awk 'BEGIN{srand(); print int(1 + rand() * 4000)}')
 
 if [ -z "${BEDROCK_VERSION}" ] || [ "${BEDROCK_VERSION}" = "latest" ]; then
-    echo "[Serverwave] Fetching latest Bedrock version..."
+    echo "[LocalForge] Fetching latest Bedrock version..."
     DOWNLOAD_URL=$(curl -s -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.${RANDVERSION}.212 Safari/537.36" \
         -H "Accept-Language: en" \
         -H "Accept-Encoding: json" \
         -H "content-type: application/json" \
         "https://net-secondary.web.minecraft-services.net/api/v1.0/download/links" | grep -o 'https://www.minecraft.net/bedrockdedicatedserver/bin-linux/[^"]*')
 else 
-    echo "[Serverwave] Using Bedrock version: ${BEDROCK_VERSION}"
+    echo "[LocalForge] Using Bedrock version: ${BEDROCK_VERSION}"
     DOWNLOAD_URL="https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-${BEDROCK_VERSION}.zip"
 fi
 
 DOWNLOAD_FILE=$(echo "${DOWNLOAD_URL}" | cut -d"/" -f6)
 
-echo "[Serverwave] Backing up config files..."
+echo "[LocalForge] Backing up config files..."
 rm -f *.bak versions.html.gz 2>/dev/null
 [ -f server.properties ] && cp server.properties server.properties.bak
 [ -f permissions.json ] && cp permissions.json permissions.json.bak
 [ -f allowlist.json ] && cp allowlist.json allowlist.json.bak
 
-echo "[Serverwave] Downloading from: ${DOWNLOAD_URL}"
-echo "[Serverwave] Saving to: ${DOWNLOAD_FILE}"
+echo "[LocalForge] Downloading from: ${DOWNLOAD_URL}"
+echo "[LocalForge] Saving to: ${DOWNLOAD_FILE}"
 
 curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.${RANDVERSION}.212 Safari/537.36" \
     -H "Accept-Language: en" \
     -o "${DOWNLOAD_FILE}" \
     "${DOWNLOAD_URL}"
 
-echo "[Serverwave] Extracting server files..."
+echo "[LocalForge] Extracting server files..."
 unzip -o "${DOWNLOAD_FILE}"
 
-echo "[Serverwave] Cleaning up..."
+echo "[LocalForge] Cleaning up..."
 rm -f "${DOWNLOAD_FILE}"
 
-echo "[Serverwave] Restoring config backups..."
+echo "[LocalForge] Restoring config backups..."
 [ -f server.properties.bak ] && cp -f server.properties.bak server.properties
 [ -f permissions.json.bak ] && cp -f permissions.json.bak permissions.json
 [ -f allowlist.json.bak ] && cp -f allowlist.json.bak allowlist.json
 
 chmod +x bedrock_server 2>/dev/null
 
-echo "[Serverwave] Minecraft Bedrock installed successfully!"
+echo "[LocalForge] Minecraft Bedrock installed successfully!"
 "#.to_string()),
             install_image: Some("debian:bookworm".to_string()),
             config_files: vec![
@@ -1135,7 +1135,7 @@ echo "[Serverwave] Minecraft Bedrock installed successfully!"
             game_type: GameType::new("terraria"),
             name: "Terraria".to_string(),
             description: "2D sandbox adventure game. Dig, fight, explore, build!".to_string(),
-            docker_image: "ghcr.io/serverwavehost/game-images:debian".to_string(),
+            docker_image: "ghcr.io/parkervcp/yolks:debian".to_string(),
             startup: "./TerrariaServer.bin.x86_64 -config serverconfig.txt".to_string(),
             stop_command: "exit".to_string(),
             variables: vec![
@@ -1224,42 +1224,42 @@ apt install -y curl wget file unzip
 
 DOWNLOAD_LINK=invalid
 
-echo "[Serverwave] Starting Terraria installation..."
+echo "[LocalForge] Starting Terraria installation..."
 
 if [ "${TERRARIA_VERSION}" = "latest" ] || [ -z "${TERRARIA_VERSION}" ]; then
-    echo "[Serverwave] Fetching latest Terraria version..."
+    echo "[LocalForge] Fetching latest Terraria version..."
     DOWNLOAD_LINK=$(curl -sSL https://terraria.gamepedia.com/Server#Downloads | grep '>Terraria Server ' | grep -Eoi '<a [^>]+>' | grep -Eo 'href="[^"]+' | grep -Eo '(http|https)://[^"]+' | tail -1 | cut -d'?' -f1)
 else
     CLEAN_VERSION=$(echo "${TERRARIA_VERSION}" | sed 's/\.//g')
-    echo "[Serverwave] Downloading Terraria version ${TERRARIA_VERSION}..."
+    echo "[LocalForge] Downloading Terraria version ${TERRARIA_VERSION}..."
     DOWNLOAD_LINK=$(curl -sSL https://terraria.gamepedia.com/Server#Downloads | grep '>Terraria Server ' | grep -Eoi '<a [^>]+>' | grep -Eo 'href="[^"]+' | grep -Eo '(http|https)://[^"]+' | grep "${CLEAN_VERSION}" | cut -d'?' -f1)
 fi
 
 if [ -n "${DOWNLOAD_LINK}" ]; then
     if curl --output /dev/null --silent --head --fail "${DOWNLOAD_LINK}"; then
-        echo "[Serverwave] Download link valid"
+        echo "[LocalForge] Download link valid"
     else
-        echo "[Serverwave] Invalid download link"
+        echo "[LocalForge] Invalid download link"
         exit 2
     fi
 fi
 
 CLEAN_VERSION=$(echo "${DOWNLOAD_LINK##*/}" | cut -d'-' -f3 | cut -d'.' -f1)
 
-echo "[Serverwave] Downloading from ${DOWNLOAD_LINK}..."
+echo "[LocalForge] Downloading from ${DOWNLOAD_LINK}..."
 curl -sSL "${DOWNLOAD_LINK}" -o "${DOWNLOAD_LINK##*/}"
 
-echo "[Serverwave] Extracting server files..."
+echo "[LocalForge] Extracting server files..."
 unzip "${DOWNLOAD_LINK##*/}"
 
 cp -R "${CLEAN_VERSION}/Linux/"* ./
 chmod +x TerrariaServer.bin.x86_64
 
-echo "[Serverwave] Cleaning up..."
+echo "[LocalForge] Cleaning up..."
 rm -rf "${CLEAN_VERSION}"
 rm -f "${DOWNLOAD_LINK##*/}"
 
-echo "[Serverwave] Creating config file..."
+echo "[LocalForge] Creating config file..."
 cat <<EOF > serverconfig.txt
 worldpath=/home/container/saves/Worlds
 worldname=world
@@ -1272,7 +1272,7 @@ EOF
 
 mkdir -p saves/Worlds
 
-echo "[Serverwave] Terraria installed successfully!"
+echo "[LocalForge] Terraria installed successfully!"
 "#.to_string()),
             install_image: Some("debian:bookworm".to_string()),
             config_files: vec![
@@ -1299,7 +1299,7 @@ echo "[Serverwave] Terraria installed successfully!"
             game_type: GameType::new("hytale"),
             name: "Hytale".to_string(),
             description: "Block-based adventure game from Hypixel Studios.".to_string(),
-            docker_image: "ghcr.io/serverwavehost/game-images:java_25".to_string(),
+            docker_image: "ghcr.io/parkervcp/yolks:java_25".to_string(),
             startup: "java -XX:+UnlockExperimentalVMOptions -XX:AOTCache=Server/HytaleServer.aot -Xms128M -Xmx{{SERVER_MEMORY}}M -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:G1HeapRegionSize=8M -XX:G1NewSizePercent=30 -XX:G1ReservePercent=20 -XX:InitiatingHeapOccupancyPercent=15 -XX:+UseStringDeduplication -XX:+AlwaysPreTouch -XX:MaxMetaspaceSize=512M -XX:+UseGCOverheadLimit -XX:+ExplicitGCInvokesConcurrent -jar {{SERVER_JARFILE}} --assets {{ASSETS_PATH}} {{EXTRA_ARGS}}".to_string(),
             stop_command: "stop".to_string(),
             variables: vec![
@@ -1402,44 +1402,44 @@ echo "[Serverwave] Terraria installed successfully!"
 exec 2>&1
 set -e
 
-echo "[Serverwave] Installing required tools..."
+echo "[LocalForge] Installing required tools..."
 apt -y update
 apt -y install unzip curl
 
-echo "[Serverwave] Downloading Hytale downloader..."
+echo "[LocalForge] Downloading Hytale downloader..."
 
 # Download the downloader
 curl -L --progress-bar -o hytale-downloader.zip https://downloader.hytale.com/hytale-downloader.zip
-echo "[Serverwave] Download complete"
+echo "[LocalForge] Download complete"
 
 # Unzip it
-echo "[Serverwave] Extracting downloader..."
+echo "[LocalForge] Extracting downloader..."
 unzip -o hytale-downloader.zip
 
 # Make executable and run (this will prompt for OAuth if needed)
 chmod +x hytale-downloader-linux-amd64
-echo "[Serverwave] Running Hytale downloader (OAuth authentication may be required)..."
-echo "[Serverwave] Check the popup if authentication is needed!"
+echo "[LocalForge] Running Hytale downloader (OAuth authentication may be required)..."
+echo "[LocalForge] Check the popup if authentication is needed!"
 ./hytale-downloader-linux-amd64
 
 # Find and extract the downloaded version zip
-echo "[Serverwave] Looking for downloaded server files..."
+echo "[LocalForge] Looking for downloaded server files..."
 VERSION_ZIP=$(ls -t *.zip 2>/dev/null | grep -E '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-' | head -1 || true)
 if [ -n "$VERSION_ZIP" ]; then
-    echo "[Serverwave] Found version: $VERSION_ZIP"
-    echo "[Serverwave] Extracting server files..."
+    echo "[LocalForge] Found version: $VERSION_ZIP"
+    echo "[LocalForge] Extracting server files..."
     unzip -o "$VERSION_ZIP"
     rm -f "$VERSION_ZIP"
-    echo "[Serverwave] Server files extracted"
+    echo "[LocalForge] Server files extracted"
 else
-    echo "[Serverwave] Warning: No version zip found, server may already be extracted"
+    echo "[LocalForge] Warning: No version zip found, server may already be extracted"
 fi
 
 # Cleanup downloader files (but keep .hytale-downloader-credentials.json for refresh token!)
-echo "[Serverwave] Cleaning up..."
+echo "[LocalForge] Cleaning up..."
 rm -f hytale-downloader.zip hytale-downloader-linux-amd64 hytale-downloader-windows-amd64.exe
 
-echo "[Serverwave] Hytale server installed successfully!"
+echo "[LocalForge] Hytale server installed successfully!"
 "#.to_string()),
             install_image: Some("debian:bookworm".to_string()),
             config_files: vec![
@@ -1462,7 +1462,7 @@ echo "[Serverwave] Hytale server installed successfully!"
             game_type: GameType::new("palworld"),
             name: "Palworld".to_string(),
             description: "Creature collecting survival game. Catch Pals, build bases, and survive.".to_string(),
-            docker_image: "ghcr.io/serverwavehost/game-images:steamcmd_debian".to_string(),
+            docker_image: "ghcr.io/parkervcp/yolks:debian".to_string(),
             startup: "/home/container/Pal/Binaries/Linux/PalServer-Linux-Shipping Pal -port={{SERVER_PORT}} -players={{MAX_PLAYERS}} -useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS -servername=\"{{SRV_NAME}}\" -serverpassword=\"{{SRV_PASSWORD}}\" -adminpassword=\"{{ADMIN_PASSWORD}}\"".to_string(),
             stop_command: "^C".to_string(),
             variables: vec![
@@ -1500,7 +1500,7 @@ echo "[Serverwave] Hytale server installed successfully!"
                     env: "SRV_NAME".to_string(),
                     name: "Server Name".to_string(),
                     description: "Name shown in server browser".to_string(),
-                    default: "A Palworld server hosted by Serverwave".to_string(),
+                    default: "A Palworld server hosted by LocalForge".to_string(),
                     system_mapping: None,
                     user_editable: true,
                     options: None,
@@ -1559,7 +1559,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt -y update
 apt -y --no-install-recommends install curl lib32gcc-s1 ca-certificates
 
-echo "[Serverwave] Starting Palworld installation..."
+echo "[LocalForge] Starting Palworld installation..."
 
 SERVER_PATH=/home/container
 SRCDS_APPID=2394010
@@ -1575,14 +1575,14 @@ cd ${SERVER_PATH}/steamcmd
 chown -R root:root ${SERVER_PATH}
 export HOME=${SERVER_PATH}
 
-echo "[Serverwave] Logging into Steam..."
+echo "[LocalForge] Logging into Steam..."
 ./steamcmd.sh +login anonymous +quit
 
-echo "[Serverwave] Installing Palworld dedicated server..."
+echo "[LocalForge] Installing Palworld dedicated server..."
 ./steamcmd.sh +force_install_dir ${SERVER_PATH} +login anonymous +app_update ${SRCDS_APPID} validate +quit
 
 # Set up Steam libraries
-echo "[Serverwave] Setting up Steam libraries..."
+echo "[LocalForge] Setting up Steam libraries..."
 mkdir -p ${SERVER_PATH}/.steam/sdk32
 cp -v linux32/steamclient.so ../.steam/sdk32/steamclient.so
 
@@ -1590,7 +1590,7 @@ mkdir -p ${SERVER_PATH}/.steam/sdk64
 cp -v linux64/steamclient.so ../.steam/sdk64/steamclient.so
 
 # Copy template config file
-echo "[Serverwave] Setting up config files..."
+echo "[LocalForge] Setting up config files..."
 if [ -f "${SERVER_PATH}/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini" ]; then
     echo "Config file already exists, backing up and creating new one"
     mv ${SERVER_PATH}/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini "${SERVER_PATH}/Pal/Saved/Config/LinuxServer/PalWorldSettings_$(date +"%Y%m%d%H%M%S").ini"
@@ -1601,7 +1601,7 @@ else
     cp ${SERVER_PATH}/DefaultPalWorldSettings.ini ${SERVER_PATH}/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini
 fi
 
-echo "[Serverwave] Palworld installed successfully!"
+echo "[LocalForge] Palworld installed successfully!"
 "#.to_string()),
             install_image: Some("debian:bookworm".to_string()),
             config_files: vec![
@@ -1623,7 +1623,7 @@ echo "[Serverwave] Palworld installed successfully!"
             game_type: GameType::new("satisfactory"),
             name: "Satisfactory".to_string(),
             description: "Factory building game. Build massive factories and automate production.".to_string(),
-            docker_image: "ghcr.io/serverwavehost/game-images:steamcmd_debian".to_string(),
+            docker_image: "ghcr.io/parkervcp/yolks:debian".to_string(),
             startup: "Engine/Binaries/Linux/*-Linux-Shipping FactoryGame -Port={{SERVER_PORT}} -ReliablePort={{RELIABLE_PORT}}".to_string(),
             stop_command: "^C".to_string(),
             variables: vec![
@@ -1736,7 +1736,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt -y update
 apt -y --no-install-recommends install curl lib32gcc-s1 ca-certificates
 
-echo "[Serverwave] Starting Satisfactory installation..."
+echo "[LocalForge] Starting Satisfactory installation..."
 
 SERVER_PATH=/home/container
 SRCDS_APPID=1690800
@@ -1751,14 +1751,14 @@ cd "${SERVER_PATH}/steamcmd"
 chown -R root:root "${SERVER_PATH}"
 export HOME="${SERVER_PATH}"
 
-echo "[Serverwave] Logging into Steam..."
+echo "[LocalForge] Logging into Steam..."
 ./steamcmd.sh +login anonymous +quit
 
-echo "[Serverwave] Installing Satisfactory dedicated server..."
+echo "[LocalForge] Installing Satisfactory dedicated server..."
 ./steamcmd.sh +force_install_dir "${SERVER_PATH}" +login anonymous +app_update ${SRCDS_APPID} validate +exit
 
 # Set up Steam libraries
-echo "[Serverwave] Setting up Steam libraries..."
+echo "[LocalForge] Setting up Steam libraries..."
 mkdir -p "${SERVER_PATH}/.steam/sdk32"
 mkdir -p "${SERVER_PATH}/.steam/sdk64"
 cp -v linux32/steamclient.so "${SERVER_PATH}/.steam/sdk32/steamclient.so"
@@ -1771,13 +1771,13 @@ chmod +x ./*-Linux-Shipping 2>/dev/null || true
 # Create config directories and files
 mkdir -p "${SERVER_PATH}/FactoryGame/Saved/Config/LinuxServer"
 
-echo "[Serverwave] Creating Game.ini..."
+echo "[LocalForge] Creating Game.ini..."
 cat > "${SERVER_PATH}/FactoryGame/Saved/Config/LinuxServer/Game.ini" << 'EOF'
 [/Script/Engine.GameSession]
 MaxPlayers=
 EOF
 
-echo "[Serverwave] Creating Engine.ini..."
+echo "[LocalForge] Creating Engine.ini..."
 cat > "${SERVER_PATH}/FactoryGame/Saved/Config/LinuxServer/Engine.ini" << 'EOF'
 [/Script/FactoryGame.FGSaveSession]
 mNumRotatingAutosaves=
@@ -1787,7 +1787,7 @@ InitialConnectTimeout=
 ConnectionTimeout=
 EOF
 
-echo "[Serverwave] Satisfactory installed successfully!"
+echo "[LocalForge] Satisfactory installed successfully!"
 "#.to_string()),
             install_image: Some("debian:bookworm".to_string()),
             config_files: vec![
@@ -1820,7 +1820,7 @@ echo "[Serverwave] Satisfactory installed successfully!"
             game_type: GameType::new("project-zomboid"),
             name: "Project Zomboid".to_string(),
             description: "Zombie survival RPG. Survive the apocalypse and build your base.".to_string(),
-            docker_image: "ghcr.io/serverwavehost/game-images:steamcmd_debian".to_string(),
+            docker_image: "ghcr.io/parkervcp/yolks:debian".to_string(),
             startup: "export PATH=\"./jre64/bin:$PATH\" ; export LD_LIBRARY_PATH=\"./linux64:./natives:.:./jre64/lib/amd64:${LD_LIBRARY_PATH}\" ; ./ProjectZomboid64 -port {{SERVER_PORT}} -udpport {{UDP_PORT}} -cachedir=/home/container/.cache -servername \"{{SERVER_NAME}}\" -adminusername {{ADMIN_USER}} -adminpassword \"{{ADMIN_PASSWORD}}\"".to_string(),
             stop_command: "^C".to_string(),
             variables: vec![
@@ -1868,7 +1868,7 @@ echo "[Serverwave] Satisfactory installed successfully!"
                     env: "SERVER_NAME".to_string(),
                     name: "Server Name".to_string(),
                     description: "Internal server name for save/config files".to_string(),
-                    default: "Hosted by Serverwave".to_string(),
+                    default: "Hosted by LocalForge".to_string(),
                     system_mapping: None,
                     user_editable: true,
                     options: None,
@@ -1933,7 +1933,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt -y update
 apt -y --no-install-recommends install curl lib32gcc-s1 ca-certificates
 
-echo "[Serverwave] Starting Project Zomboid installation..."
+echo "[LocalForge] Starting Project Zomboid installation..."
 
 SERVER_PATH=/home/container
 SRCDS_APPID=380870
@@ -1949,14 +1949,14 @@ cd "${SERVER_PATH}/steamcmd"
 chown -R root:root "${SERVER_PATH}"
 export HOME="${SERVER_PATH}"
 
-echo "[Serverwave] Logging into Steam..."
+echo "[LocalForge] Logging into Steam..."
 ./steamcmd.sh +login anonymous +quit
 
-echo "[Serverwave] Installing Project Zomboid dedicated server..."
+echo "[LocalForge] Installing Project Zomboid dedicated server..."
 ./steamcmd.sh +force_install_dir "${SERVER_PATH}" +login anonymous +app_update ${SRCDS_APPID} validate +quit
 
 # Set up Steam libraries
-echo "[Serverwave] Setting up Steam libraries..."
+echo "[LocalForge] Setting up Steam libraries..."
 mkdir -p "${SERVER_PATH}/.steam/sdk32"
 cp -v linux32/steamclient.so "${SERVER_PATH}/.steam/sdk32/steamclient.so"
 
@@ -1967,7 +1967,7 @@ cp -v linux64/steamclient.so "${SERVER_PATH}/.steam/sdk64/steamclient.so"
 cd "${SERVER_PATH}"
 rm -f start-server.sh
 
-echo "[Serverwave] Project Zomboid installed successfully!"
+echo "[LocalForge] Project Zomboid installed successfully!"
 "#.to_string()),
             install_image: Some("debian:bookworm".to_string()),
             config_files: Vec::new(),
@@ -1979,7 +1979,7 @@ echo "[Serverwave] Project Zomboid installed successfully!"
             game_type: GameType::new("starrupture"),
             name: "StarRupture".to_string(),
             description: "Space survival game. Build bases and explore the cosmos.".to_string(),
-            docker_image: "ghcr.io/serverwavehost/game-images:wine_latest".to_string(),
+            docker_image: "ghcr.io/parkervcp/yolks:wine_latest".to_string(),
             startup: "wine ./StarRuptureServerEOS.exe -Log -port={{SERVER_PORT}} -QueryPort={{QUERY_PORT}} -ServerName=\"{{SRV_NAME}}\" MaxPlayers={{MAX_PLAYERS}}".to_string(),
             stop_command: "^C".to_string(),
             variables: vec![
@@ -2027,7 +2027,7 @@ echo "[Serverwave] Project Zomboid installed successfully!"
                     env: "SRV_NAME".to_string(),
                     name: "Server Name".to_string(),
                     description: "Name shown in server browser".to_string(),
-                    default: "A StarRupture server hosted by Serverwave".to_string(),
+                    default: "A StarRupture server hosted by LocalForge".to_string(),
                     system_mapping: None,
                     user_editable: true,
                     options: None,
@@ -2122,7 +2122,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt -y update
 apt -y --no-install-recommends install curl lib32gcc-s1 ca-certificates
 
-echo "[Serverwave] Starting StarRupture installation..."
+echo "[LocalForge] Starting StarRupture installation..."
 
 SERVER_PATH=/home/container
 SRCDS_APPID=3809400
@@ -2138,21 +2138,21 @@ cd "${SERVER_PATH}/steamcmd"
 chown -R root:root "${SERVER_PATH}"
 export HOME="${SERVER_PATH}"
 
-echo "[Serverwave] Logging into Steam..."
+echo "[LocalForge] Logging into Steam..."
 ./steamcmd.sh +login anonymous +quit
 
-echo "[Serverwave] Installing StarRupture dedicated server (Windows)..."
+echo "[LocalForge] Installing StarRupture dedicated server (Windows)..."
 ./steamcmd.sh +force_install_dir "${SERVER_PATH}" +login anonymous +@sSteamCmdForcePlatformType windows +app_update ${SRCDS_APPID} validate +quit
 
 # Set up Steam libraries
-echo "[Serverwave] Setting up Steam libraries..."
+echo "[LocalForge] Setting up Steam libraries..."
 mkdir -p "${SERVER_PATH}/.steam/sdk32"
 cp -v linux32/steamclient.so ../.steam/sdk32/steamclient.so
 
 mkdir -p "${SERVER_PATH}/.steam/sdk64"
 cp -v linux64/steamclient.so ../.steam/sdk64/steamclient.so
 
-echo "[Serverwave] StarRupture installed successfully!"
+echo "[LocalForge] StarRupture installed successfully!"
 "#.to_string()),
             install_image: Some("debian:bookworm".to_string()),
             config_files: Vec::new(),

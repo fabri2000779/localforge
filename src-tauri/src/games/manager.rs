@@ -198,7 +198,7 @@ fn get_games_config_path() -> PathBuf {
     directories::UserDirs::new()
         .map(|d| d.home_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("ServerWaveAnywhere")
+        .join("LocalForge")
         .join("games")
         .join("custom_games.json")
 }

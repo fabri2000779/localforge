@@ -128,7 +128,7 @@ export function ServerDetail() {
     fetchInitialLogs();
     setupStreaming();
     startStatsPolling(id);
-    
+
     return () => {
       if (unlistenRef.current) {
         unlistenRef.current();
@@ -137,11 +137,12 @@ export function ServerDetail() {
       invoke('detach_server', { serverId: id }).catch(() => {});
       stopStatsPolling();
     };
-  }, [id]);
+  }, [id, fetchServers, startStatsPolling, stopStatsPolling]);
 
   // Initialize editing config when server loads
   useEffect(() => {
     if (server?.config) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setEditingConfig(server.config);
     }
   }, [server?.config]);
@@ -149,6 +150,7 @@ export function ServerDetail() {
   // Uptime calculator
   useEffect(() => {
     if (server?.status !== 'running') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setUptime('');
       return;
     }
@@ -202,6 +204,7 @@ export function ServerDetail() {
     // Don't detect if server is stopped or user dismissed or we already have a URL
     if (server?.status === 'stopped' || server?.status === 'error') {
       if (oauthUrl) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setOauthUrl(null);
         setOauthCode(null);
       }
@@ -889,28 +892,6 @@ export function ServerDetail() {
                 </div>
               </div>
               
-              <div className="mt-4 p-4 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/30 rounded-lg">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-indigo-500/20 flex items-center justify-center flex-shrink-0">
-                    <span className="text-xl">🌊</span>
-                  </div>
-                  <div className="flex-1">
-                    <div className="font-semibold text-white mb-1">Want hassle-free public hosting?</div>
-                    <p className="text-sm text-zinc-400 mb-3">
-                      Skip port forwarding and router configs. Serverwave provides instant public game servers with DDoS protection, automatic backups, and 24/7 uptime.
-                    </p>
-                    <div className="flex items-center gap-3">
-                      <button 
-                        onClick={() => open('https://serverwave.com/')}
-                        className="btn btn-primary text-sm"
-                      >
-                        Try Serverwave <ExternalLink size={14} />
-                      </button>
-                      <span className="text-xs text-zinc-500">Free tier available</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         </div>

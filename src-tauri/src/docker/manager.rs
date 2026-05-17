@@ -242,7 +242,7 @@ impl DockerManager {
             ..Default::default()
         };
 
-        let container_name = format!("serverwave-{}", name);
+        let container_name = format!("localforge-{}", name);
         let options = Some(CreateContainerOptions {
             name: container_name.as_str(),
             platform: None,
@@ -584,7 +584,7 @@ impl DockerManager {
             ..Default::default()
         };
         
-        let container_name = format!("serverwave-install-{}", Uuid::new_v4().to_string()[..8].to_string());
+        let container_name = format!("localforge-install-{}", Uuid::new_v4().to_string()[..8].to_string());
         
         let config = Config {
             image: Some(image.to_string()),

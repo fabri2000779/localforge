@@ -602,14 +602,14 @@ pub async fn get_server_logs(server_id: String, lines: Option<u32>) -> Result<Lo
                 .await
                 .unwrap_or_else(|e| {
                     tracing::error!("Failed to get install logs: {}", e);
-                    vec!["[Serverwave] Installation in progress...".to_string()]
+                    vec!["[LocalForge] Installation in progress...".to_string()]
                 });
             tracing::info!("Got {} log lines from install container", logs.len());
             return Ok(LogsResponse { logs, error: None });
         }
         tracing::info!("No install_container_id found, showing placeholder");
         return Ok(LogsResponse {
-            logs: vec!["[Serverwave] Installation in progress...".to_string()],
+            logs: vec!["[LocalForge] Installation in progress...".to_string()],
             error: None,
         });
     }
@@ -731,7 +731,7 @@ async fn run_install_script_internal(
     
     let _ = app.emit("server-log", LogEvent {
         server_id: server_id.to_string(),
-        line: "[Serverwave] Starting installation...".to_string(),
+        line: "[LocalForge] Starting installation...".to_string(),
     });
     
     // Run install script using docker run (temporary container)
@@ -824,7 +824,7 @@ async fn run_install_script_internal(
         
         let _ = app.emit("server-log", LogEvent {
             server_id: server_id.to_string(),
-            line: "[Serverwave] Installation completed successfully!".to_string(),
+            line: "[LocalForge] Installation completed successfully!".to_string(),
         });
         
         Ok(server)
@@ -835,7 +835,7 @@ async fn run_install_script_internal(
         
         let _ = app.emit("server-log", LogEvent {
             server_id: server_id.to_string(),
-            line: format!("[Serverwave] Installation failed with exit code: {}", exit_code),
+            line: format!("[LocalForge] Installation failed with exit code: {}", exit_code),
         });
         
         Err(format!("Install script failed with exit code: {}", exit_code))
@@ -888,7 +888,7 @@ pub async fn reinstall_server(
     if server.data_path.exists() {
         let _ = app.emit("server-log", LogEvent {
             server_id: server_id.clone(),
-            line: "[Serverwave] Deleting server data...".to_string(),
+            line: "[LocalForge] Deleting server data...".to_string(),
         });
         
         for entry in std::fs::read_dir(&server.data_path).map_err(|e| e.to_string())? {
@@ -909,7 +909,7 @@ pub async fn reinstall_server(
     
     let _ = app.emit("server-log", LogEvent {
         server_id: server_id.clone(),
-        line: "[Serverwave] Server data cleared. Starting reinstallation...".to_string(),
+        line: "[LocalForge] Server data cleared. Starting reinstallation...".to_string(),
     });
     
     // Run install script
@@ -949,7 +949,7 @@ pub async fn update_server_game(
     
     let _ = app.emit("server-log", LogEvent {
         server_id: server_id.clone(),
-        line: "[Serverwave] Starting update (running install script)...".to_string(),
+        line: "[LocalForge] Starting update (running install script)...".to_string(),
     });
     
     // Run install script (will overwrite existing files)
@@ -1006,7 +1006,7 @@ fn get_servers_dir() -> PathBuf {
     directories::UserDirs::new()
         .map(|d| d.home_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("ServerWaveAnywhere")
+        .join("LocalForge")
         .join("servers")
 }
 
@@ -1014,7 +1014,7 @@ fn get_servers_config_dir() -> PathBuf {
     directories::UserDirs::new()
         .map(|d| d.home_dir().to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("ServerWaveAnywhere")
+        .join("LocalForge")
         .join("config")
 }
 

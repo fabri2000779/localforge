@@ -1,5 +1,5 @@
-// Serverwave Anywhere - Main entry point
-// Run game servers anywhere, locally
+// LocalForge - Main entry point
+// Run game servers locally with a single click
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -34,14 +34,14 @@ fn main() {
             std::fs::create_dir_all(&app_data_dir).ok();
 
             if let Some(home) = directories::UserDirs::new() {
-                let servers_dir = home.home_dir().join("ServerWaveAnywhere").join("servers");
+                let servers_dir = home.home_dir().join("LocalForge").join("servers");
                 std::fs::create_dir_all(&servers_dir).ok();
 
-                let config_dir = home.home_dir().join("ServerWaveAnywhere").join("config");
+                let config_dir = home.home_dir().join("LocalForge").join("config");
                 std::fs::create_dir_all(&config_dir).ok();
             }
 
-            tracing::info!("Serverwave Anywhere initialized");
+            tracing::info!("LocalForge initialized");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

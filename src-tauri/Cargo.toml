@@ -1,12 +1,12 @@
 [package]
-name = "serverwave-anywhere"
+name = "localforge"
 version = "0.1.0"
-description = "Run Serverwave game servers anywhere, locally"
+description = "Run game servers locally with a single click"
 authors = ["Fabrizio"]
 edition = "2021"
 
 [lib]
-name = "serverwave_anywhere_lib"
+name = "localforge_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
@@ -21,8 +21,8 @@ tokio = { version = "1", features = ["full"] }
 bollard = "0.17"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-directories = "5"
-thiserror = "1"
+directories = "6"
+thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"

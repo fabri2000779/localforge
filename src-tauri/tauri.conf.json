@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Serverwave Anywhere",
+  "productName": "LocalForge",
   "version": "0.1.0",
-  "identifier": "com.serverwave.anywhere",
+  "identifier": "com.localforge.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Serverwave Anywhere",
+        "title": "LocalForge",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
@@ -41,8 +41,8 @@
       "icons/icon.ico"
     ],
     "category": "Game",
-    "shortDescription": "Run Serverwave game servers anywhere, locally",
-    "longDescription": "Run your favorite game servers locally with the same quality images used by Serverwave cloud. No terminal commands, no Docker knowledge required.",
+    "shortDescription": "Run game servers locally with a single click",
+    "longDescription": "Spin up game servers on your own computer with no terminal commands and no Docker knowledge required. Powered by Pelican Panel's yolks container images.",
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper"

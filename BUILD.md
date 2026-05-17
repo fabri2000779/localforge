@@ -1,4 +1,4 @@
-# Building Serverwave Anywhere
+# Building LocalForge
 
 ## Development
 
@@ -15,7 +15,7 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
-Output: `src-tauri/target/release/bundle/nsis/Serverwave Anywhere_0.1.0_x64-setup.exe`
+Output: `src-tauri/target/release/bundle/nsis/LocalForge_0.1.0_x64-setup.exe`
 
 ### macOS (creates .dmg + .app)
 

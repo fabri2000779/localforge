@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useDockerStore } from '../stores/dockerStore';
-import { RefreshCw, ExternalLink } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 
 export function Settings() {
   const { status, info, checkStatus, fetchInfo, isChecking } = useDockerStore();
@@ -8,14 +8,14 @@ export function Settings() {
   useEffect(() => {
     checkStatus();
     fetchInfo();
-  }, []);
+  }, [checkStatus, fetchInfo]);
 
   return (
     <div className="animate-fade-in max-w-3xl">
       <header className="mb-8">
         <h1 className="text-3xl font-bold">Settings</h1>
         <p className="text-slate-400 mt-2">
-          Manage Serverwave Anywhere configuration
+          Manage LocalForge configuration
         </p>
       </header>
 
@@ -74,25 +74,16 @@ export function Settings() {
 
       {/* About */}
       <section className="card mb-6">
-        <h2 className="text-xl font-semibold mb-4">About Serverwave Anywhere</h2>
+        <h2 className="text-xl font-semibold mb-4">About LocalForge</h2>
         <div className="space-y-4 text-slate-400">
           <p>
-            Serverwave Anywhere makes it easy to run game servers on your own computer.
+            LocalForge makes it easy to run game servers on your own computer.
             No cloud required, no monthly fees, no complicated setup.
           </p>
           <p>
-            Built with Tauri, React, and Rust. Powered by Docker.
+            Built with Tauri, React, and Rust. Powered by Docker and Pelican Panel's yolks images.
           </p>
           <div className="flex items-center gap-4 pt-4">
-            <a
-              href="https://serverwave.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn btn-secondary text-sm"
-            >
-              <ExternalLink size={16} />
-              Serverwave
-            </a>
             <span className="text-sm text-slate-600">v0.1.0</span>
           </div>
         </div>
@@ -104,11 +95,11 @@ export function Settings() {
         <div className="space-y-3 text-sm">
           <div>
             <span className="text-slate-500">Server Data:</span>
-            <div className="font-mono text-slate-300 mt-1">~/ServerWaveAnywhere/servers/</div>
+            <div className="font-mono text-slate-300 mt-1">~/LocalForge/servers/</div>
           </div>
           <div>
             <span className="text-slate-500">Configuration:</span>
-            <div className="font-mono text-slate-300 mt-1">~/ServerWaveAnywhere/config/</div>
+            <div className="font-mono text-slate-300 mt-1">~/LocalForge/config/</div>
           </div>
         </div>
         <p className="text-xs text-slate-500 mt-4">

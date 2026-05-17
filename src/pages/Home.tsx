@@ -16,7 +16,7 @@ export function Home() {
   return (
     <div className="animate-fade-in">
       <header className="mb-8">
-        <h1 className="text-3xl font-bold">Welcome to Serverwave Anywhere</h1>
+        <h1 className="text-3xl font-bold">Welcome to LocalForge</h1>
         <p className="text-slate-400 mt-2">
           Create and manage game servers with a single click
         </p>

@@ -22,16 +22,15 @@ function App() {
   useEffect(() => {
     checkStatus();
     fetchGames();
-  }, []);
+  }, [checkStatus, fetchGames]);
 
   useEffect(() => {
     if (status?.running) {
       fetchServers();
-      // Refresh server list every 10 seconds
       const interval = setInterval(fetchServers, 10000);
       return () => clearInterval(interval);
     }
-  }, [status?.running]);
+  }, [status?.running, fetchServers]);
 
   // Show Docker requirement screen if Docker is not available
   if (status && !status.running) {

@@ -122,7 +122,7 @@ pub fn get_games_config_path() -> String {
     let path = directories::UserDirs::new()
         .map(|d| d.home_dir().to_path_buf())
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("ServerWaveAnywhere")
+        .join("LocalForge")
         .join("games");
     
     // Create directory if it doesn't exist
