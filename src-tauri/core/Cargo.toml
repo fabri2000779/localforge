@@ -1,0 +1,16 @@
+[package]
+name = "localforge-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared types and traits for LocalForge desktop and agent"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+futures-util = { workspace = true }
+tracing = { workspace = true }

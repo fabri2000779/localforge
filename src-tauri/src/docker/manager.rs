@@ -1,7 +1,5 @@
 // Docker Manager - Handles all Docker operations
 
-use crate::commands::docker::DockerInfo;
-use crate::commands::server::ServerStatus;
 use bollard::container::{
     AttachContainerOptions, AttachContainerResults,
     Config, CreateContainerOptions,
@@ -12,12 +10,12 @@ use bollard::image::CreateImageOptions;
 use bollard::models::{ContainerStateStatusEnum, HostConfig, PortBinding};
 use bollard::Docker;
 use futures_util::stream::StreamExt;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
-use crate::games::{PortConfig, PortProtocol};
 use thiserror::Error;
 use uuid::Uuid;
+
+pub use localforge_core::{ContainerStats, DockerInfo, PortConfig, PortProtocol, ServerStatus};
 
 #[derive(Error, Debug)]
 #[allow(dead_code)]
@@ -33,14 +31,6 @@ pub enum DockerError {
 
     #[error("Attach failed: {0}")]
     AttachFailed(String),
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ContainerStats {
-    pub cpu_percent: f64,
-    pub memory_usage_mb: f64,
-    pub memory_limit_mb: f64,
-    pub memory_percent: f64,
 }
 
 pub struct DockerManager {

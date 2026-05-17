@@ -1,25 +1,8 @@
 // Docker-related commands
 
 use crate::docker::DockerManager;
-use serde::Serialize;
 
-#[derive(Debug, Serialize)]
-pub struct DockerStatus {
-    pub available: bool,
-    pub running: bool,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DockerInfo {
-    pub version: String,
-    pub api_version: String,
-    pub os: String,
-    pub arch: String,
-    pub containers_running: u64,
-    pub containers_total: u64,
-    pub images: u64,
-}
+pub use localforge_core::{DockerInfo, DockerStatus};
 
 /// Check if Docker is available and running
 #[tauri::command]

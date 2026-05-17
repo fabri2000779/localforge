@@ -1,6 +1,6 @@
 // Games manager - handles custom game definitions
 
-use crate::games::config::{get_builtin_games, GameConfig, GameType};
+use localforge_core::{get_builtin_games, GameConfig, GameType};
 use std::collections::HashMap;
 use std::path::PathBuf;
 

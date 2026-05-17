@@ -1,10 +1,9 @@
 use crate::commands::games::GamesState;
 use crate::docker::DockerManager;
-use crate::games::{build_env_vars, GameType};
+use crate::games::build_env_vars;
 use bollard::container::{LogOutput, LogsOptions};
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use futures_util::stream::StreamExt;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,62 +11,9 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Server {
-    pub id: String,
-    pub name: String,
-    pub game_type: GameType,
-    pub status: ServerStatus,
-    pub container_id: Option<String>,
-    pub port: u16,
-    pub memory_mb: u32,
-    pub data_path: PathBuf,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub config: HashMap<String, String>,
-    #[serde(default)]
-    pub installed: bool,
-    #[serde(default)]
-    pub install_container_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum ServerStatus {
-    Stopped,
-    Starting,
-    Installing,
-    Running,
-    Stopping,
-    Error,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CreateServerRequest {
-    pub name: String,
-    pub game_type: GameType,
-    pub port: Option<u16>,
-    pub config: Option<HashMap<String, String>>,
-    pub memory_mb: Option<u32>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ServerResponse {
-    pub success: bool,
-    pub server: Option<Server>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct LogsResponse {
-    pub logs: Vec<String>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LogEvent {
-    pub server_id: String,
-    pub line: String,
-}
+pub use localforge_core::{
+    CreateServerRequest, LogEvent, LogsResponse, Server, ServerResponse, ServerStatus,
+};
 
 pub struct LogStreamHandle {
     pub cancel_tx: tokio::sync::watch::Sender<bool>,
