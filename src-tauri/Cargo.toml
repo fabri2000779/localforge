@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "core"]
+members = [".", "core", "backend-local", "agent"]
 resolver = "2"
 
 [workspace.package]
@@ -36,6 +36,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 localforge-core = { path = "core" }
+localforge-backend-local = { path = "backend-local" }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-shell = "2"
 serde = { workspace = true }

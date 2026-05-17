@@ -1,0 +1,48 @@
+[package]
+name = "localforge-agent"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Remote agent that exposes a NodeBackend over HTTPS for the LocalForge desktop app to drive a VPS or dedicated host."
+
+[[bin]]
+name = "localforge-agent"
+path = "src/main.rs"
+
+[dependencies]
+localforge-core = { path = "../core" }
+localforge-backend-local = { path = "../backend-local" }
+
+# HTTP server + TLS
+axum = { version = "0.8", features = ["ws", "macros"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+hyper = "1"
+
+# TLS
+rustls = "0.23"
+rcgen = "0.13"
+
+# Async + serialization
+tokio = { workspace = true }
+tokio-stream = "0.1"
+futures-util = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+
+# Config + logging
+toml = "0.8"
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+ring = "0.17"
+
+# Path resolution on the agent host
+directories = "6"

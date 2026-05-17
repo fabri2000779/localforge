@@ -1,11 +1,10 @@
-//! `NodeBackend` implementations used by the desktop app.
+//! Tauri-side glue for the [`NodeBackend`] implementations.
 //!
-//! Today the only backend is [`local::LocalDockerBackend`]; later phases
-//! will add a `RemoteAgentBackend` that talks to a remote agent over HTTPS.
+//! The actual local backend lives in the `localforge-backend-local` crate
+//! (shared with the agent binary). This module just holds the Tauri state
+//! handle that wraps it.
 
-pub mod local;
-
-pub use local::LocalDockerBackend;
+pub use localforge_backend_local::LocalDockerBackend;
 
 use localforge_core::NodeBackend;
 use std::sync::Arc;

@@ -3,6 +3,7 @@
 //! per-node routing in Phase 3.
 
 use crate::backend::{BackendState, LocalDockerBackend};
+use crate::paths;
 use std::sync::Arc;
 use tauri::State;
 
@@ -32,7 +33,7 @@ pub async fn check_docker_status(state: State<'_, BackendState>) -> Result<Docke
     }
 
     // Slow path: try to (re)connect.
-    match LocalDockerBackend::connect().await {
+    match LocalDockerBackend::connect(paths::home_root()).await {
         Ok(backend) => {
             let arc: Arc<dyn localforge_core::NodeBackend> = Arc::new(backend);
             match arc.ping().await {

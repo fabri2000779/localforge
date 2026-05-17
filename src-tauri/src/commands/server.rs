@@ -8,8 +8,8 @@
 
 use crate::backend::BackendState;
 use crate::commands::games::GamesState;
-use crate::docker::DockerManager;
-use crate::persistence;
+use localforge_backend_local::DockerManager;
+use crate::paths;
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use futures_util::stream::StreamExt;
 use std::collections::HashMap;
@@ -81,7 +81,7 @@ pub async fn start_server(
     // First-launch install: if the game has an install script and the
     // server hasn't run it yet, run it before starting.
     let needs_install = {
-        let mut server = persistence::load_server(&server_id).map_err(|e| e.to_string())?;
+        let mut server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
         if server.installed {
             false
         } else {
@@ -93,7 +93,7 @@ pub async fn start_server(
                 .unwrap_or(false);
             if !has_install {
                 server.installed = true;
-                persistence::save_server(&server).map_err(|e| e.to_string())?;
+                paths::save_server(&server).map_err(|e| e.to_string())?;
             }
             has_install
         }
@@ -114,7 +114,7 @@ pub async fn start_server(
         start_log_stream(&server_id, backend.clone(), app, &server_state).await;
     }
 
-    let server = persistence::load_server(&server_id).map_err(|e| e.to_string())?;
+    let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
     Ok(ServerResponse {
         success: true,
         server: Some(server),
@@ -137,7 +137,7 @@ pub async fn stop_server(
     // seconds before forcing the container down.
     {
         let games_manager = games_state.manager.lock().await;
-        if let Ok(server) = persistence::load_server(&server_id) {
+        if let Ok(server) = paths::load_server(&server_id) {
             if let Some(game) = games_manager.get_game(&server.game_type) {
                 if !game.stop_command.is_empty() {
                     if let Some(backend) = state.local().await {
@@ -155,7 +155,7 @@ pub async fn stop_server(
         .await
         .map_err(|e| e.to_string())?;
 
-    let server = persistence::load_server(&server_id).map_err(|e| e.to_string())?;
+    let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
     Ok(ServerResponse {
         success: true,
         server: Some(server),
@@ -182,14 +182,14 @@ pub async fn delete_server(
             .await
             .map_err(|e| e.to_string())?;
     } else {
-        let server = persistence::load_server(&server_id).map_err(|e| e.to_string())?;
+        let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
         if let Some(container_id) = &server.container_id {
             let _ = backend.stop_server(&server_id).await;
             // Remove just the container, keep the data on disk.
             let docker = DockerManager::new().await.map_err(|e| e.to_string())?;
             let _ = docker.remove_container(container_id).await;
         }
-        persistence::delete_server_record(&server_id).map_err(|e| e.to_string())?;
+        paths::delete_server_record(&server_id).map_err(|e| e.to_string())?;
     }
 
     Ok(ServerResponse {
@@ -221,7 +221,7 @@ pub async fn get_server_status(
     server_id: String,
     state: State<'_, BackendState>,
 ) -> Result<ServerStatus, String> {
-    let server = persistence::load_server(&server_id).map_err(|e| e.to_string())?;
+    let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
     if server.status == ServerStatus::Installing {
         return Ok(ServerStatus::Installing);
     }
@@ -248,7 +248,7 @@ pub async fn send_command(
 
     // Minecraft fallback: containers that disable stdin still let us push a
     // command through `mc-send-to-console` (parkervcp/yolks ships it).
-    let server = persistence::load_server(&server_id).map_err(|e| e.to_string())?;
+    let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
     let container_id = server.container_id.ok_or("No container ID")?;
     let docker = DockerManager::new().await.map_err(|e| e.to_string())?;
     send_via_mc_console(&docker, &container_id, &command).await
@@ -412,7 +412,7 @@ pub async fn reinstall_server(
 ) -> Result<ServerResponse, String> {
     abort_stream(&server_id, &server_state).await;
 
-    let mut server = persistence::load_server(&server_id).map_err(|e| e.to_string())?;
+    let mut server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
 
     // Stop any running container first.
     if let Some(backend) = state.local().await {
@@ -431,7 +431,7 @@ pub async fn reinstall_server(
 
     server.installed = false;
     server.install_container_id = None;
-    persistence::save_server(&server).map_err(|e| e.to_string())?;
+    paths::save_server(&server).map_err(|e| e.to_string())?;
 
     let _ = app.emit("server-log", LogEvent {
         server_id: server_id.clone(),
@@ -477,7 +477,7 @@ pub async fn check_needs_install(
     server_id: String,
     games_state: State<'_, GamesState>,
 ) -> Result<bool, String> {
-    let server = persistence::load_server(&server_id).map_err(|e| e.to_string())?;
+    let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
     if server.installed {
         return Ok(false);
     }
@@ -497,7 +497,7 @@ async fn run_install_script_internal(
     tracing::info!("Running install script for server: {}", server_id);
 
     let docker = DockerManager::new().await.map_err(|e| e.to_string())?;
-    let mut server = persistence::load_server(server_id).map_err(|e| e.to_string())?;
+    let mut server = paths::load_server(server_id).map_err(|e| e.to_string())?;
 
     let (install_script, install_image, volume_path) = {
         let games_manager = games_state.manager.lock().await;
@@ -514,14 +514,14 @@ async fn run_install_script_internal(
             ),
             _ => {
                 server.installed = true;
-                persistence::save_server(&server).map_err(|e| e.to_string())?;
+                paths::save_server(&server).map_err(|e| e.to_string())?;
                 return Ok(server);
             }
         }
     };
 
     server.status = ServerStatus::Installing;
-    persistence::save_server(&server).map_err(|e| e.to_string())?;
+    paths::save_server(&server).map_err(|e| e.to_string())?;
 
     let _ = app.emit(
         "server-log",
@@ -539,9 +539,9 @@ async fn run_install_script_internal(
 
     let server_id_for_callback = server_id.to_string();
     let on_container_created = move |container_id: &str| {
-        if let Ok(mut srv) = persistence::load_server(&server_id_for_callback) {
+        if let Ok(mut srv) = paths::load_server(&server_id_for_callback) {
             srv.install_container_id = Some(container_id.to_string());
-            let _ = persistence::save_server(&srv);
+            let _ = paths::save_server(&srv);
         }
     };
 
@@ -601,12 +601,12 @@ async fn run_install_script_internal(
         .await
         .ok();
 
-    let mut server = persistence::load_server(server_id).map_err(|e| e.to_string())?;
+    let mut server = paths::load_server(server_id).map_err(|e| e.to_string())?;
     if exit_code == 0 {
         server.installed = true;
         server.status = ServerStatus::Stopped;
         server.install_container_id = None;
-        persistence::save_server(&server).map_err(|e| e.to_string())?;
+        paths::save_server(&server).map_err(|e| e.to_string())?;
         let _ = app.emit(
             "server-log",
             LogEvent {
@@ -618,7 +618,7 @@ async fn run_install_script_internal(
     } else {
         server.status = ServerStatus::Error;
         server.install_container_id = None;
-        persistence::save_server(&server).map_err(|e| e.to_string())?;
+        paths::save_server(&server).map_err(|e| e.to_string())?;
         let _ = app.emit(
             "server-log",
             LogEvent {

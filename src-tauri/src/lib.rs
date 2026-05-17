@@ -2,6 +2,5 @@
 
 pub mod backend;
 pub mod commands;
-pub mod docker;
 pub mod games;
-pub mod persistence;
+pub mod paths;

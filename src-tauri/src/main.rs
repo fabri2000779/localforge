@@ -5,9 +5,8 @@
 
 mod backend;
 mod commands;
-mod docker;
 mod games;
-mod persistence;
+mod paths;
 
 use backend::BackendState;
 use commands::games::GamesState;
@@ -34,21 +33,13 @@ fn main() {
             let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
             std::fs::create_dir_all(&app_data_dir).ok();
 
-            if let Some(home) = directories::UserDirs::new() {
-                let servers_dir = home.home_dir().join("LocalForge").join("servers");
-                std::fs::create_dir_all(&servers_dir).ok();
-
-                let config_dir = home.home_dir().join("LocalForge").join("config");
-                std::fs::create_dir_all(&config_dir).ok();
-            }
-
-            // Try to bring up the local backend at startup. If Docker isn't
-            // running yet this leaves `BackendState::local` as None and the
-            // UI will surface the Docker-required screen; the user's
-            // "retry" click re-runs the same connect via check_docker_status.
+            // Connect the local Docker backend in the background; if Docker
+            // is offline this leaves BackendState::local as None and the UI
+            // shows the Docker-required screen.
+            let data_root = paths::home_root();
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match backend::LocalDockerBackend::connect().await {
+                match backend::LocalDockerBackend::connect(data_root).await {
                     Ok(b) => {
                         let state: tauri::State<BackendState> = handle.state();
                         state.install_local(Arc::new(b)).await;

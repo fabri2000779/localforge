@@ -22,22 +22,36 @@ use uuid::Uuid;
 
 pub struct LocalDockerBackend {
     docker: DockerManager,
+    data_root: PathBuf,
 }
 
 impl LocalDockerBackend {
     /// Try to connect to the local Docker daemon. Returns an error if the
     /// socket is unreachable; the caller can surface that to the UI as the
     /// Docker-required screen.
-    pub async fn connect() -> Result<Self> {
+    ///
+    /// `data_root` is the directory under which servers/, config/ and
+    /// other on-disk state live. The desktop passes `~/LocalForge`, the
+    /// agent passes whatever was configured at install time.
+    pub async fn connect(data_root: PathBuf) -> Result<Self> {
         let docker = DockerManager::new()
             .await
             .map_err(|e| BackendError::NotConnected(e.to_string()))?;
-        Ok(Self { docker })
+        std::fs::create_dir_all(persistence::servers_data_root(&data_root))
+            .map_err(BackendError::io)?;
+        std::fs::create_dir_all(persistence::servers_config_dir(&data_root))
+            .map_err(BackendError::io)?;
+        Ok(Self { docker, data_root })
+    }
+
+    /// Borrow the configured data root.
+    pub fn data_root(&self) -> &Path {
+        &self.data_root
     }
 
     /// Resolve a server id to the full record, or return [`BackendError::NotFound`].
-    fn require_server(id: &str) -> Result<Server> {
-        persistence::load_server(id).map_err(|e| match e.kind() {
+    fn require_server(&self, id: &str) -> Result<Server> {
+        persistence::load_server(&self.data_root, id).map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => BackendError::not_found(format!("server '{}'", id)),
             _ => BackendError::io(e),
         })
@@ -59,11 +73,11 @@ impl NodeBackend for LocalDockerBackend {
     // ---- server read-side ------------------------------------------------
 
     async fn list_servers(&self) -> Result<Vec<Server>> {
-        persistence::list_servers().map_err(BackendError::io)
+        persistence::list_servers(&self.data_root).map_err(BackendError::io)
     }
 
     async fn get_server(&self, id: &str) -> Result<Option<Server>> {
-        match persistence::load_server(id) {
+        match persistence::load_server(&self.data_root, id) {
             Ok(s) => Ok(Some(s)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(BackendError::io(e)),
@@ -71,7 +85,7 @@ impl NodeBackend for LocalDockerBackend {
     }
 
     async fn server_status(&self, id: &str) -> Result<ServerStatus> {
-        let server = Self::require_server(id)?;
+        let server = self.require_server(id)?;
         let container_id = server
             .container_id
             .ok_or_else(|| BackendError::invalid("server has no container_id"))?;
@@ -82,7 +96,7 @@ impl NodeBackend for LocalDockerBackend {
     }
 
     async fn get_stats(&self, id: &str) -> Result<ContainerStats> {
-        let server = Self::require_server(id)?;
+        let server = self.require_server(id)?;
         let container_id = server
             .container_id
             .ok_or_else(|| BackendError::invalid("server has no container_id"))?;
@@ -93,13 +107,13 @@ impl NodeBackend for LocalDockerBackend {
     }
 
     async fn get_disk_usage(&self, id: &str) -> Result<u64> {
-        let server = Self::require_server(id)?;
-        let path = persistence::server_data_path(&server);
+        let server = self.require_server(id)?;
+        let path = persistence::server_data_path(&self.data_root, &server);
         persistence::directory_size(&path).map_err(BackendError::io)
     }
 
     async fn get_logs(&self, id: &str, lines: usize) -> Result<Vec<String>> {
-        let server = Self::require_server(id)?;
+        let server = self.require_server(id)?;
         // Prefer install-container logs while installing, otherwise the
         // running container's logs.
         let container_id = server
@@ -257,7 +271,7 @@ impl NodeBackend for LocalDockerBackend {
 
         let memory_mb = request.memory_mb.unwrap_or(game.recommended_ram_mb);
 
-        let data_path = persistence::servers_data_root()
+        let data_path = persistence::servers_data_root(&self.data_root)
             .join(game.game_type.to_string())
             .join(&server_id);
 
@@ -310,7 +324,7 @@ impl NodeBackend for LocalDockerBackend {
             install_container_id: None,
         };
 
-        persistence::save_server(&server).map_err(BackendError::io)?;
+        persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
         Ok(server)
     }
 
@@ -319,14 +333,14 @@ impl NodeBackend for LocalDockerBackend {
         id: &str,
         config: HashMap<String, String>,
     ) -> Result<Server> {
-        let mut server = Self::require_server(id)?;
+        let mut server = self.require_server(id)?;
         server.config = config;
-        persistence::save_server(&server).map_err(BackendError::io)?;
+        persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
         Ok(server)
     }
 
     async fn delete_server(&self, id: &str) -> Result<()> {
-        let server = Self::require_server(id)?;
+        let server = self.require_server(id)?;
 
         // Best-effort stop + remove of the runtime container (ignore errors —
         // the container may already be gone).
@@ -345,12 +359,12 @@ impl NodeBackend for LocalDockerBackend {
         if server.data_path.exists() {
             std::fs::remove_dir_all(&server.data_path).map_err(BackendError::io)?;
         }
-        persistence::delete_server_record(id).map_err(BackendError::io)?;
+        persistence::delete_server_record(&self.data_root, id).map_err(BackendError::io)?;
         Ok(())
     }
 
     async fn start_server(&self, id: &str) -> Result<ServerStatus> {
-        let mut server = Self::require_server(id)?;
+        let mut server = self.require_server(id)?;
         let container_id = server
             .container_id
             .clone()
@@ -374,12 +388,12 @@ impl NodeBackend for LocalDockerBackend {
         }
 
         server.status = status.clone();
-        persistence::save_server(&server).map_err(BackendError::io)?;
+        persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
         Ok(status)
     }
 
     async fn stop_server(&self, id: &str) -> Result<ServerStatus> {
-        let mut server = Self::require_server(id)?;
+        let mut server = self.require_server(id)?;
         let container_id = server
             .container_id
             .clone()
@@ -397,12 +411,12 @@ impl NodeBackend for LocalDockerBackend {
             .map_err(BackendError::docker)?;
 
         server.status = status.clone();
-        persistence::save_server(&server).map_err(BackendError::io)?;
+        persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
         Ok(status)
     }
 
     async fn send_command(&self, id: &str, command: &str) -> Result<()> {
-        let server = Self::require_server(id)?;
+        let server = self.require_server(id)?;
         let container_id = server
             .container_id
             .ok_or_else(|| BackendError::invalid("server has no container"))?;
@@ -420,7 +434,7 @@ impl NodeBackend for LocalDockerBackend {
     }
 
     async fn stream_logs(&self, id: &str) -> Result<LogStream> {
-        let server = Self::require_server(id)?;
+        let server = self.require_server(id)?;
         let container_id = server
             .container_id
             .ok_or_else(|| BackendError::invalid("server has no container"))?;

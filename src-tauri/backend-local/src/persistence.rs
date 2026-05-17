@@ -1,69 +1,60 @@
-//! On-disk persistence of server records.
+//! On-disk persistence of server records, scoped to a configurable root.
 //!
-//! Server data and config files live under `~/LocalForge/`:
-//!   - `~/LocalForge/servers/<game>/<id>/`  — game world / config / saves
-//!   - `~/LocalForge/config/<id>.json`     — serialised [`Server`] record
-//!   - `~/LocalForge/games/custom_games.json` — user-authored game catalogue
+//! Under `<root>/`:
+//!   - `servers/<game>/<id>/`  — game world / config / saves
+//!   - `config/<id>.json`      — serialised [`Server`] record
 //!
-//! This module owns those paths and the JSON read/write logic; both the
-//! local backend and any future migration tools should go through it.
+//! The desktop app uses `~/LocalForge` as the root; the agent uses
+//! whatever path is configured at install time (typically
+//! `/var/lib/localforge`).
 
 use localforge_core::Server;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-const APP_DIR: &str = "LocalForge";
-
-fn home_root() -> PathBuf {
-    directories::UserDirs::new()
-        .map(|d| d.home_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(APP_DIR)
+pub fn servers_data_root(root: &Path) -> PathBuf {
+    root.join("servers")
 }
 
-pub fn servers_data_root() -> PathBuf {
-    home_root().join("servers")
+pub fn servers_config_dir(root: &Path) -> PathBuf {
+    root.join("config")
 }
 
-pub fn servers_config_dir() -> PathBuf {
-    home_root().join("config")
+pub fn server_config_path(root: &Path, server_id: &str) -> PathBuf {
+    servers_config_dir(root).join(format!("{}.json", server_id))
 }
 
-pub fn server_config_path(server_id: &str) -> PathBuf {
-    servers_config_dir().join(format!("{}.json", server_id))
-}
-
-pub fn server_data_path(server: &Server) -> PathBuf {
-    servers_data_root()
+pub fn server_data_path(root: &Path, server: &Server) -> PathBuf {
+    servers_data_root(root)
         .join(server.game_type.to_string())
         .join(&server.id)
 }
 
-pub fn load_server(server_id: &str) -> std::io::Result<Server> {
-    let path = server_config_path(server_id);
+pub fn load_server(root: &Path, server_id: &str) -> std::io::Result<Server> {
+    let path = server_config_path(root, server_id);
     let body = std::fs::read_to_string(path)?;
     serde_json::from_str(&body)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
-pub fn save_server(server: &Server) -> std::io::Result<()> {
-    let dir = servers_config_dir();
+pub fn save_server(root: &Path, server: &Server) -> std::io::Result<()> {
+    let dir = servers_config_dir(root);
     std::fs::create_dir_all(&dir)?;
-    let path = server_config_path(&server.id);
+    let path = server_config_path(root, &server.id);
     let body = serde_json::to_string_pretty(server)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     std::fs::write(path, body)
 }
 
-pub fn delete_server_record(server_id: &str) -> std::io::Result<()> {
-    let path = server_config_path(server_id);
+pub fn delete_server_record(root: &Path, server_id: &str) -> std::io::Result<()> {
+    let path = server_config_path(root, server_id);
     if path.exists() {
         std::fs::remove_file(path)?;
     }
     Ok(())
 }
 
-pub fn list_servers() -> std::io::Result<Vec<Server>> {
-    let dir = servers_config_dir();
+pub fn list_servers(root: &Path) -> std::io::Result<Vec<Server>> {
+    let dir = servers_config_dir(root);
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -86,7 +77,7 @@ pub fn list_servers() -> std::io::Result<Vec<Server>> {
 }
 
 /// Recursively compute the size of a path on disk.
-pub fn directory_size(path: &std::path::Path) -> std::io::Result<u64> {
+pub fn directory_size(path: &Path) -> std::io::Result<u64> {
     if path.is_file() {
         return Ok(std::fs::metadata(path)?.len());
     }
