@@ -93,14 +93,21 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Sanitise Apple signing secrets (macOS only)
+      - name: Sanitise CI signing secrets
         # Secrets uploaded via `gh secret set` from PowerShell can ship
-        # with a UTF-8 BOM (EF BB BF) and/or trailing CR/LF that
-        # tauri-action's base64 decoder rejects with
-        # "Invalid symbol 239, offset 0". We re-export each one with
-        # those stripped so the build step gets clean values.
-        if: runner.os == 'macOS'
+        # with a UTF-8 BOM (EF BB BF) and/or trailing CR/LF that the
+        # downstream consumers reject with "Invalid symbol 239, offset 0"
+        # (tauri-cli's minisign decoder, tauri-action's base64 cert
+        # decoder, etc.). Re-export each one with those stripped so the
+        # build step gets clean values.
+        #
+        # This step also runs on Linux + Windows because the Tauri
+        # updater signing key is shared across all three platforms.
+        # `shell: bash` works on Windows too via git-bash.
+        shell: bash
         env:
+          RAW_TAURI_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RAW_TAURI_PASS: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RAW_CERT: ${{ secrets.APPLE_CERTIFICATE }}
           RAW_CERT_PASS: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           RAW_IDENT: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -116,6 +123,18 @@ jobs:
               | tr -d '\r\n' \
               | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
           }
+
+          # Tauri updater signing — applies on every platform.
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY=$(sanitise "$RAW_TAURI_KEY")"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$(sanitise "$RAW_TAURI_PASS")"
+          } >> "$GITHUB_ENV"
+
+          # macOS-only Apple signing + notarization.
+          if [ "$RUNNER_OS" != "macOS" ]; then
+            exit 0
+          fi
+
           {
             echo "APPLE_CERTIFICATE=$(sanitise "$RAW_CERT")"
             echo "APPLE_CERTIFICATE_PASSWORD=$(sanitise "$RAW_CERT_PASS")"
@@ -146,12 +165,16 @@ jobs:
         # `tauri build` directly (see next step) so we have to import
         # the .p12 ourselves. Without this step the macOS build still
         # works but produces an unsigned (and un-notarisable) bundle.
+        #
+        # We read from `env.*` rather than `secrets.*` so we pick up
+        # the BOM-stripped values exported by the Sanitise step —
+        # otherwise the base64 decoder errors with "Invalid symbol 239".
         if: runner.os == 'macOS'
         uses: apple-actions/import-codesign-certs@v3
         with:
-          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
-          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
+          p12-file-base64: ${{ env.APPLE_CERTIFICATE }}
+          p12-password: ${{ env.APPLE_CERTIFICATE_PASSWORD }}
+          keychain-password: ${{ env.KEYCHAIN_PASSWORD }}
 
       - name: Build Tauri app
         # We call `tauri build` directly instead of going through
@@ -162,20 +185,13 @@ jobs:
         # the auto-updater can't ship, so we run the bundler ourselves
         # and upload everything in the next step before anything can
         # be cleaned up.
+        #
+        # All signing env vars (TAURI_SIGNING_*, APPLE_*) are already
+        # in the process env via $GITHUB_ENV — the Sanitise step
+        # exports them with BOM/CRLF stripped — so we deliberately
+        # don't re-declare them here (overriding them would re-introduce
+        # the BOM that the build's base64 decoder rejects).
         shell: bash
-        env:
-          # Updater signing keys — tauri-cli generates one .sig per
-          # bundle when these are set.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS signing identity + notarytool auth — already exported
-          # to GITHUB_ENV (BOM-stripped) by the Sanitise step. We
-          # re-state them here for visibility; tauri-cli picks them up
-          # from the process env regardless.
-          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_ISSUER: ${{ env.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ env.APPLE_API_KEY }}
-          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
         run: |
           set -euo pipefail
           # shellcheck disable=SC2086 — intentional word splitting on $args.
