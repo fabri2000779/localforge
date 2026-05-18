@@ -11,8 +11,6 @@
 use serde::Serialize;
 
 use super::{api, auth};
-use crate::backend::NodeRegistry;
-use localforge_core::NodeId;
 
 #[derive(Debug, Serialize)]
 struct AuditPayload<'a> {
@@ -58,25 +56,6 @@ async fn emit_inner(
     )
     .await?;
     Ok(())
-}
-
-/// Helper a few future callers will want: pull the server's name for
-/// the `target` field so audit entries read like "server.start: My
-/// Minecraft". Kept here but unused today — wire it in when the audit
-/// log gets a viewer page.
-#[allow(dead_code)]
-pub async fn server_target(
-    state: &tauri::State<'_, NodeRegistry>,
-    server_id: &str,
-) -> Option<String> {
-    let backend = state.backend(&NodeId::local()).await?;
-    backend
-        .list_servers()
-        .await
-        .ok()?
-        .into_iter()
-        .find(|s| s.id == server_id)
-        .map(|s| format!("{} ({})", s.name, server_id))
 }
 
 // Re-export for callers that have `&AppHandle`.

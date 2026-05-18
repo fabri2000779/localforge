@@ -45,19 +45,6 @@ pub enum ApiError {
     },
 }
 
-impl ApiError {
-    /// Machine-readable error code. Useful for callers that want to
-    /// pattern-match on `code` without destructuring the full enum.
-    #[allow(dead_code)]
-    pub fn code(&self) -> &str {
-        match self {
-            ApiError::Server { code, .. } => code,
-            ApiError::Network(_) => "network",
-            ApiError::Decode(_) => "decode",
-        }
-    }
-}
-
 /// Serialize for tauri::command return values — the frontend gets a
 /// `{ code, status, message }` object on rejection.
 impl serde::Serialize for ApiError {
