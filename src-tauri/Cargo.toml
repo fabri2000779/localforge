@@ -3,7 +3,7 @@ members = [".", "core", "backend-local", "backend-remote", "agent"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.13"
+version = "0.1.14"
 authors = ["Fabrizio"]
 edition = "2021"
 license = "MIT"
@@ -61,7 +61,18 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # OS-native credential storage (Win Credential Manager, macOS Keychain,
 # Linux Secret Service). Used to stash the JWT — never localStorage.
-keyring = "3"
+# IMPORTANT: keyring 3.x ships a mock backend by default. Each platform
+# needs an explicit feature flag, otherwise save_token() silently
+# succeeds and load_token() always returns NoEntry — meaning the user
+# appears to log in, the name flashes from /me, then on the next
+# render the panel reads the keychain (empty), nulls `me`, and shows
+# the sign-in prompt again. Reported by user in v0.1.12 dogfood.
+keyring = { version = "3", features = [
+  "windows-native",
+  "apple-native",
+  "sync-secret-service",
+  "linux-native-sync-persistent",
+] }
 # Cloud API client. rustls so we don't depend on the system OpenSSL.
 # `rustls-no-provider` matches what the backend-remote crate uses, so
 # Cargo dedupes the dependency tree.
