@@ -44,8 +44,25 @@ interface NodesState {
   }) => Promise<{ linux: string; windows: string }>;
 }
 
+/**
+ * The local Docker node is *always* present — it's the user's own
+ * machine and the backend's `list_nodes` always returns at least this
+ * entry. Pre-populating it in initial state means the UI doesn't flash
+ * "Loading…" while the first `fetchNodes` round-trips, and if that fetch
+ * ever fails the user still sees a working entry for their own box
+ * instead of being stuck on a loading placeholder forever.
+ *
+ * The real `list_nodes` response will overwrite this array (still
+ * including the local node, plus any remotes the user has paired).
+ */
+const LOCAL_NODE_FALLBACK: NodeRecord = {
+  id: 'local',
+  label: 'This machine',
+  kind: { kind: 'local' },
+};
+
 export const useNodesStore = create<NodesState>((set, get) => ({
-  nodes: [],
+  nodes: [LOCAL_NODE_FALLBACK],
   isLoading: false,
   error: null,
   activeNodeId: 'local',
@@ -56,8 +73,15 @@ export const useNodesStore = create<NodesState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const nodes = await invoke<NodeRecord[]>('list_nodes');
-      set({ nodes, isLoading: false });
+      // Defensive: if the backend somehow returns an empty list, fall
+      // back to the local node so the dropdown is never empty.
+      set({
+        nodes: nodes.length > 0 ? nodes : [LOCAL_NODE_FALLBACK],
+        isLoading: false,
+      });
     } catch (e) {
+      // Keep whatever we already have (which at minimum is the local
+      // fallback) so the UI keeps working when offline.
       set({ error: String(e), isLoading: false });
     }
   },

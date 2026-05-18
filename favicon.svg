@@ -1,23 +1,29 @@
 <!--
-  Favicon — drop the inner highlight stripe and the spark glow at this
-  size; they turn to mud at 16×16. Keep only the gradient + L bracket +
-  a single hard spark pixel so the silhouette still reads at the tab
-  level.
+  Favicon — simplified for 16-32 px tab rendering.
+  Drops the gradients, glows, route, and floating sparks from
+  logo-mark.svg. Keeps the iconic silhouette: rounded dark square +
+  hexagonal container outline + a stylised LF monogram inside +
+  the two local/remote node dots.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="LocalForge">
-  <defs>
-    <linearGradient id="f-bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#3b82f6"/>
-      <stop offset="50%" stop-color="#6366f1"/>
-      <stop offset="100%" stop-color="#8b5cf6"/>
-    </linearGradient>
-  </defs>
+  <rect width="32" height="32" rx="7" fill="#0b1020"/>
 
-  <rect width="32" height="32" rx="7" fill="url(#f-bg)"/>
+  <!-- Hexagonal container -->
+  <path d="M16 4 L26 9.5 V22.5 L16 28 L6 22.5 V9.5 Z"
+        fill="none" stroke="#60a5fa" stroke-width="1.6"
+        stroke-linejoin="round"/>
 
-  <path d="M 10 7 L 10 21 Q 10 25 14 25 L 25 25"
-        fill="none" stroke="#ffffff" stroke-width="3.5"
+  <!-- LF monogram, simplified.
+       L stem + rounded corner + horizontal foot,
+       F stem + top arm + middle arm. -->
+  <path d="M11.5 10 v8 a2 2 0 0 0 2 2 h3.5"
+        fill="none" stroke="#60a5fa" stroke-width="2.2"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M17.5 21 V11.5 h5 M17.5 16 h3.8"
+        fill="none" stroke="#a78bfa" stroke-width="2.2"
         stroke-linecap="round" stroke-linejoin="round"/>
 
-  <circle cx="26" cy="6" r="2.5" fill="#fde68a"/>
+  <!-- Local + remote node dots -->
+  <circle cx="9"  cy="22" r="1.4" fill="#38bdf8"/>
+  <circle cx="23" cy="11" r="1.4" fill="#a78bfa"/>
 </svg>

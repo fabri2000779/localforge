@@ -73,25 +73,44 @@ export function TitleBar() {
 function BrandGlyph() {
   return (
     <div
-      className="relative w-5 h-5 rounded-md flex items-center justify-center pointer-events-none"
+      className="relative w-5 h-5 rounded-md flex items-center justify-center pointer-events-none overflow-hidden"
       style={{
         background:
-          'linear-gradient(135deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%)',
+          'linear-gradient(135deg, #101827 0%, #07090f 55%, #0b1020 100%)',
         boxShadow:
-          '0 0 0 1px rgba(99, 102, 241, 0.35), 0 2px 6px -1px rgba(99, 102, 241, 0.5)',
+          '0 0 0 1px rgba(99, 102, 241, 0.30), 0 2px 6px -1px rgba(99, 102, 241, 0.40)',
       }}
     >
-      {/* LocalForge mark — L-bracket + forge spark.
-       * Matches localforge-cloud/brand/logo-mark.svg. */}
+      {/* LocalForge mark — hex container + LF monogram + 2 endpoint dots.
+       * Simplified variant of localforge-cloud/brand/logo-mark.svg
+       * tuned for ~20px chrome. Matches favicon.svg. */}
       <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
+        {/* Hex container */}
         <path
-          d="M 10 7 L 10 21 Q 10 25 14 25 L 25 25"
-          stroke="white"
-          strokeWidth="3.5"
+          d="M16 4 L26 9.5 V22.5 L16 28 L6 22.5 V9.5 Z"
+          stroke="#60a5fa"
+          strokeWidth="1.6"
+          strokeLinejoin="round"
+        />
+        {/* L stroke */}
+        <path
+          d="M11.5 10 v8 a2 2 0 0 0 2 2 h3.5"
+          stroke="#60a5fa"
+          strokeWidth="2.2"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
-        <circle cx="26" cy="6" r="2.2" fill="#fde68a" />
+        {/* F stroke */}
+        <path
+          d="M17.5 21 V11.5 h5 M17.5 16 h3.8"
+          stroke="#a78bfa"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        {/* Endpoint dots: local (cyan) + remote (violet) */}
+        <circle cx="9" cy="22" r="1.4" fill="#38bdf8" />
+        <circle cx="23" cy="11" r="1.4" fill="#a78bfa" />
       </svg>
     </div>
   );
