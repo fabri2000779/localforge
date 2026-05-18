@@ -81,15 +81,17 @@ function BrandGlyph() {
           '0 0 0 1px rgba(99, 102, 241, 0.35), 0 2px 6px -1px rgba(99, 102, 241, 0.5)',
       }}
     >
-      {/* Stylised "L" anvil — sharp + minimal */}
-      <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+      {/* LocalForge mark — L-bracket + forge spark.
+       * Matches localforge-cloud/brand/logo-mark.svg. */}
+      <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
         <path
-          d="M3 1.5v6.2c0 .4.3.8.8.8H9"
+          d="M 10 7 L 10 21 Q 10 25 14 25 L 25 25"
           stroke="white"
-          strokeWidth="1.5"
+          strokeWidth="3.5"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
+        <circle cx="26" cy="6" r="2.2" fill="#fde68a" />
       </svg>
     </div>
   );
