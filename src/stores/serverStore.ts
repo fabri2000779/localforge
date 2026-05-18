@@ -312,6 +312,10 @@ export const useServerStore = create<ServerState>((set, get) => ({
     }
 
     try {
+      // The xterm listener subscribes to local `server-log` Tauri events
+      // regardless of who emitted them. In sub-user mode, the
+      // RelayLogBridge re-emits relay `console_line` events as local
+      // `server-log` events, so this single listener feeds both modes.
       const unlisten = await listen<LogEvent>('server-log', (event) => {
         if (event.payload.server_id === serverId) {
           set((state) => ({ logs: [...state.logs, event.payload.line] }));
@@ -320,10 +324,30 @@ export const useServerStore = create<ServerState>((set, get) => ({
 
       set({ logUnlisten: unlisten, isStreaming: true });
 
-      await invoke('attach_server', {
-        serverId,
-        nodeId: currentNodeId(),
-      });
+      // Route the actual "start the stream" call. Owner: local Tauri
+      // command kicks Docker's log reader. Sub-user: relay cmd asks
+      // the owner's RelayCommandExecutor to do the same on their
+      // hardware, and the owner's RelayLogBridge forwards each line.
+      const route = await routeServerAction('server.start' /* unused */, { serverId });
+      // The route helper signature requires an ActionKind we have in
+      // the map; reuse the more-specific attach for clarity.
+      if (route.via === 'local') {
+        await invoke('attach_server', {
+          serverId,
+          nodeId: currentNodeId(),
+        });
+      } else {
+        // Send the attach cmd explicitly — we re-used routeServerAction
+        // above just to know which path we're on.
+        await invoke('cloud_relay_send_cmd', {
+          payload: {
+            type: 'cmd',
+            cmd: 'server.attach',
+            target: serverId,
+            request_id: `attach.${serverId}.${Date.now()}`,
+          },
+        });
+      }
     } catch (error) {
       console.error('[Store] attachToServer error:', error);
       set({ isStreaming: false });
@@ -337,9 +361,21 @@ export const useServerStore = create<ServerState>((set, get) => ({
       set({ logUnlisten: null, isStreaming: false });
     }
     try {
-      await invoke('detach_server', { serverId });
+      const route = await routeServerAction('server.stop' /* unused */, { serverId });
+      if (route.via === 'local') {
+        await invoke('detach_server', { serverId });
+      } else {
+        await invoke('cloud_relay_send_cmd', {
+          payload: {
+            type: 'cmd',
+            cmd: 'server.detach',
+            target: serverId,
+            request_id: `detach.${serverId}.${Date.now()}`,
+          },
+        });
+      }
     } catch {
-      // Ignore
+      // Ignore — best-effort.
     }
   },
 

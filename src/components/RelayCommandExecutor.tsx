@@ -34,6 +34,13 @@ const CMD_MAP: Record<string, { tauri: string; minRole: OrgRole; argTransform?: 
   'server.stop':          { tauri: 'stop_server',   minRole: 'operator', argTransform: (c) => ({ serverId: c.target }) },
   'server.restart':       { tauri: 'stop_server',   minRole: 'operator', argTransform: (c) => ({ serverId: c.target }) },
   'server.send_command':  { tauri: 'send_command',  minRole: 'operator', argTransform: (c) => ({ serverId: c.target, command: c.args?.command }) },
+  // attach / detach drive the log-stream lifecycle on the owner's
+  // machine. A sub-user opening ServerDetail sends attach so the
+  // owner's Rust starts emitting server-log events, which the
+  // RelayLogBridge forwards as console_line events the sub-user picks
+  // up.
+  'server.attach':        { tauri: 'attach_server', minRole: 'operator', argTransform: (c) => ({ serverId: c.target }) },
+  'server.detach':        { tauri: 'detach_server', minRole: 'operator', argTransform: (c) => ({ serverId: c.target }) },
   'server.update_config': { tauri: 'update_server_config', minRole: 'admin', argTransform: (c) => ({ serverId: c.target, config: c.args?.config }) },
   'server.delete':        { tauri: 'delete_server', minRole: 'admin',    argTransform: (c) => ({ serverId: c.target, deleteData: c.args?.deleteData ?? false }) },
   'server.reinstall':     { tauri: 'reinstall_server', minRole: 'admin', argTransform: (c) => ({ serverId: c.target }) },
