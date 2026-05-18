@@ -12,9 +12,13 @@
  * the app picks it up via cloud_me).
  */
 import { useEffect, useState } from 'react';
-import { Cloud, ExternalLink, Mail, ShieldCheck, AlertTriangle, LogOut } from 'lucide-react';
+import {
+  Cloud, ExternalLink, Mail, ShieldCheck, AlertTriangle, LogOut,
+  RefreshCw, KeyRound, Download, Upload,
+} from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { LoginDialog } from './LoginDialog';
+import { RecoveryKeyDialog } from './RecoveryKeyDialog';
 
 export function CloudAccountPanel() {
   const me = useAuthStore((s) => s.me);
@@ -25,9 +29,15 @@ export function CloudAccountPanel() {
   const resendVerification = useAuthStore((s) => s.resendVerification);
   const logout = useAuthStore((s) => s.logout);
 
+  const syncing = useAuthStore((s) => s.syncing);
+  const lastSyncedAt = useAuthStore((s) => s.lastSyncedAt);
+  const lastSyncResult = useAuthStore((s) => s.lastSyncResult);
+  const syncNow = useAuthStore((s) => s.syncNow);
+
   const [loginOpen, setLoginOpen] = useState(false);
   const [resendOk, setResendOk] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [keyDialog, setKeyDialog] = useState<'show' | 'import' | null>(null);
 
   // Re-pull /me when the panel mounts so the displayed plan is fresh
   // (the user might have just upgraded in a browser tab and come back).
@@ -156,8 +166,88 @@ export function CloudAccountPanel() {
           <span>Server configs sync end-to-end encrypted. The cloud can't read them.</span>
         </div>
       </section>
+
+      {/* Sync section — only meaningful for paid plans. The DB schema
+          allows free users to read /v1/sync/* in theory but the cloud
+          API 402s them, so we hide the section entirely to avoid
+          showing a button that always errors. */}
+      {plan !== 'free' && (
+        <section className="card mb-5">
+          <div className="section-header">
+            <div className="section-title">
+              <RefreshCw size={15} className="text-sky-400" />
+              Cloud sync
+            </div>
+            <button
+              className="btn-primary"
+              onClick={() => withBusy('sync', async () => { await syncNow(); })}
+              disabled={syncing}
+            >
+              <RefreshCw size={13} strokeWidth={2.2} className={syncing ? 'animate-spin' : ''} />
+              {syncing ? 'Syncing…' : 'Sync now'}
+            </button>
+          </div>
+
+          {lastSyncedAt && (
+            <div className="sync-meta">
+              <span>Last synced {relativeTime(lastSyncedAt)}.</span>
+              {lastSyncResult && (
+                <span>
+                  Pushed <strong>{lastSyncResult.pushed}</strong>, found
+                  {' '}<strong>{lastSyncResult.remote.length}</strong> in cloud
+                  {lastSyncResult.remote.filter((r) => !r.exists_locally).length > 0 && (
+                    <> · <strong>{lastSyncResult.remote.filter((r) => !r.exists_locally).length}</strong> not on this device</>
+                  )}
+                  {lastSyncResult.conflicts.length > 0 && (
+                    <> · <span className="text-amber-400">{lastSyncResult.conflicts.length} conflicts</span></>
+                  )}
+                </span>
+              )}
+            </div>
+          )}
+
+          {lastSyncResult && lastSyncResult.remote.some((r) => r.decrypt_error) && (
+            <div className="cloud-warn mt-2">
+              <AlertTriangle size={14} className="shrink-0 text-amber-400 mt-[2px]" />
+              <span>
+                Some cloud configs couldn't be decrypted with this device's recovery key.
+                If you set up sync on another device first, restore the key here from <strong>Recovery key → Restore</strong>.
+              </span>
+            </div>
+          )}
+
+          <div className="vault-actions">
+            <button className="btn-secondary" onClick={() => setKeyDialog('show')}>
+              <KeyRound size={13} strokeWidth={2.2} />
+              Show recovery key
+            </button>
+            <button className="btn-ghost" onClick={() => setKeyDialog('import')}>
+              <Upload size={13} strokeWidth={2.2} />
+              Restore from a key
+            </button>
+            <span className="sync-hint">
+              <Download size={11} className="inline mr-1" />
+              The key is on this device only — store it like a password.
+            </span>
+          </div>
+        </section>
+      )}
+
+      <RecoveryKeyDialog
+        open={keyDialog !== null}
+        mode={keyDialog ?? 'show'}
+        onClose={() => setKeyDialog(null)}
+      />
     </>
   );
+}
+
+function relativeTime(unixMs: number): string {
+  const delta = Date.now() - unixMs;
+  if (delta < 60_000) return 'just now';
+  if (delta < 3_600_000) return `${Math.round(delta / 60_000)}m ago`;
+  if (delta < 86_400_000) return `${Math.round(delta / 3_600_000)}h ago`;
+  return `${Math.round(delta / 86_400_000)}d ago`;
 }
 
 function TierCard({

@@ -9,7 +9,7 @@ use super::{api_origin, user_agent};
 
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-fn client() -> &'static reqwest::Client {
+pub(crate) fn client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .user_agent(user_agent())
@@ -22,7 +22,7 @@ fn client() -> &'static reqwest::Client {
 /// Shape of an error response from the cloud API.
 /// Most endpoints return `{ "error": "<code>", "message"?: "<detail>" }`.
 #[derive(Debug, serde::Deserialize)]
-pub struct ApiErrorBody {
+pub(crate) struct ApiErrorBody {
     pub error: String,
     #[serde(default)]
     pub message: Option<String>,

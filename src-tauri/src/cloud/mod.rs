@@ -13,6 +13,8 @@ pub mod auth;
 pub mod billing;
 pub mod keychain;
 pub mod oauth;
+pub mod sync;
+pub mod vault;
 
 /// The Cloud API base URL. Override at runtime with the
 /// `LOCALFORGE_CLOUD_API` env var when iterating locally.

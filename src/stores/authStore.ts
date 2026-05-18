@@ -56,6 +56,39 @@ interface AuthState {
   resendVerification: () => Promise<boolean>;
   openCheckout: (plan: 'hobby' | 'team') => Promise<boolean>;
   openPortal: () => Promise<boolean>;
+
+  // Tier 1 — cloud sync
+  syncing: boolean;
+  lastSyncedAt: number | null;
+  lastSyncResult: SyncResult | null;
+  syncNow: () => Promise<SyncResult | null>;
+  syncPull: () => Promise<RemoteServer[] | null>;
+  // Vault key
+  vaultExportKey: () => Promise<string | null>;
+  vaultImportKey: (b64: string) => Promise<boolean>;
+  vaultHasKey: () => Promise<boolean>;
+}
+
+export interface RemoteServer {
+  id: string;
+  name: string;
+  updated_at: number;
+  decrypted: {
+    id: string;
+    name: string;
+    game_type: string;
+    port: number;
+    memory_mb: number;
+    config: Record<string, string>;
+  } | null;
+  exists_locally: boolean;
+  decrypt_error: string | null;
+}
+
+export interface SyncResult {
+  pushed: number;
+  conflicts: string[];
+  remote: RemoteServer[];
 }
 
 function asErr(e: unknown): AuthError {
@@ -199,6 +232,71 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return true;
     } catch (e) {
       set({ error: asErr(e) });
+      return false;
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // Cloud sync (Tier 1)
+  // -------------------------------------------------------------------------
+  syncing: false,
+  lastSyncedAt: null,
+  lastSyncResult: null,
+
+  syncNow: async () => {
+    set({ syncing: true, error: null });
+    try {
+      const r = await invoke<SyncResult>('cloud_sync_now');
+      set({ syncing: false, lastSyncedAt: Date.now(), lastSyncResult: r });
+      return r;
+    } catch (e) {
+      set({ syncing: false, error: asErr(e) });
+      return null;
+    }
+  },
+
+  syncPull: async () => {
+    try {
+      const r = await invoke<RemoteServer[]>('cloud_sync_pull');
+      // Patch the cached SyncResult so the UI's "remote servers" list
+      // updates on relay-driven pulls too.
+      const prev = get().lastSyncResult;
+      set({
+        lastSyncedAt: Date.now(),
+        lastSyncResult: prev
+          ? { ...prev, remote: r }
+          : { pushed: 0, conflicts: [], remote: r },
+      });
+      return r;
+    } catch (e) {
+      set({ error: asErr(e) });
+      return null;
+    }
+  },
+
+  vaultExportKey: async () => {
+    try {
+      return await invoke<string>('cloud_vault_export_key');
+    } catch (e) {
+      set({ error: asErr(e) });
+      return null;
+    }
+  },
+
+  vaultImportKey: async (b64) => {
+    try {
+      await invoke<void>('cloud_vault_import_key', { keyB64: b64 });
+      return true;
+    } catch (e) {
+      set({ error: asErr(e) });
+      return false;
+    }
+  },
+
+  vaultHasKey: async () => {
+    try {
+      return await invoke<boolean>('cloud_vault_has_key');
+    } catch {
       return false;
     }
   },

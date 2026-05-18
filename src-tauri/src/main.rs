@@ -144,6 +144,11 @@ fn main() {
             cloud::oauth::cloud_oauth_start,
             cloud::billing::cloud_open_checkout,
             cloud::billing::cloud_open_portal,
+            cloud::vault::cloud_vault_export_key,
+            cloud::vault::cloud_vault_import_key,
+            cloud::vault::cloud_vault_has_key,
+            cloud::sync::cloud_sync_now,
+            cloud::sync::cloud_sync_pull,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -72,6 +72,16 @@ lazy_static = "1.5"
 futures-util = { workspace = true }
 base64 = "0.22"
 shell-words = "1.1"
+# Client-side AES-256-GCM for cloud-synced server configs. The cloud
+# never sees the plaintext — only the encrypted blob + a (server-side
+# unknown) random nonce per record.
+aes-gcm = "0.10"
+rand = "0.9"
+# WS client for the cloud relay. rustls so we don't pull OpenSSL.
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
+# We use this to compute a stable hash of a Server's cloud-relevant
+# fields so we can skip re-encrypt+upload when nothing changed.
+sha2 = "0.10"
 
 [features]
 default = ["custom-protocol"]
