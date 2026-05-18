@@ -33,6 +33,7 @@ export function CloudAccountPanel() {
   const lastSyncedAt = useAuthStore((s) => s.lastSyncedAt);
   const lastSyncResult = useAuthStore((s) => s.lastSyncResult);
   const syncNow = useAuthStore((s) => s.syncNow);
+  const exportData = useAuthStore((s) => s.exportData);
 
   const [loginOpen, setLoginOpen] = useState(false);
   const [resendOk, setResendOk] = useState(false);
@@ -68,7 +69,14 @@ export function CloudAccountPanel() {
   const plan = me.subscription.plan;
   const periodEnd = me.subscription.currentPeriodEnd;
   const cancelling = me.subscription.cancelAtPeriodEnd;
+  const purgeAt = me.subscription.purgeAt;
   const planLabel = plan[0]!.toUpperCase() + plan.slice(1);
+
+  // Retention warning thresholds (matches the cloud cron's email
+  // schedule: T-7 / T-1). Surface a banner inline regardless of the
+  // emails since the user might be ignoring email.
+  const purgeDays = purgeAt ? Math.max(0, Math.ceil((purgeAt - Date.now()) / 86_400_000)) : null;
+  const showPurgeBanner = purgeAt && purgeDays !== null && purgeDays <= 14;
 
   async function withBusy(key: string, fn: () => Promise<unknown>): Promise<void> {
     setBusy(key);
@@ -121,6 +129,19 @@ export function CloudAccountPanel() {
           </div>
         )}
 
+        {showPurgeBanner && (
+          <div className="cloud-warn cloud-warn-red">
+            <AlertTriangle size={14} className="shrink-0 text-red-400 mt-[2px]" />
+            <div className="flex-1">
+              <strong>Your cloud data will be deleted {purgeDays === 0 ? 'today' : purgeDays === 1 ? 'tomorrow' : `in ${purgeDays} days`}</strong>
+              <p>Re-subscribe to keep your synced configs, or export them below before the deletion runs.</p>
+            </div>
+            <button className="btn-primary" onClick={() => withBusy('hobby', () => openCheckout('hobby'))} disabled={busy === 'hobby'}>
+              Re-subscribe
+            </button>
+          </div>
+        )}
+
         {plan === 'free' ? (
           <div className="cloud-tiers">
             <TierCard
@@ -164,6 +185,22 @@ export function CloudAccountPanel() {
         <div className="cloud-foot">
           <ShieldCheck size={12} className="text-emerald-400" />
           <span>Server configs sync end-to-end encrypted. The cloud can't read them.</span>
+          <button
+            className="cloud-foot-link"
+            onClick={() => withBusy('export', async () => {
+              const path = await exportData();
+              if (path) {
+                // Quietly let the user know where it went. Tooltip-grade
+                // notification — we don't have a full toast system.
+                console.log('[export] saved to', path);
+              }
+            })}
+            disabled={busy === 'export'}
+            title="Download a JSON of everything we hold for you"
+          >
+            <Download size={11} />
+            {busy === 'export' ? '…' : 'Download my data'}
+          </button>
         </div>
       </section>
 

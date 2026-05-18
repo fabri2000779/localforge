@@ -159,6 +159,7 @@ fn main() {
             cloud::orgs::cloud_orgs_remove_member,
             cloud::orgs::cloud_orgs_accept_invite,
             cloud::audit::cloud_audit_emit,
+            cloud::auth::cloud_export_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

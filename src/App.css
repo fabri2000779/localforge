@@ -1359,3 +1359,35 @@ html {
   border-color: rgba(59, 130, 246, 0.55);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
 }
+
+/* Retention banner — same shape as cloud-warn but red since it's urgent. */
+.cloud-warn-red {
+  background: rgba(127, 29, 29, 0.25);
+  border-color: rgba(248, 113, 113, 0.32);
+  color: #fca5a5;
+}
+.cloud-warn-red strong { color: #fecaca; }
+.cloud-warn-red p { color: #fca5a5; }
+
+/* Footer link inside the cloud panel — "Download my data". */
+.cloud-foot-link {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  color: #93c5fd;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.cloud-foot-link:hover {
+  background: rgba(59, 130, 246, 0.10);
+  border-color: rgba(59, 130, 246, 0.30);
+  color: white;
+}
+.cloud-foot-link:disabled { opacity: 0.6; cursor: not-allowed; }

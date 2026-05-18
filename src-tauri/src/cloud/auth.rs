@@ -24,6 +24,11 @@ pub struct Subscription {
     pub cancel_at_period_end: bool,
     #[serde(rename = "trialEndsAt")]
     pub trial_ends_at: Option<i64>,
+    /// Unix ms when cloud-side data will be hard-deleted (set when the
+    /// user dropped to free; null while on a paid plan). Optional in
+    /// the API surface — older clients haven't seen it yet.
+    #[serde(rename = "purgeAt", default)]
+    pub purge_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,3 +167,53 @@ pub(super) async fn fetch_me(token: &str) -> Result<Me, api::ApiError> {
 pub fn current_token() -> Option<String> {
     keychain::load_token()
 }
+
+/// GET /v1/account/export, save the body to a path the user picks.
+/// Returns the absolute path written (or an error). The user sees a
+/// native save dialog so they choose where the file lands.
+#[tauri::command]
+pub async fn cloud_export_data(app: tauri::AppHandle) -> Result<String, api::ApiError> {
+    let token = current_token().ok_or_else(|| api::ApiError::Server {
+        status: 401,
+        code: "unauthenticated".into(),
+        message: None,
+    })?;
+    // Reuse the shared reqwest client so we don't open a fresh connection.
+    let url = format!("{}/v1/account/export", super::api_origin());
+    let res = api::client()
+        .get(&url)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(api::ApiError::Network)?;
+    if !res.status().is_success() {
+        return Err(api::ApiError::Server {
+            status: res.status().as_u16(),
+            code: "export_failed".into(),
+            message: None,
+        });
+    }
+    let body = res.bytes().await.map_err(api::ApiError::Network)?;
+    let default_name = format!(
+        "localforge-export-{}.json",
+        chrono::Utc::now().format("%Y-%m-%d")
+    );
+    // Use the dialog plugin to pick a destination path.
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+    app.dialog()
+        .file()
+        .add_filter("LocalForge export", &["json"])
+        .set_file_name(&default_name)
+        .save_file(move |path| {
+            let _ = tx.send(path.and_then(|p| p.into_path().ok()));
+        });
+    let chosen = rx
+        .recv()
+        .ok()
+        .flatten()
+        .ok_or_else(|| api::ApiError::Decode("cancelled".into()))?;
+    std::fs::write(&chosen, &body).map_err(|e| api::ApiError::Decode(format!("write: {e}")))?;
+    Ok(chosen.to_string_lossy().to_string())
+}
+

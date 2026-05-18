@@ -18,6 +18,9 @@ export interface Subscription {
   currentPeriodEnd: number | null;
   cancelAtPeriodEnd: boolean;
   trialEndsAt: number | null;
+  /** Unix ms when our cloud-side data will be hard-deleted. Set when
+   *  the user dropped to free; null while on a paid plan. */
+  purgeAt: number | null;
 }
 
 export interface Me {
@@ -67,6 +70,8 @@ interface AuthState {
   vaultExportKey: () => Promise<string | null>;
   vaultImportKey: (b64: string) => Promise<boolean>;
   vaultHasKey: () => Promise<boolean>;
+  /** Trigger the API export + native save dialog. Returns the chosen path or null. */
+  exportData: () => Promise<string | null>;
 }
 
 export interface RemoteServer {
@@ -319,6 +324,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return await invoke<boolean>('cloud_vault_has_key');
     } catch {
       return false;
+    }
+  },
+
+  exportData: async () => {
+    set({ error: null });
+    try {
+      return await invoke<string>('cloud_export_data');
+    } catch (e) {
+      // User-cancelled save is not really an error; swallow.
+      const ae = asErr(e);
+      if (ae.code === 'decode' && ae.message === 'cancelled') return null;
+      set({ error: ae });
+      return null;
     }
   },
 }));
