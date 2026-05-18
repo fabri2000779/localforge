@@ -9,10 +9,12 @@
 //! JWT storage in the OS keychain lives in `keychain.rs`. Stripe
 //! checkout / portal commands live in `billing.rs`.
 pub mod api;
+pub mod audit;
 pub mod auth;
 pub mod billing;
 pub mod keychain;
 pub mod oauth;
+pub mod orgs;
 pub mod relay;
 pub mod sync;
 pub mod vault;

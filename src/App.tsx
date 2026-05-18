@@ -15,6 +15,7 @@ import { Settings } from './pages/Settings';
 import { NodesPage } from './pages/Nodes';
 import { DockerRequired } from './components/DockerRequired';
 import { OAuthToast } from './components/OAuthToast';
+import { AcceptInviteToast } from './components/AcceptInviteToast';
 import { UpdateChecker } from './components/UpdateChecker';
 import './App.css';
 
@@ -80,6 +81,7 @@ function App() {
           </main>
         </div>
         <OAuthToast />
+        <AcceptInviteToast />
         <UpdateChecker />
       </div>
     </BrowserRouter>

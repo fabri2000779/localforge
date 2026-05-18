@@ -152,6 +152,13 @@ fn main() {
             cloud::sync::cloud_sync_pull,
             cloud::relay::cloud_relay_start,
             cloud::relay::cloud_relay_stop,
+            cloud::orgs::cloud_orgs_me,
+            cloud::orgs::cloud_orgs_invite,
+            cloud::orgs::cloud_orgs_list_invitations,
+            cloud::orgs::cloud_orgs_revoke_invitation,
+            cloud::orgs::cloud_orgs_remove_member,
+            cloud::orgs::cloud_orgs_accept_invite,
+            cloud::audit::cloud_audit_emit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

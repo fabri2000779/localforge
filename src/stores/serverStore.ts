@@ -15,6 +15,7 @@ import type {
   LogsResponse,
 } from '../types';
 import { useNodesStore } from './nodesStore';
+import { emitAudit } from '../utils/audit';
 
 interface LogEvent {
   server_id: string;
@@ -129,6 +130,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
         serverId,
         nodeId: currentNodeId(),
       });
+      emitAudit('server.start', serverId);
       await get().fetchServers();
       get().startStatsPolling(serverId);
       set({ isLoading: false });
@@ -146,6 +148,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
         serverId,
         nodeId: currentNodeId(),
       });
+      emitAudit('server.stop', serverId);
       await get().detachFromServer(serverId);
       await get().fetchServers();
       set({ isLoading: false, stats: null, isStreaming: false });
@@ -164,6 +167,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
         deleteData,
         nodeId: currentNodeId(),
       });
+      emitAudit('server.delete', serverId, { deleteData });
       const selected = get().selectedServer;
       if (selected?.id === serverId) set({ selectedServer: null });
       await get().fetchServers();
@@ -181,6 +185,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
         nodeId: currentNodeId(),
       });
       if (response.success) {
+        emitAudit('server.update_config', serverId);
         await get().fetchServers();
         return true;
       }
@@ -244,6 +249,12 @@ export const useServerStore = create<ServerState>((set, get) => ({
         serverId,
         command,
         nodeId: currentNodeId(),
+      });
+      // Truncate the command in metadata — full text could contain
+      // sensitive paths / args. The audit's purpose is "Bob ran a
+      // console cmd at 12:34", not auditable transcript.
+      emitAudit('server.send_command', serverId, {
+        command_preview: command.slice(0, 60),
       });
       return result;
     } catch (error) {

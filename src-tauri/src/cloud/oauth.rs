@@ -43,9 +43,19 @@ pub async fn cloud_oauth_start(app: AppHandle, provider: String) -> Result<(), S
 /// `tauri-plugin-deep-link` `on_open_url` callback. Tolerates noise (URLs
 /// for unrelated schemes/paths) by ignoring them silently.
 pub async fn handle_deep_link(app: AppHandle, url: String) {
-    if !url.starts_with("localforge://auth/callback") {
-        return; // someone else's deep link, not ours
+    // OAuth callback path — auth flow.
+    if url.starts_with("localforge://auth/callback") {
+        handle_auth_callback(app, url).await;
+        return;
     }
+    // Invite acceptance path — user clicked an invite link.
+    if url.starts_with("localforge://invite") {
+        handle_invite(app, url).await;
+        return;
+    }
+}
+
+async fn handle_auth_callback(app: AppHandle, url: String) {
 
     // Minimal parse — the URL is fixed-shape so we don't need a real
     // URL crate. Anything we don't recognise → emit a bad_url error.
@@ -93,6 +103,34 @@ fn emit_error(app: &AppHandle, code: &str, message: &str) {
         "cloud://auth-error",
         serde_json::json!({ "code": code, "message": message }),
     );
+}
+
+/// localforge://invite?token=<id> — fired when the user clicks an
+/// invitation email link. We surface the token to the frontend as an
+/// `cloud://invite-received` event; the React layer pops a dialog
+/// asking the user whether to accept (they need to be logged in
+/// already; if not, the dialog prompts them to sign in first).
+async fn handle_invite(app: AppHandle, url: String) {
+    let token = url
+        .split_once('?')
+        .and_then(|(_, q)| {
+            q.split('&').find_map(|pair| {
+                let (k, v) = pair.split_once('=')?;
+                (k == "token").then(|| urldecode(v))
+            })
+        });
+    if let Some(t) = token {
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.set_focus();
+            let _ = w.unminimize();
+        }
+        let _ = app.emit(
+            "cloud://invite-received",
+            serde_json::json!({ "token": t }),
+        );
+    } else {
+        emit_error(&app, "no_invite_token", "the invite URL had no token");
+    }
 }
 
 /// Minimal URL-component encoder — we only encode a tiny fixed URL, so

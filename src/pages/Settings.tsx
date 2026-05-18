@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useDockerStore } from '../stores/dockerStore';
 import { CloudAccountPanel } from '../components/CloudAccountPanel';
+import { MembersPanel } from '../components/MembersPanel';
 import {
   RefreshCw,
   Activity,
@@ -33,6 +34,10 @@ export function Settings() {
       {/* Cloud account / billing — sign-in is OPTIONAL, this panel
           gracefully renders an empty state when nobody's signed in. */}
       <CloudAccountPanel />
+
+      {/* Team panel only renders when the caller is on the Team plan;
+          it's a no-op for free + hobby + signed-out users. */}
+      <MembersPanel />
 
       {/* Docker Status */}
       <section className="card mb-5">
