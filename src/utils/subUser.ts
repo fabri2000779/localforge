@@ -129,6 +129,15 @@ export async function routeServerAction(
 
   if (!isSubUser) return { via: 'local' };
 
+  // Look up the server's node_id from the decrypted sync result so the
+  // owner's RelayCommandExecutor knows whether to hit local Docker or
+  // a remote agent. Defaults to "local" if we don't have it (server
+  // pushed before v0.1.13 has no node_id stamp).
+  const remote = auth.lastSyncResult?.remote ?? [];
+  const serverId = payload.serverId as string | undefined;
+  const target = remote.find((r) => r.id === serverId);
+  const nodeId = (target?.decrypted as { node_id?: string } | undefined)?.node_id ?? 'local';
+
   // Relay path. We invent a request id so the cmd_result event can be
   // correlated back to a UI optimistic state.
   const requestId =
@@ -141,7 +150,7 @@ export async function routeServerAction(
       cmd: action,
       target: payload.serverId,
       request_id: requestId,
-      args: payload,
+      args: { ...payload, nodeId },
     },
   });
   return { via: 'relay', requestId };

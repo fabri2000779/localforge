@@ -179,6 +179,7 @@ fn main() {
             cloud::vault::cloud_vault_has_key,
             cloud::sync::cloud_sync_now,
             cloud::sync::cloud_sync_pull,
+            cloud::sync::cloud_sync_nodes_now,
             cloud::relay::cloud_relay_start,
             cloud::relay::cloud_relay_stop,
             cloud::relay::cloud_relay_send_cmd,

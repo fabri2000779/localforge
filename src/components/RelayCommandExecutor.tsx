@@ -29,21 +29,26 @@ interface RelayCmd {
 // Map relay cmds → local Tauri commands. Keep this in sync with the
 // server-side role map in apps/api/src/relay.ts so the two layers
 // don't drift. Anything not in this list is rejected.
+//
+// All `argTransform`s read `c.args.nodeId` so the cmd routes to the
+// right Docker host (local vs remote agent). nodeId defaults to
+// "local" on the receiving side when missing — backwards-compat for
+// v0.1.12 clients that didn't stamp it.
 const CMD_MAP: Record<string, { tauri: string; minRole: OrgRole; argTransform?: (cmd: RelayCmd) => Record<string, unknown> }> = {
-  'server.start':         { tauri: 'start_server',  minRole: 'operator', argTransform: (c) => ({ serverId: c.target }) },
-  'server.stop':          { tauri: 'stop_server',   minRole: 'operator', argTransform: (c) => ({ serverId: c.target }) },
-  'server.restart':       { tauri: 'stop_server',   minRole: 'operator', argTransform: (c) => ({ serverId: c.target }) },
-  'server.send_command':  { tauri: 'send_command',  minRole: 'operator', argTransform: (c) => ({ serverId: c.target, command: c.args?.command }) },
+  'server.start':         { tauri: 'start_server',  minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
+  'server.stop':          { tauri: 'stop_server',   minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
+  'server.restart':       { tauri: 'stop_server',   minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
+  'server.send_command':  { tauri: 'send_command',  minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local', command: c.args?.command }) },
   // attach / detach drive the log-stream lifecycle on the owner's
   // machine. A sub-user opening ServerDetail sends attach so the
   // owner's Rust starts emitting server-log events, which the
   // RelayLogBridge forwards as console_line events the sub-user picks
   // up.
-  'server.attach':        { tauri: 'attach_server', minRole: 'operator', argTransform: (c) => ({ serverId: c.target }) },
-  'server.detach':        { tauri: 'detach_server', minRole: 'operator', argTransform: (c) => ({ serverId: c.target }) },
-  'server.update_config': { tauri: 'update_server_config', minRole: 'admin', argTransform: (c) => ({ serverId: c.target, config: c.args?.config }) },
-  'server.delete':        { tauri: 'delete_server', minRole: 'admin',    argTransform: (c) => ({ serverId: c.target, deleteData: c.args?.deleteData ?? false }) },
-  'server.reinstall':     { tauri: 'reinstall_server', minRole: 'admin', argTransform: (c) => ({ serverId: c.target }) },
+  'server.attach':        { tauri: 'attach_server', minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
+  'server.detach':        { tauri: 'detach_server', minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
+  'server.update_config': { tauri: 'update_server_config', minRole: 'admin', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local', config: c.args?.config }) },
+  'server.delete':        { tauri: 'delete_server', minRole: 'admin',    argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local', deleteData: c.args?.deleteData ?? false }) },
+  'server.reinstall':     { tauri: 'reinstall_server', minRole: 'admin', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
 };
 
 /**

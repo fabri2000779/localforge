@@ -15,6 +15,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Sync-export shape: every remote node WITH the secret token. Used
+/// once-per-sync to build the encrypted blob the cloud stores. Never
+/// surfaced to the frontend (it'd defeat the whole "tokens stay
+/// local" guarantee).
+#[derive(Debug, Clone)]
+pub struct RemoteNodeForSync {
+    pub id: String,
+    pub label: String,
+    pub url: String,
+    pub token: String,
+    pub fingerprint: Option<String>,
+}
+
 /// User-visible record of a node (everything except its live backend
 /// handle). This is what the UI lists in the "Nodes" page.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,6 +210,26 @@ impl NodeRegistry {
         state.backends.insert(node_id.clone(), Arc::new(backend));
         state.records.insert(node_id, record.clone());
         Ok(record)
+    }
+
+    /// Plaintext snapshot of every remote node, INCLUDING the secret
+    /// token. Used by cloud sync to encrypt-and-push to the cloud — the
+    /// resulting blob lets the user restore the same nodes on a second
+    /// device with full credentials. The token never leaves the
+    /// keychain-protected JSON file in plaintext anywhere else.
+    pub fn list_remote_for_sync(&self) -> anyhow::Result<Vec<RemoteNodeForSync>> {
+        let file = self.read_nodes_file()?;
+        Ok(file
+            .nodes
+            .into_iter()
+            .map(|n| RemoteNodeForSync {
+                id: n.id,
+                label: n.label,
+                url: n.url,
+                token: n.token,
+                fingerprint: n.fingerprint,
+            })
+            .collect())
     }
 
     pub async fn remove(&self, id: &NodeId) -> anyhow::Result<()> {
