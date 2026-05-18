@@ -3,7 +3,7 @@ members = [".", "core", "backend-local", "backend-remote", "agent"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.10"
+version = "0.1.11"
 authors = ["Fabrizio"]
 edition = "2021"
 license = "MIT"
@@ -48,6 +48,13 @@ tauri-plugin-process = "2"
 # Lets us register the `localforge://` URL scheme + receive the deep-link
 # from the OS after an OAuth redirect from the cloud API.
 tauri-plugin-deep-link = "2"
+# Pairs with deep-link on Linux/Windows: a second launch of LocalForge
+# (which is what the OS does when handling a localforge:// URL) gets
+# intercepted, its CLI args (including the URL) forwarded to the
+# already-running instance via IPC, and the second instance exits
+# immediately. Without this, each deep-link click spawns a fresh
+# process that can never deliver the URL.
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # OS-native credential storage (Win Credential Manager, macOS Keychain,
 # Linux Secret Service). Used to stash the JWT — never localStorage.
 keyring = "3"

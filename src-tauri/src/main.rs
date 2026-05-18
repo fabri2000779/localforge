@@ -27,6 +27,34 @@ fn main() {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     tauri::Builder::default()
+        // single-instance MUST be the first plugin: if a second copy
+        // of LocalForge launches (which is what happens on Win/Linux
+        // when the OS hands a `localforge://…` URL to its handler),
+        // we want to forward its args to the running instance and
+        // exit before any other plugin spins up — otherwise we end up
+        // with multiple processes fighting for the keychain entry,
+        // duplicate D1 backend connections, etc.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            tracing::info!("[single-instance] second launch with args: {:?}", args);
+            // Bring the main window to the front so the user sees the
+            // result of whatever deep-link they just clicked.
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+            // Forward any localforge:// URL in argv to the deep-link
+            // handler. Windows passes the URL as the last arg; Linux
+            // sometimes splits it weirdly — we just scan.
+            for arg in args {
+                if arg.starts_with("localforge://") {
+                    let h = app.clone();
+                    let url = arg.clone();
+                    tauri::async_runtime::spawn(async move {
+                        cloud::oauth::handle_deep_link(h, url).await;
+                    });
+                }
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
