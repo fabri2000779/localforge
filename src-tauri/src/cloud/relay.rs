@@ -18,7 +18,7 @@
 
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -41,11 +41,18 @@ struct Envelope {
     kind: Option<String>,
 }
 
+/// Outbound queue: the React layer can call `cloud_relay_send_cmd` to
+/// push a command to the owner. We keep a tx-handle per active loop so
+/// the loop drains the queue into the WS while it's connected.
+type CmdQueue = Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>;
+
 #[derive(Default)]
 pub struct RelayState {
     /// Cancellation handle for the current loop. Replaced on each
     /// start_relay call so we never accumulate ghost loops.
     pub cancel: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// Tx end of the outbound message channel.
+    pub outbound: CmdQueue,
 }
 
 #[tauri::command]
@@ -56,7 +63,49 @@ pub async fn cloud_relay_stop(
     if let Some(tx) = guard.take() {
         let _ = tx.send(());
     }
+    let mut out_guard = state.outbound.lock().await;
+    out_guard.take();
     Ok(())
+}
+
+/// Send a `cmd` message through the WS to the relay (which forwards to
+/// the owner). Used by the React layer when a sub-user clicks Start /
+/// Stop / etc. on a server they're not the owner of.
+///
+/// `payload` should be the full message body — `{type:'cmd', cmd:'…',
+/// target:'…', request_id:'…', ...}`. We trust the React layer to put
+/// well-formed JSON in — the relay validates the shape on receipt.
+#[tauri::command]
+pub async fn cloud_relay_send_cmd(
+    state: tauri::State<'_, Arc<RelayState>>,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    let guard = state.outbound.lock().await;
+    let Some(tx) = guard.as_ref() else {
+        return Err("relay not connected".into());
+    };
+    let text = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    tx.send(text).map_err(|_| "relay channel closed".to_string())
+}
+
+/// Owner-side: emit an `event` message to all connected members.
+/// Used when the owner finishes executing a sub-user's command and
+/// wants to broadcast the result.
+#[tauri::command]
+pub async fn cloud_relay_send_event(
+    state: tauri::State<'_, Arc<RelayState>>,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    let guard = state.outbound.lock().await;
+    let Some(tx) = guard.as_ref() else {
+        return Err("relay not connected".into());
+    };
+    let mut p = payload;
+    if let serde_json::Value::Object(ref mut m) = p {
+        m.insert("type".into(), serde_json::Value::String("event".into()));
+    }
+    let text = serde_json::to_string(&p).map_err(|e| e.to_string())?;
+    tx.send(text).map_err(|_| "relay channel closed".to_string())
 }
 
 /// Resolve the user's primary org id by hitting /v1/orgs/me.
@@ -89,9 +138,12 @@ pub async fn cloud_relay_start(
         .map_err(|e| format!("fetch org: {e}"))?;
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     {
         let mut guard = state.cancel.lock().await;
         *guard = Some(cancel_tx);
+        let mut out_guard = state.outbound.lock().await;
+        *out_guard = Some(out_tx);
     }
 
     let app_for_loop = app.clone();
@@ -125,14 +177,26 @@ pub async fn cloud_relay_start(
                 Ok((mut ws, _)) => {
                     backoff.reset();
                     let _ = app_for_loop.emit("cloud://relay-connected", ());
-                    // Pump frames until close.
+                    // Pump frames until close. We multiplex three things:
+                    // 1. cancellation, 2. inbound WS frames, 3. outbound
+                    // messages enqueued by Tauri commands.
                     loop {
                         tokio::select! {
-                            // Cancellation
+                            biased;
                             _ = &mut cancel_rx => {
                                 let _ = ws.send(Message::Close(None)).await;
                                 return;
                             }
+                            // Outbound: drain whatever the app wants to send.
+                            outbound = out_rx.recv() => match outbound {
+                                Some(text) => {
+                                    if ws.send(Message::Text(text.into())).await.is_err() {
+                                        tracing::warn!("[relay] send failed; reconnecting");
+                                        break;
+                                    }
+                                }
+                                None => return,    // channel closed
+                            },
                             frame = ws.next() => match frame {
                                 Some(Ok(Message::Text(txt))) => {
                                     handle_text(
@@ -198,7 +262,14 @@ async fn handle_text(
     }
 
     match env_msg.ty.as_str() {
-        "hello" => { /* peers + hello extras — not surfaced yet */ }
+        "hello" => {
+            // Surface the hello to the React layer so the UI can show
+            // role + peers. Forward the raw text — it has the
+            // session/epoch/peers structure intact.
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(txt) {
+                let _ = app.emit("cloud://relay-hello", &value);
+            }
+        }
         "event" => {
             if env_msg.kind.as_deref() == Some("sync_changed")
                 || env_msg.kind.as_deref() == Some("sync_deleted")
@@ -209,8 +280,32 @@ async fn handle_text(
                 }
                 let _ = app.emit("cloud://sync-changed", ());
             }
+            // Any other event — surface raw so the React layer can
+            // pattern-match on `kind` (cmd_result, console_line, etc).
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(txt) {
+                let _ = app.emit("cloud://relay-event", &value);
+            }
         }
-        "presence" => { /* presence push — surface later for sub-users */ }
+        "cmd" => {
+            // Owner-side: a sub-user just asked us to do something. Hand
+            // it to the React layer — the auth store maps the cmd to a
+            // local Tauri invoke and emits the `event` response back.
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(txt) {
+                let _ = app.emit("cloud://relay-cmd", &value);
+            }
+        }
+        "error" => {
+            // Surface server-side rejections (forbidden, unknown_cmd, …)
+            // so the UI can hint "the relay refused your last command".
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(txt) {
+                let _ = app.emit("cloud://relay-error", &value);
+            }
+        }
+        "presence" => {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(txt) {
+                let _ = app.emit("cloud://relay-presence", &value);
+            }
+        }
         _ => {}
     }
 }

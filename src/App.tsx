@@ -16,6 +16,7 @@ import { NodesPage } from './pages/Nodes';
 import { DockerRequired } from './components/DockerRequired';
 import { OAuthToast } from './components/OAuthToast';
 import { AcceptInviteToast } from './components/AcceptInviteToast';
+import { RelayCommandExecutor } from './components/RelayCommandExecutor';
 import { UpdateChecker } from './components/UpdateChecker';
 import './App.css';
 
@@ -82,6 +83,7 @@ function App() {
         </div>
         <OAuthToast />
         <AcceptInviteToast />
+        <RelayCommandExecutor />
         <UpdateChecker />
       </div>
     </BrowserRouter>

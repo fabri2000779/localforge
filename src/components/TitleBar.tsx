@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Minus, Square, X, Copy, LogIn } from 'lucide-react';
+import { Minus, Square, X, Copy, LogIn, ChevronDown, Check } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { LoginDialog } from './LoginDialog';
 
@@ -41,6 +41,10 @@ export function TitleBar() {
       {/* Spacer */}
       <div className="flex-1 h-full" data-tauri-drag-region />
 
+      {/* Org switcher — only rendered when the user belongs to >1 org
+          (most users have exactly one personal workspace). */}
+      <OrgSwitcher />
+
       {/* Cloud account chip — "Sign in" when signed-out, name+plan when signed-in.
           Both routes the user toward the right surface; the in-depth UI lives
           on the Settings page. */}
@@ -74,6 +78,64 @@ export function TitleBar() {
           <X size={14} strokeWidth={2.2} />
         </button>
       </div>
+    </div>
+  );
+}
+
+function OrgSwitcher() {
+  const orgs = useAuthStore((s) => s.orgs);
+  const currentOrgId = useAuthStore((s) => s.currentOrgId);
+  const setCurrentOrg = useAuthStore((s) => s.setCurrentOrg);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [open]);
+
+  // Hide entirely when only one (or none) — the chip is noise then.
+  if (orgs.length <= 1) return null;
+  const current = orgs.find((o) => o.id === currentOrgId);
+  if (!current) return null;
+
+  return (
+    <div className="title-bar-org" ref={ref}>
+      <button
+        className="title-bar-org-btn"
+        onClick={() => setOpen((v) => !v)}
+        title={`Active workspace: ${current.name} (${current.role})`}
+      >
+        <span className="title-bar-org-name">{current.name}</span>
+        {!current.isOwner && (
+          <span className={`title-bar-plan role-${current.role}`}>{current.role}</span>
+        )}
+        <ChevronDown size={11} strokeWidth={2.2} />
+      </button>
+      {open && (
+        <div className="title-bar-org-menu">
+          <div className="title-bar-org-menu-label">Workspaces</div>
+          {orgs.map((o) => (
+            <button
+              key={o.id}
+              className={`title-bar-org-menu-item${o.id === currentOrgId ? ' active' : ''}`}
+              onClick={() => { setCurrentOrg(o.id); setOpen(false); }}
+            >
+              <div className="title-bar-org-menu-info">
+                <span className="title-bar-org-menu-name">{o.name}</span>
+                <span className="title-bar-org-menu-meta">
+                  {o.isOwner ? 'Owner' : o.role}
+                </span>
+              </div>
+              {o.id === currentOrgId && <Check size={12} strokeWidth={2.4} />}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

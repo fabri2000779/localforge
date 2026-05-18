@@ -60,6 +60,17 @@ interface AuthState {
   openCheckout: (plan: 'hobby' | 'team') => Promise<boolean>;
   openPortal: () => Promise<boolean>;
 
+  // Phase 5 — multi-org / sub-user mode
+  /** Every org the user belongs to (own + invited). Refreshed via fetchOrgs(). */
+  orgs: OrgSummary[];
+  /** Active org id. Defaults to the user's primary org on hydrate.
+   *  Switching is persisted in localStorage so it survives restart. */
+  currentOrgId: string | null;
+  /** Caller's role in the current org. Cached so role gating is sync. */
+  currentRole: OrgRole | null;
+  fetchOrgs: () => Promise<void>;
+  setCurrentOrg: (orgId: string) => void;
+
   // Tier 1 — cloud sync
   syncing: boolean;
   lastSyncedAt: number | null;
@@ -96,6 +107,26 @@ export interface SyncResult {
   remote: RemoteServer[];
 }
 
+export type OrgRole = 'owner' | 'admin' | 'operator' | 'viewer';
+
+export interface OrgSummary {
+  id: string;
+  name: string;
+  role: OrgRole;
+  isOwner: boolean;
+  createdAt: number;
+  joinedAt: number;
+}
+
+/** Role ranks for gating helpers. Higher = more permission. */
+const ROLE_RANK: Record<OrgRole, number> = { viewer: 0, operator: 1, admin: 2, owner: 3 };
+export function roleAtLeast(role: OrgRole | null | undefined, min: OrgRole): boolean {
+  if (!role) return false;
+  return ROLE_RANK[role] >= ROLE_RANK[min];
+}
+
+const CURRENT_ORG_KEY = 'localforge_current_org';
+
 function asErr(e: unknown): AuthError {
   if (e && typeof e === 'object') {
     const o = e as Record<string, unknown>;
@@ -125,6 +156,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (me && me.subscription.plan !== 'free') {
         void invoke('cloud_relay_start');
       }
+      // Also pull the list of orgs we belong to — needed by the
+      // titlebar switcher + per-role gating across the app.
+      if (me) {
+        void get().fetchOrgs();
+      }
     } catch (e) {
       // Network failure / token rejected → land in "not signed in" so
       // the UI shows the sign-in affordance rather than getting stuck
@@ -141,6 +177,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (event.payload.subscription.plan !== 'free') {
         void invoke('cloud_relay_start');
       }
+      void get().fetchOrgs();
     });
     const unPartial = await listen('cloud://signed-in-partial', () => {
       // OAuth landed but /me failed — pull fresh once so the UI catches up.
@@ -325,6 +362,42 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch {
       return false;
     }
+  },
+
+  // -------------------------------------------------------------------------
+  // Multi-org / sub-user mode
+  // -------------------------------------------------------------------------
+  orgs: [],
+  currentOrgId: typeof localStorage !== 'undefined'
+    ? localStorage.getItem(CURRENT_ORG_KEY)
+    : null,
+  currentRole: null,
+
+  fetchOrgs: async () => {
+    if (!get().me) return;
+    try {
+      const orgs = await invoke<OrgSummary[]>('cloud_orgs_list');
+      let current = get().currentOrgId;
+      // If the stored org id is no longer in the list (user got
+      // removed, or first launch), fall back to primary.
+      if (!current || !orgs.some((o) => o.id === current)) {
+        current = orgs[0]?.id ?? null;
+        if (current) localStorage.setItem(CURRENT_ORG_KEY, current);
+      }
+      const role = orgs.find((o) => o.id === current)?.role ?? null;
+      set({ orgs, currentOrgId: current, currentRole: role });
+    } catch (e) {
+      set({ error: asErr(e) });
+    }
+  },
+
+  setCurrentOrg: (orgId) => {
+    const o = get().orgs.find((x) => x.id === orgId);
+    if (!o) return;
+    localStorage.setItem(CURRENT_ORG_KEY, orgId);
+    set({ currentOrgId: orgId, currentRole: o.role });
+    // Pull fresh sync state for the new org context.
+    void get().syncPull();
   },
 
   exportData: async () => {

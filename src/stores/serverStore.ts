@@ -16,6 +16,7 @@ import type {
 } from '../types';
 import { useNodesStore } from './nodesStore';
 import { emitAudit } from '../utils/audit';
+import { routeServerAction } from '../utils/subUser';
 
 interface LogEvent {
   server_id: string;
@@ -125,14 +126,20 @@ export const useServerStore = create<ServerState>((set, get) => ({
   startServer: async (serverId) => {
     set({ isLoading: true, error: null, logs: [] });
     try {
-      await get().attachToServer(serverId);
-      await invoke<ServerResponse>('start_server', {
-        serverId,
-        nodeId: currentNodeId(),
-      });
+      const route = await routeServerAction('server.start', { serverId });
+      if (route.via === 'local') {
+        await get().attachToServer(serverId);
+        await invoke<ServerResponse>('start_server', {
+          serverId,
+          nodeId: currentNodeId(),
+        });
+        get().startStatsPolling(serverId);
+        await get().fetchServers();
+      }
+      // Sub-user mode: cmd is fire-and-forget through the relay. The
+      // owner's RelayCommandExecutor runs `start_server` locally and
+      // broadcasts an `event` we'll surface as a toast in a future tier.
       emitAudit('server.start', serverId);
-      await get().fetchServers();
-      get().startStatsPolling(serverId);
       set({ isLoading: false });
     } catch (error) {
       console.error('[Store] startServer error:', error);
@@ -143,15 +150,19 @@ export const useServerStore = create<ServerState>((set, get) => ({
   stopServer: async (serverId) => {
     set({ isLoading: true, error: null });
     try {
-      get().stopStatsPolling();
-      await invoke<ServerResponse>('stop_server', {
-        serverId,
-        nodeId: currentNodeId(),
-      });
+      const route = await routeServerAction('server.stop', { serverId });
+      if (route.via === 'local') {
+        get().stopStatsPolling();
+        await invoke<ServerResponse>('stop_server', {
+          serverId,
+          nodeId: currentNodeId(),
+        });
+        await get().detachFromServer(serverId);
+        await get().fetchServers();
+        set({ stats: null, isStreaming: false });
+      }
       emitAudit('server.stop', serverId);
-      await get().detachFromServer(serverId);
-      await get().fetchServers();
-      set({ isLoading: false, stats: null, isStreaming: false });
+      set({ isLoading: false });
     } catch (error) {
       set({ error: String(error), isLoading: false });
     }
@@ -245,11 +256,15 @@ export const useServerStore = create<ServerState>((set, get) => ({
 
   sendCommand: async (serverId, command) => {
     try {
-      const result = await invoke<string>('send_command', {
-        serverId,
-        command,
-        nodeId: currentNodeId(),
-      });
+      const route = await routeServerAction('server.send_command', { serverId, command });
+      let result = '';
+      if (route.via === 'local') {
+        result = await invoke<string>('send_command', {
+          serverId,
+          command,
+          nodeId: currentNodeId(),
+        });
+      }
       // Truncate the command in metadata — full text could contain
       // sensitive paths / args. The audit's purpose is "Bob ran a
       // console cmd at 12:34", not auditable transcript.

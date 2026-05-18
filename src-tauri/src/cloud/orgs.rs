@@ -43,6 +43,27 @@ pub struct Invitation {
 // Commands
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgSummary {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+    pub is_owner: bool,
+    pub created_at: i64,
+    pub joined_at: i64,
+}
+
+/// List every org the user belongs to. Used by the org switcher.
+#[tauri::command]
+pub async fn cloud_orgs_list() -> Result<Vec<OrgSummary>, api::ApiError> {
+    let token = auth::current_token().ok_or_else(unauth)?;
+    #[derive(Deserialize)]
+    struct Resp { orgs: Vec<OrgSummary> }
+    let r: Resp = api::get("/v1/orgs", Some(&token)).await?;
+    Ok(r.orgs)
+}
+
 #[tauri::command]
 pub async fn cloud_orgs_me() -> Result<OrgInfo, api::ApiError> {
     let token = auth::current_token().ok_or_else(unauth)?;
