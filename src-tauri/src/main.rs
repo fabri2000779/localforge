@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend;
+mod cloud;
 mod commands;
 mod games;
 mod paths;
@@ -13,6 +14,7 @@ use commands::games::GamesState;
 use commands::server::ServerState;
 use std::sync::Arc;
 use tauri::Manager;
+use tauri_plugin_deep_link::DeepLinkExt;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -29,6 +31,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_deep_link::init())
         .manage(ServerState::default())
         .manage(GamesState::default())
         .manage(NodeRegistry::default())
@@ -55,6 +58,26 @@ fn main() {
                 }
                 if let Err(e) = state.load_remotes().await {
                     tracing::warn!("Failed to load remote nodes: {}", e);
+                }
+            });
+
+            // Deep-link listener: the OS hands us localforge://… URLs
+            // through this callback. On Linux + Windows we ALSO have to
+            // explicitly register the scheme at runtime in dev — the
+            // installer takes care of it in release. `register()` is
+            // idempotent so calling it on prod is fine too.
+            #[cfg(any(target_os = "linux", windows))]
+            {
+                let _ = app.deep_link().register("localforge");
+            }
+            let dl_handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    let url_string = url.to_string();
+                    let h = dl_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        cloud::oauth::handle_deep_link(h, url_string).await;
+                    });
                 }
             });
 
@@ -112,6 +135,15 @@ fn main() {
             commands::nodes::agent_install_command,
             commands::nodes::cluster_summary,
             commands::nodes::get_node_stats,
+            cloud::auth::cloud_signup,
+            cloud::auth::cloud_login,
+            cloud::auth::cloud_logout,
+            cloud::auth::cloud_me,
+            cloud::auth::cloud_request_password_reset,
+            cloud::auth::cloud_resend_verification,
+            cloud::oauth::cloud_oauth_start,
+            cloud::billing::cloud_open_checkout,
+            cloud::billing::cloud_open_portal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -54,6 +54,11 @@
     "shell": {
       "open": ".*"
     },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["localforge"]
+      }
+    },
     "updater": {
       "active": true,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJDODAzMEFEQjVEMTVDNkUKUldSdVhORzFyVENBdkZ3eEFrL3BuczIvZnBoSStjRlAySCt1bTdDNnBtdVg3dUcyWjlZY1p1c0wK",

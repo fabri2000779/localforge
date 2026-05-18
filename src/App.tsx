@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useDockerStore } from './stores/dockerStore';
 import { useGamesStore } from './stores/gamesStore';
 import { useServerStore } from './stores/serverStore';
+import { useAuthStore } from './stores/authStore';
 import { TitleBar } from './components/TitleBar';
 import { Sidebar } from './components/Sidebar';
 import { Home } from './pages/Home';
@@ -21,11 +22,21 @@ function App() {
   const { status, checkStatus } = useDockerStore();
   const { fetchGames } = useGamesStore();
   const { fetchServers } = useServerStore();
+  const hydrateAuth = useAuthStore((s) => s.hydrate);
+  const subscribeToAuthEvents = useAuthStore((s) => s.subscribeToEvents);
 
   useEffect(() => {
     checkStatus();
     fetchGames();
-  }, [checkStatus, fetchGames]);
+    // Auth is optional — try to re-hydrate from the OS keychain, but
+    // never block the rest of the app on it.
+    void hydrateAuth();
+    // Subscribe to the OAuth deep-link events so the modal closes
+    // automatically when the user signs in via their browser.
+    let unsubscribe: (() => void) | null = null;
+    subscribeToAuthEvents().then((fn) => { unsubscribe = fn; });
+    return () => { if (unsubscribe) unsubscribe(); };
+  }, [checkStatus, fetchGames, hydrateAuth, subscribeToAuthEvents]);
 
   useEffect(() => {
     if (status?.running) {

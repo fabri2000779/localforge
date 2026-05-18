@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useDockerStore } from '../stores/dockerStore';
+import { CloudAccountPanel } from '../components/CloudAccountPanel';
 import {
   RefreshCw,
   Activity,
@@ -28,6 +29,10 @@ export function Settings() {
           Manage LocalForge configuration and inspect host integration.
         </p>
       </header>
+
+      {/* Cloud account / billing — sign-in is OPTIONAL, this panel
+          gracefully renders an empty state when nobody's signed in. */}
+      <CloudAccountPanel />
 
       {/* Docker Status */}
       <section className="card mb-5">

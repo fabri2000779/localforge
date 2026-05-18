@@ -828,3 +828,329 @@ html {
 .animate-fade-in {
   animation: fadeIn 250ms cubic-bezier(0.16, 1, 0.3, 1);
 }
+
+/* ────────────────────────────────────────────────────────────────────
+   Cloud auth — title bar chip, login dialog, account panel.
+   Sign-in is OPTIONAL; the empty states need to look friendly.
+   ──────────────────────────────────────────────────────────────────── */
+
+.title-bar-account {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  margin-right: 8px;
+  border-radius: 7px;
+  background: rgba(30, 41, 59, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.title-bar-account:hover {
+  background: rgba(51, 65, 85, 0.75);
+  color: white;
+  border-color: rgba(148, 163, 184, 0.22);
+}
+.title-bar-account-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #38bdf8 0%, #a78bfa 100%);
+  color: #0b1020;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.title-bar-plan {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.plan-free  { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; }
+.plan-hobby { background: rgba(59, 130, 246, 0.22);  color: #93c5fd; }
+.plan-team  { background: rgba(167, 139, 250, 0.22); color: #c4b5fd; }
+
+/* ── Modal ─────────────────────────────────────────────────────────── */
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 6, 12, 0.65);
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  z-index: 100;
+  padding: 32px;
+  animation: fadeIn 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.auth-modal {
+  width: 100%;
+  max-width: 420px;
+  background: linear-gradient(180deg, rgba(20, 26, 38, 0.95) 0%, rgba(14, 19, 28, 0.95) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 14px;
+  padding: 26px 24px 20px;
+  box-shadow: 0 30px 70px -20px rgba(0, 0, 0, 0.7);
+  position: relative;
+  color: #e2e8f0;
+}
+.auth-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: transparent;
+  border: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.auth-close:hover { background: rgba(148, 163, 184, 0.10); color: white; }
+.auth-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  color: #f1f5f9;
+  margin: 0 0 6px;
+  letter-spacing: -0.01em;
+}
+.auth-header p {
+  font-size: 13px;
+  color: #94a3b8;
+  margin: 0 0 18px;
+  line-height: 1.5;
+}
+.auth-oauth-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.auth-oauth {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 10px;
+  background: rgba(30, 41, 59, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 9px;
+  color: #e2e8f0;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.auth-oauth:hover { background: rgba(51, 65, 85, 0.85); border-color: rgba(148, 163, 184, 0.28); }
+.auth-oauth:disabled { opacity: 0.5; cursor: not-allowed; }
+.auth-oauth.oauth-discord { color: #b6c4ff; }
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+  color: #64748b;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.auth-divider::before, .auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.auth-form { display: flex; flex-direction: column; gap: 10px; }
+.auth-field { display: flex; flex-direction: column; gap: 5px; }
+.auth-field > span { font-size: 11.5px; color: #94a3b8; font-weight: 500; }
+.auth-field > input {
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: rgba(7, 9, 15, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  color: #f1f5f9;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.auth-field > input:focus {
+  border-color: rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+}
+.auth-field > input::placeholder { color: #475569; }
+
+.auth-err {
+  background: rgba(220, 38, 38, 0.10);
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  color: #fca5a5;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+.auth-info {
+  background: rgba(34, 197, 94, 0.10);
+  border: 1px solid rgba(74, 222, 128, 0.22);
+  color: #bbf7d0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+.auth-submit {
+  margin-top: 6px;
+  padding: 10px 14px;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  color: white;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 14px -6px rgba(59, 130, 246, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+.auth-submit:hover { background: linear-gradient(180deg, #4f8fff 0%, #2f6fea 100%); }
+.auth-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.auth-meta {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 12px;
+  color: #94a3b8;
+}
+.auth-meta-sep { margin: 0 6px; color: #475569; }
+.auth-link {
+  background: none;
+  border: none;
+  font: inherit;
+  color: #93c5fd;
+  cursor: pointer;
+  padding: 0;
+}
+.auth-link:hover { color: white; text-decoration: underline; }
+
+/* ── Settings page panel ──────────────────────────────────────────── */
+.cloud-empty {
+  padding: 12px 4px 4px;
+  font-size: 13px;
+  color: #cbd5e1;
+  line-height: 1.55;
+}
+.cloud-empty-sub {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 6px;
+}
+.cloud-identity {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 4px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.10);
+  margin-bottom: 14px;
+}
+.cloud-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #f1f5f9;
+  letter-spacing: -0.01em;
+}
+.cloud-email {
+  font-size: 12.5px;
+  color: #64748b;
+  margin-top: 2px;
+}
+.cloud-warn {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: rgba(120, 53, 15, 0.18);
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 10px;
+  padding: 11px 12px;
+  margin-bottom: 14px;
+  font-size: 12.5px;
+  color: #fcd34d;
+}
+.cloud-warn strong { color: #fde68a; }
+.cloud-warn p { color: #fcd34d; margin-top: 2px; font-size: 12px; }
+.cloud-warn code { background: rgba(0,0,0,0.25); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+
+.cloud-paid {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 0;
+}
+.cloud-paid-detail {
+  font-size: 13px;
+  color: #cbd5e1;
+  margin-top: 4px;
+}
+
+.cloud-tiers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 6px;
+}
+.tier-card {
+  background: linear-gradient(180deg, rgba(20, 26, 38, 0.55) 0%, rgba(14, 19, 28, 0.55) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 11px;
+  padding: 14px 14px 12px;
+}
+.tier-card-featured {
+  border-color: rgba(59, 130, 246, 0.40);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.16);
+}
+.tier-price {
+  font-size: 22px;
+  font-weight: 700;
+  color: #f1f5f9;
+  margin: 4px 0 10px;
+}
+.tier-price span { font-size: 11.5px; color: #64748b; font-weight: 400; }
+.tier-features {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tier-features li {
+  font-size: 11.5px;
+  color: #cbd5e1;
+  padding-left: 14px;
+  position: relative;
+}
+.tier-features li::before {
+  content: '✓';
+  position: absolute;
+  left: 0;
+  color: #22c55e;
+  font-weight: 700;
+}
+
+.cloud-foot {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 14px;
+  font-size: 11px;
+  color: #64748b;
+}

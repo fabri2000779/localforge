@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Minus, Square, X, Copy } from 'lucide-react';
+import { Minus, Square, X, Copy, LogIn } from 'lucide-react';
+import { useAuthStore } from '../stores/authStore';
+import { LoginDialog } from './LoginDialog';
 
 export function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false);
@@ -38,6 +41,11 @@ export function TitleBar() {
       {/* Spacer */}
       <div className="flex-1 h-full" data-tauri-drag-region />
 
+      {/* Cloud account chip — "Sign in" when signed-out, name+plan when signed-in.
+          Both routes the user toward the right surface; the in-depth UI lives
+          on the Settings page. */}
+      <AccountChip />
+
       {/* Window Controls */}
       <div className="flex h-full">
         <button
@@ -67,6 +75,45 @@ export function TitleBar() {
         </button>
       </div>
     </div>
+  );
+}
+
+function AccountChip() {
+  const me = useAuthStore((s) => s.me);
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+
+  // Signed-out (or not-yet-checked) chip → opens the modal directly.
+  if (me === null || me === undefined) {
+    return (
+      <>
+        <button
+          className="title-bar-account"
+          onClick={() => setOpen(true)}
+          title="Sign in to your LocalForge cloud account"
+        >
+          <LogIn size={12} strokeWidth={2.2} />
+          <span>Sign in</span>
+        </button>
+        <LoginDialog open={open} onClose={() => setOpen(false)} />
+      </>
+    );
+  }
+
+  // Signed-in chip — shows initials + plan badge, click navigates to
+  // the Settings page where the full Cloud Account panel lives.
+  const initials = (me.displayName ?? me.email).slice(0, 2).toUpperCase();
+  const plan = me.subscription.plan;
+  return (
+    <button
+      onClick={() => navigate('/settings')}
+      className="title-bar-account"
+      title={`${me.email} · ${plan}`}
+    >
+      <span className="title-bar-account-avatar">{initials}</span>
+      <span className="hidden sm:inline truncate max-w-[120px]">{me.displayName ?? me.email}</span>
+      {plan !== 'free' && <span className={`title-bar-plan plan-${plan}`}>{plan === 'team' ? 'Team' : 'Hobby'}</span>}
+    </button>
   );
 }
 

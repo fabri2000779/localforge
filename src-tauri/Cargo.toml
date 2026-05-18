@@ -45,6 +45,16 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# Lets us register the `localforge://` URL scheme + receive the deep-link
+# from the OS after an OAuth redirect from the cloud API.
+tauri-plugin-deep-link = "2"
+# OS-native credential storage (Win Credential Manager, macOS Keychain,
+# Linux Secret Service). Used to stash the JWT — never localStorage.
+keyring = "3"
+# Cloud API client. rustls so we don't depend on the system OpenSSL.
+# `rustls-no-provider` matches what the backend-remote crate uses, so
+# Cargo dedupes the dependency tree.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
 tokio-util = { version = "0.7", features = ["io"] }
 bytes = "1"
 serde = { workspace = true }
