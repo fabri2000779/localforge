@@ -1,13 +1,11 @@
 // Docker Manager - Handles all Docker operations
 
-use bollard::container::{
-    AttachContainerOptions, AttachContainerResults,
-    Config, CreateContainerOptions,
-    LogOutput, LogsOptions, RemoveContainerOptions, StartContainerOptions,
-    StatsOptions, StopContainerOptions,
+use bollard::container::{AttachContainerResults, LogOutput};
+use bollard::models::{ContainerCreateBody, ContainerStateStatusEnum, HostConfig, PortBinding};
+use bollard::query_parameters::{
+    AttachContainerOptions, CreateContainerOptions, CreateImageOptions, LogsOptions,
+    RemoveContainerOptions, StartContainerOptions, StatsOptions, StopContainerOptions,
 };
-use bollard::image::CreateImageOptions;
-use bollard::models::{ContainerStateStatusEnum, HostConfig, PortBinding};
 use bollard::Docker;
 use futures_util::stream::StreamExt;
 use std::collections::HashMap;
@@ -77,7 +75,7 @@ impl DockerManager {
     pub async fn pull_image(&self, image: &str) -> Result<(), DockerError> {
         tracing::info!("Pulling image: {}", image);
         let options = Some(CreateImageOptions {
-            from_image: image,
+            from_image: Some(image.to_string()),
             ..Default::default()
         });
 
@@ -123,8 +121,8 @@ impl DockerManager {
 
         // Build port bindings
         let mut port_bindings = HashMap::new();
-        let mut exposed_ports = HashMap::new();
-        
+        let mut exposed_ports: Vec<String> = Vec::new();
+
         // Main port (both TCP and UDP)
         let container_port_tcp = format!("{}/tcp", port);
         let container_port_udp = format!("{}/udp", port);
@@ -144,9 +142,9 @@ impl DockerManager {
                 host_port: Some(port.to_string()),
             }]),
         );
-        
-        exposed_ports.insert(container_port_tcp, HashMap::new());
-        exposed_ports.insert(container_port_udp, HashMap::new());
+
+        exposed_ports.push(container_port_tcp);
+        exposed_ports.push(container_port_udp);
 
         // Extra ports
         for extra in extra_ports {
@@ -155,7 +153,7 @@ impl DockerManager {
                 PortProtocol::Udp => vec!["udp"],
                 PortProtocol::Both => vec!["tcp", "udp"],
             };
-            
+
             for proto in protocols {
                 let port_key = format!("{}/{}", extra.container_port, proto);
                 port_bindings.insert(
@@ -165,9 +163,9 @@ impl DockerManager {
                         host_port: Some(extra.container_port.to_string()),
                     }]),
                 );
-                exposed_ports.insert(port_key, HashMap::new());
+                exposed_ports.push(port_key);
             }
-            
+
             let desc = extra.description.as_deref().unwrap_or("extra port");
             tracing::info!("Added extra port: {} ({:?}) - {}", extra.container_port, extra.protocol, desc);
         }
@@ -220,7 +218,7 @@ impl DockerManager {
             }
         });
 
-        let config = Config {
+        let config = ContainerCreateBody {
             image: Some(image.to_string()),
             env: Some(env_vars),
             exposed_ports: Some(exposed_ports),
@@ -236,8 +234,8 @@ impl DockerManager {
 
         let container_name = format!("localforge-{}", name);
         let options = Some(CreateContainerOptions {
-            name: container_name.as_str(),
-            platform: None,
+            name: Some(container_name.clone()),
+            platform: String::new(),
         });
 
         tracing::info!("Creating container: {}", container_name);
@@ -251,7 +249,7 @@ impl DockerManager {
     pub async fn start_container(&self, container_id: &str) -> Result<(), DockerError> {
         tracing::info!("Starting container: {}", container_id);
         self.docker
-            .start_container(container_id, None::<StartContainerOptions<String>>)
+            .start_container(container_id, None::<StartContainerOptions>)
             .await?;
         tracing::info!("Container start command sent: {}", container_id);
         Ok(())
@@ -260,7 +258,10 @@ impl DockerManager {
     /// Stop a container
     pub async fn stop_container(&self, container_id: &str) -> Result<(), DockerError> {
         tracing::info!("Stopping container: {}", container_id);
-        let options = Some(StopContainerOptions { t: 30 });
+        let options = Some(StopContainerOptions {
+            t: Some(30),
+            ..Default::default()
+        });
         self.docker.stop_container(container_id, options).await?;
         Ok(())
     }
@@ -295,6 +296,7 @@ impl DockerManager {
                         Some(ContainerStateStatusEnum::RESTARTING) => ServerStatus::Starting,
                         Some(ContainerStateStatusEnum::PAUSED) => ServerStatus::Stopped,
                         Some(ContainerStateStatusEnum::REMOVING) => ServerStatus::Stopping,
+                        Some(ContainerStateStatusEnum::STOPPING) => ServerStatus::Stopping,
                         Some(ContainerStateStatusEnum::EXITED) => ServerStatus::Stopped,
                         Some(ContainerStateStatusEnum::DEAD) => ServerStatus::Error,
                         None | Some(ContainerStateStatusEnum::EMPTY) => ServerStatus::Stopped,
@@ -322,12 +324,41 @@ impl DockerManager {
         let mut stream = self.docker.stats(container_id, options);
 
         if let Some(Ok(stats)) = stream.next().await {
-            // Calculate CPU percentage
-            let cpu_delta = stats.cpu_stats.cpu_usage.total_usage as f64
-                - stats.precpu_stats.cpu_usage.total_usage as f64;
-            let system_delta = stats.cpu_stats.system_cpu_usage.unwrap_or(0) as f64
-                - stats.precpu_stats.system_cpu_usage.unwrap_or(0) as f64;
-            let num_cpus = stats.cpu_stats.online_cpus.unwrap_or(1) as f64;
+            // In bollard 0.21 every layer of the stats tree is Option<T>.
+            // We pull values out with and_then chains and fall back to 0
+            // (or 1 for online_cpus, so the multiplier doesn't zero the
+            // percentage on platforms that don't report it).
+            let cpu_total = stats
+                .cpu_stats
+                .as_ref()
+                .and_then(|c| c.cpu_usage.as_ref())
+                .and_then(|u| u.total_usage)
+                .unwrap_or(0);
+            let precpu_total = stats
+                .precpu_stats
+                .as_ref()
+                .and_then(|c| c.cpu_usage.as_ref())
+                .and_then(|u| u.total_usage)
+                .unwrap_or(0);
+            let cpu_delta = cpu_total as f64 - precpu_total as f64;
+
+            let sys_cpu = stats
+                .cpu_stats
+                .as_ref()
+                .and_then(|c| c.system_cpu_usage)
+                .unwrap_or(0);
+            let pre_sys_cpu = stats
+                .precpu_stats
+                .as_ref()
+                .and_then(|c| c.system_cpu_usage)
+                .unwrap_or(0);
+            let system_delta = sys_cpu as f64 - pre_sys_cpu as f64;
+
+            let num_cpus = stats
+                .cpu_stats
+                .as_ref()
+                .and_then(|c| c.online_cpus)
+                .unwrap_or(1) as f64;
 
             let cpu_percent = if system_delta > 0.0 && cpu_delta > 0.0 {
                 (cpu_delta / system_delta) * num_cpus * 100.0
@@ -336,8 +367,20 @@ impl DockerManager {
             };
 
             // Calculate memory
-            let memory_usage = stats.memory_stats.usage.unwrap_or(0) as f64 / 1024.0 / 1024.0;
-            let memory_limit = stats.memory_stats.limit.unwrap_or(1) as f64 / 1024.0 / 1024.0;
+            let memory_usage = stats
+                .memory_stats
+                .as_ref()
+                .and_then(|m| m.usage)
+                .unwrap_or(0) as f64
+                / 1024.0
+                / 1024.0;
+            let memory_limit = stats
+                .memory_stats
+                .as_ref()
+                .and_then(|m| m.limit)
+                .unwrap_or(1) as f64
+                / 1024.0
+                / 1024.0;
             let memory_percent = if memory_limit > 0.0 {
                 (memory_usage / memory_limit) * 100.0
             } else {
@@ -366,15 +409,15 @@ impl DockerManager {
         
         tracing::info!("Sending stdin to container {}: {}", container_id, input);
         
-        let options = AttachContainerOptions::<String> {
-            stdin: Some(true),
-            stdout: Some(false),
-            stderr: Some(false),
-            stream: Some(true),
-            logs: Some(false),
+        let options = AttachContainerOptions {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+            stream: true,
+            logs: false,
             ..Default::default()
         };
-        
+
         match self.docker.attach_container(container_id, Some(options)).await {
             Ok(AttachContainerResults { input: mut stdin_writer, .. }) => {
                 // Write the command followed by newline
@@ -399,7 +442,7 @@ impl DockerManager {
         container_id: &str,
         lines: u32,
     ) -> Result<Vec<String>, DockerError> {
-        let options = Some(LogsOptions::<String> {
+        let options = Some(LogsOptions {
             stdout: true,
             stderr: true,
             tail: lines.to_string(),
@@ -578,7 +621,7 @@ impl DockerManager {
         
         let container_name = format!("localforge-install-{}", Uuid::new_v4().to_string()[..8].to_string());
         
-        let config = Config {
+        let config = ContainerCreateBody {
             image: Some(image.to_string()),
             cmd: Some(vec!["/bin/sh".to_string(), "-c".to_string(), cmd]),
             host_config: Some(host_config),
@@ -588,26 +631,28 @@ impl DockerManager {
             attach_stderr: Some(true),
             ..Default::default()
         };
-        
+
         let options = Some(CreateContainerOptions {
-            name: container_name.as_str(),
-            platform: None,
+            name: Some(container_name.clone()),
+            platform: String::new(),
         });
-        
+
         tracing::info!("Creating temporary install container: {}", container_name);
         let container = self.docker.create_container(options, config).await?;
         let container_id = container.id.clone();
-        
+
         // Notify caller of container ID so they can save it for log recovery
         on_container_created(&container_id);
-        
+
         tracing::info!("Starting install container: {}", container_id);
-        
+
         // Start the container
-        self.docker.start_container(&container_id, None::<StartContainerOptions<String>>).await?;
-        
+        self.docker
+            .start_container(&container_id, None::<StartContainerOptions>)
+            .await?;
+
         // Stream logs with follow=true
-        let log_options = LogsOptions::<String> {
+        let log_options = LogsOptions {
             follow: true,
             stdout: true,
             stderr: true,
@@ -688,10 +733,16 @@ impl DockerManager {
 
     /// Remove install container after installation completes
     pub async fn remove_install_container(&self, container_id: &str) -> Result<(), DockerError> {
-        let _ = self.docker.remove_container(
-            container_id,
-            Some(RemoveContainerOptions { force: true, ..Default::default() })
-        ).await;
+        let _ = self
+            .docker
+            .remove_container(
+                container_id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await;
         Ok(())
     }
 }

@@ -38,7 +38,7 @@ tauri-build = { version = "2", features = [] }
 localforge-core = { path = "core" }
 localforge-backend-local = { path = "backend-local" }
 localforge-backend-remote = { path = "backend-remote" }
-toml = "0.8"
+toml = "1"
 anyhow = "1"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-shell = "2"
@@ -50,7 +50,7 @@ bytes = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-bollard = "0.17"
+bollard = "0.21"
 uuid = { workspace = true }
 chrono = { workspace = true }
 directories = "6"

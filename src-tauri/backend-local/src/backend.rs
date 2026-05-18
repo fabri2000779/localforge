@@ -8,7 +8,8 @@
 use crate::docker::DockerManager;
 use crate::persistence;
 use async_trait::async_trait;
-use bollard::container::{LogOutput, LogsOptions};
+use bollard::container::LogOutput;
+use bollard::query_parameters::LogsOptions;
 use futures_util::stream::{self, StreamExt};
 use localforge_core::backend::{
     BackendError, ByteStream, InstallStream, LogLine, LogStream, NodeBackend, Result,
@@ -538,7 +539,7 @@ impl NodeBackend for LocalDockerBackend {
             .ok_or_else(|| BackendError::invalid("server has no container"))?;
         let server_id = server.id.clone();
 
-        let options = Some(LogsOptions::<String> {
+        let options = Some(LogsOptions {
             stdout: true,
             stderr: true,
             follow: true,

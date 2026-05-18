@@ -10,7 +10,7 @@ description = "NodeBackend implementation that drives a remote localforge-agent 
 localforge-core = { path = "../core" }
 
 # HTTP + JSON
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots", "json", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "stream"] }
 url = "2"
 
 # WebSocket client
