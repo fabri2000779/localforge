@@ -71,6 +71,10 @@ pub fn save_key(key: &[u8; KEY_LEN]) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Wipe the local vault key. Called by `cloud_vault_rotate` (TODO)
+/// when the user wants to start from scratch — every cloud blob
+/// stored under the old key becomes unrecoverable.
+#[allow(dead_code)]
 pub fn clear_key() -> Result<(), String> {
     let e = entry().map_err(|x| x.to_string())?;
     match e.delete_credential() {

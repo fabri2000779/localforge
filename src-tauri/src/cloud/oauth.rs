@@ -15,7 +15,7 @@
 //! Errors land on a `cloud://auth-error` event with `{code, message}`.
 
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_shell::ShellExt;
+use tauri_plugin_opener::OpenerExt;
 
 use super::{api_origin, auth, keychain};
 
@@ -34,8 +34,8 @@ pub async fn cloud_oauth_start(app: AppHandle, provider: String) -> Result<(), S
         provider,
         encoded
     );
-    app.shell()
-        .open(url, None)
+    app.opener()
+        .open_url(url, None::<&str>)
         .map_err(|e| format!("failed to open browser: {e}"))
 }
 

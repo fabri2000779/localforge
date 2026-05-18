@@ -5,7 +5,7 @@
 
 use serde::Deserialize;
 use tauri::AppHandle;
-use tauri_plugin_shell::ShellExt;
+use tauri_plugin_opener::OpenerExt;
 
 use super::{api, auth};
 
@@ -36,8 +36,8 @@ pub async fn cloud_open_checkout(app: AppHandle, plan: String) -> Result<(), api
         Some(&t),
     )
     .await?;
-    app.shell()
-        .open(r.url, None)
+    app.opener()
+        .open_url(r.url, None::<&str>)
         .map_err(|e| api::ApiError::Decode(format!("open: {e}")))
 }
 
@@ -51,7 +51,7 @@ pub async fn cloud_open_portal(app: AppHandle) -> Result<(), api::ApiError> {
         });
     };
     let r: UrlResponse = api::post("/v1/stripe/portal", &serde_json::json!({}), Some(&t)).await?;
-    app.shell()
-        .open(r.url, None)
+    app.opener()
+        .open_url(r.url, None::<&str>)
         .map_err(|e| api::ApiError::Decode(format!("open: {e}")))
 }

@@ -18,7 +18,7 @@
 
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -239,7 +239,7 @@ async fn handle_text(
     app: &AppHandle,
     txt: &str,
     last_epoch: &mut Option<String>,
-    _last_seq: &mut Option<u64>,
+    last_seq: &mut Option<u64>,
 ) {
     let env_msg: Envelope = match serde_json::from_str(txt) {
         Ok(e) => e,
@@ -252,6 +252,8 @@ async fn handle_text(
         let first = last_epoch.is_none();
         *last_epoch = Some(ep.clone());
         if first || changed {
+            // Reset the seq tracker too — a new epoch starts at 1.
+            *last_seq = None;
             // Trigger a pull so any events we missed are recovered.
             if let Some(state) = app.try_state::<crate::backend::NodeRegistry>() {
                 if let Err(e) = sync::cloud_sync_pull(state).await {
@@ -259,6 +261,21 @@ async fn handle_text(
                 }
             }
         }
+    }
+
+    // Gap detection within the same epoch. The server stamps seq
+    // monotonically, so anything beyond +1 from our last value means
+    // a packet went missing — refetch state to be safe.
+    if let Some(seq) = env_msg.seq {
+        if let Some(prev) = last_seq {
+            if seq > *prev + 1 {
+                tracing::warn!("[relay] seq gap: {} → {} (missed {})", prev, seq, seq - *prev - 1);
+                if let Some(state) = app.try_state::<crate::backend::NodeRegistry>() {
+                    let _ = sync::cloud_sync_pull(state).await;
+                }
+            }
+        }
+        *last_seq = Some(seq);
     }
 
     match env_msg.ty.as_str() {

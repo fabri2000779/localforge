@@ -3,7 +3,7 @@ members = [".", "core", "backend-local", "backend-remote", "agent"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.11"
+version = "0.1.12"
 authors = ["Fabrizio"]
 edition = "2021"
 license = "MIT"
@@ -45,6 +45,10 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# `shell.open()` was deprecated in favour of tauri-plugin-opener for
+# launching files / URLs in the OS default handler — same behaviour,
+# narrower API surface.
+tauri-plugin-opener = "2"
 # Lets us register the `localforge://` URL scheme + receive the deep-link
 # from the OS after an OAuth redirect from the cloud API.
 tauri-plugin-deep-link = "2"
