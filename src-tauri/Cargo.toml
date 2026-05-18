@@ -3,7 +3,7 @@ members = [".", "core", "backend-local", "backend-remote", "agent"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.7"
+version = "0.1.8"
 authors = ["Fabrizio"]
 edition = "2021"
 license = "MIT"
