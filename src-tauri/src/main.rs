@@ -35,6 +35,7 @@ fn main() {
         .manage(ServerState::default())
         .manage(GamesState::default())
         .manage(NodeRegistry::default())
+        .manage(Arc::new(cloud::relay::RelayState::default()))
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
             std::fs::create_dir_all(&app_data_dir).ok();
@@ -149,6 +150,8 @@ fn main() {
             cloud::vault::cloud_vault_has_key,
             cloud::sync::cloud_sync_now,
             cloud::sync::cloud_sync_pull,
+            cloud::relay::cloud_relay_start,
+            cloud::relay::cloud_relay_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

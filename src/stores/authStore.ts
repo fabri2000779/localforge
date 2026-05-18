@@ -115,6 +115,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const me = await invoke<Me | null>('cloud_me');
       set({ me, loading: false });
+      // Auto-connect the relay on startup so this device is reachable
+      // for sync pushes from elsewhere as soon as the app opens.
+      if (me && me.subscription.plan !== 'free') {
+        void invoke('cloud_relay_start');
+      }
     } catch (e) {
       // Network failure / token rejected → land in "not signed in" so
       // the UI shows the sign-in affordance rather than getting stuck
@@ -126,6 +131,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   subscribeToEvents: async () => {
     const unSignedIn = await listen<Me>('cloud://signed-in', (event) => {
       set({ me: event.payload, error: null, loading: false });
+      // Spin up the relay so other devices' edits land here instantly.
+      // Free users get a 402 at upgrade time, which we silently ignore.
+      if (event.payload.subscription.plan !== 'free') {
+        void invoke('cloud_relay_start');
+      }
     });
     const unPartial = await listen('cloud://signed-in-partial', () => {
       // OAuth landed but /me failed — pull fresh once so the UI catches up.
@@ -134,10 +144,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const unErr = await listen<{ code: string; message: string }>('cloud://auth-error', (event) => {
       set({ error: event.payload, loading: false });
     });
+    // Tier 2: when the relay sees a sync_changed it auto-pulls, we just
+    // patch the store so the visible "Last synced X ago" updates.
+    const unSync = await listen('cloud://sync-changed', () => {
+      // sync_changed comes from another device pushing — refresh our
+      // remote list to reflect it. The Rust side already pulled the
+      // decrypted view; we just re-read it cheaply.
+      void get().syncPull();
+    });
     return () => {
       unSignedIn();
       unPartial();
       unErr();
+      unSync();
     };
   },
 
@@ -179,8 +198,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: async () => {
     set({ loading: true });
+    // Disconnect the relay first so we don't keep an authed WS dangling.
+    try { await invoke<void>('cloud_relay_stop'); } catch { /* ignore */ }
     try { await invoke<void>('cloud_logout'); } catch { /* ignore */ }
-    set({ me: null, loading: false, error: null });
+    set({ me: null, loading: false, error: null, lastSyncResult: null, lastSyncedAt: null });
   },
 
   refreshMe: async () => {

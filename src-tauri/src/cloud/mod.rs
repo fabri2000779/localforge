@@ -13,6 +13,7 @@ pub mod auth;
 pub mod billing;
 pub mod keychain;
 pub mod oauth;
+pub mod relay;
 pub mod sync;
 pub mod vault;
 
