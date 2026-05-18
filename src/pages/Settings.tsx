@@ -124,7 +124,7 @@ export function Settings() {
         </div>
         <div className="flex items-center gap-2 pt-4 mt-3 border-t border-[var(--color-border)]">
           <span className="eyebrow">Version</span>
-          <span className="font-mono text-xs text-slate-300">v0.1.5</span>
+          <span className="font-mono text-xs text-slate-300">v0.1.6</span>
         </div>
       </section>
 
