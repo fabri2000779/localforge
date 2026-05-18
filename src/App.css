@@ -27,10 +27,19 @@
   --color-error: #ef4444;
 }
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+/* Universal reset — MUST be inside @layer base so Tailwind utilities
+ * (which live in @layer utilities) can still override it. An unlayered
+ * `* { margin: 0 }` beats every Tailwind `mb-*` / `mt-*` / `m-*` rule
+ * because unlayered styles have higher cascade priority than layered
+ * ones, which is why our `mb-10`s on Home sections were computing to
+ * `margin-bottom: 0px` and the stat cards visually collided with the
+ * empty-state card below. */
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
 }
 
 html, body, #root {

@@ -4,7 +4,7 @@
 
 **Self-hosted game server panel — runs on your laptop, scales to your VPS.**
 
-Like Pterodactyl/Pelican but single-user, with a native desktop app instead of a web panel.
+A native desktop app for running game servers without a web panel.
 Pair remote agents over HTTPS and manage local + remote game servers from the same UI.
 
 [![Release](https://img.shields.io/github/v/release/fabri2000779/localforge?include_prereleases&sort=semver)](https://github.com/fabri2000779/localforge/releases)
@@ -22,7 +22,7 @@ Pair remote agents over HTTPS and manage local + remote game servers from the sa
 - 🖱️ **One-click servers** — pick a game, click create. No terminal, no Docker knowledge.
 - 🌐 **Multi-node** — manage local Docker **and** any number of remote VPS agents from one app
 - 🔒 **Built-in security** — bearer tokens, self-signed TLS with fingerprint pinning, or BYO Let's Encrypt cert
-- 📦 **Pelican-compatible images** — uses `ghcr.io/parkervcp/yolks` and `parkervcp/games`, battle-tested by the Pelican Panel community
+- 📦 **Battle-tested Docker images** — uses the same `parkervcp/yolks` and `parkervcp/games` registries the wider game-server-hosting community relies on
 - 📺 **Live console & logs** — streamed over WebSocket from local or remote nodes
 - 📁 **File manager** — browse, edit, **upload/download** with chunked streaming (multi-GB worlds work fine)
 - 📊 **Per-node host stats** — CPU/RAM/disk gauges for every node, refreshed every 5 s
@@ -46,7 +46,7 @@ Pair remote agents over HTTPS and manage local + remote game servers from the sa
 | Sons of the Forest | `ghcr.io/parkervcp/yolks:wine_latest` |
 | StarRupture | `ghcr.io/parkervcp/yolks:wine_latest` |
 
-Add your own via **Settings → Custom games** — same JSON shape as Pelican eggs.
+Add your own via **Settings → Custom games** using a JSON template.
 
 ---
 
@@ -218,7 +218,6 @@ Data lives at:
 
 ## 🙏 Credits
 
-- Container images by [Parker Vincent](https://github.com/parkervcp) and the [Pelican Panel](https://pelican.dev/) community — `parkervcp/yolks` and `parkervcp/games` registries.
 - Built on [Tauri](https://tauri.app/), [axum](https://github.com/tokio-rs/axum), [bollard](https://github.com/fussybeaver/bollard), and [rustls](https://github.com/rustls/rustls).
 
 ## 📄 License

@@ -118,13 +118,13 @@ export function Settings() {
             No cloud required, no monthly fees, no complicated setup.
           </p>
           <p>
-            Built with Tauri, React and Rust. Powered by Docker and Pelican
-            Panel&apos;s yolks images.
+            Built with Tauri, React and Rust. Each game server runs in its
+            own isolated Docker container.
           </p>
         </div>
         <div className="flex items-center gap-2 pt-4 mt-3 border-t border-[var(--color-border)]">
           <span className="eyebrow">Version</span>
-          <span className="font-mono text-xs text-slate-300">v0.1.4</span>
+          <span className="font-mono text-xs text-slate-300">v0.1.5</span>
         </div>
       </section>
 
