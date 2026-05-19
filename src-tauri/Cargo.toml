@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "core", "backend-local", "backend-remote", "agent"]
+members = [".", "core", "backend-local", "backend-remote", "agent", "cloud-client"]
 resolver = "2"
 
 [workspace.package]
@@ -38,6 +38,12 @@ tauri-build = { version = "2", features = [] }
 localforge-core = { path = "core" }
 localforge-backend-local = { path = "backend-local" }
 localforge-backend-remote = { path = "backend-remote" }
+# Platform-agnostic LocalForge Cloud client — being extracted from
+# src/cloud/* in stages so the desktop and the mobile companion share
+# one implementation. Stage 1 (this version) provides api_origin /
+# user_agent and the HTTP wrapper (ApiError + get/post). Subsequent
+# modules (auth, vault, sync, relay, …) land in follow-up commits.
+localforge-cloud-client = { path = "cloud-client" }
 toml = "1"
 anyhow = "1"
 tauri = { version = "2", features = ["tray-icon"] }

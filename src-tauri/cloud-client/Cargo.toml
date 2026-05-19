@@ -1,0 +1,37 @@
+[package]
+name = "localforge-cloud-client"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared LocalForge Cloud client (HTTP, envelope crypto, relay) for desktop and mobile"
+
+# This crate is the platform-agnostic part of LocalForge's cloud
+# integration: HTTP API client, envelope-encryption (DEK/KEK), audit
+# producer, sync push/pull, and the WebSocket relay client. Anything
+# platform-specific (OS keychain access, Tauri commands, deep-link
+# handling) lives in the consuming app — both desktop and mobile
+# implement the traits defined here.
+#
+# Extraction is happening in stages so the desktop never breaks. See
+# the commit messages on `serverwave-anywhere` for the migration log.
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# HTTP client. rustls-no-provider so we don't pull OpenSSL and so the
+# whole workspace dedupes one TLS stack.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
+
+# Envelope encryption — AES-256-GCM for the wrap + scrypt for the KEK
+# derivation. Both pure-Rust and cross-compile to iOS/Android cleanly.
+aes-gcm = "0.10"
+scrypt = { version = "0.11", default-features = false }
+rand = "0.9"
+base64 = "0.22"
+sha2 = "0.10"

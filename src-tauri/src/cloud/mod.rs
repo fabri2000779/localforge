@@ -8,7 +8,15 @@
 //! `oauth.rs`. Email/password and account queries live in `auth.rs`.
 //! JWT storage in the OS keychain lives in `keychain.rs`. Stripe
 //! checkout / portal commands live in `billing.rs`.
-pub mod api;
+//!
+//! Refactor in progress (stage 1): the platform-agnostic core of this
+//! module is moving into the `localforge-cloud-client` crate so the
+//! desktop and the mobile companion share one implementation. The
+//! desktop modules below stay during the migration so existing call
+//! sites (and the Tauri command registry in `main.rs`) don't break;
+//! the API helpers (`api_origin`, `api`) are re-exported from the
+//! shared crate below.
+
 pub mod audit;
 pub mod auth;
 pub mod billing;
@@ -19,19 +27,7 @@ pub mod relay;
 pub mod sync;
 pub mod vault;
 
-/// The Cloud API base URL. Override at runtime with the
-/// `LOCALFORGE_CLOUD_API` env var when iterating locally.
-pub fn api_origin() -> String {
-    std::env::var("LOCALFORGE_CLOUD_API")
-        .unwrap_or_else(|_| "https://api.localforge.gg".to_string())
-}
-
-/// Default UA we send on every cloud call — helps cloud-side logs.
-pub fn user_agent() -> String {
-    format!(
-        "LocalForge/{} ({} {})",
-        env!("CARGO_PKG_VERSION"),
-        std::env::consts::OS,
-        std::env::consts::ARCH,
-    )
-}
+// HTTP wrapper + base helpers come from the shared crate now. Existing
+// `super::api::...` and `super::api_origin()` call sites keep working
+// because they resolve through these re-exports.
+pub use localforge_cloud_client::{api, api_origin};

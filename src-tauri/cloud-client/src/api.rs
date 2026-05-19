@@ -1,15 +1,25 @@
-//! Thin reqwest wrapper around `api.localforge.gg`. Single shared client
-//! per process so we get connection pooling.
+//! Thin reqwest wrapper around `api.localforge.gg`. Single shared
+//! client per process so we get connection pooling.
+//!
+//! Moved unchanged from the desktop's `src/cloud/api.rs` as part of
+//! the cloud-client extraction (stage 1). The only edit is the path
+//! that imports `api_origin` / `user_agent` — those now live at the
+//! crate root instead of in a sibling module.
 
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::sync::OnceLock;
 
-use super::{api_origin, user_agent};
+use crate::{api_origin, user_agent};
 
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-pub(crate) fn client() -> &'static reqwest::Client {
+/// The shared reqwest client. Public so callers that need a custom
+/// HTTP method (PUT, DELETE) or response handling beyond what `get()`
+/// / `post()` provide can build their own request. Stage 2 of the
+/// refactor will add proper helpers for those cases so this exposure
+/// can shrink back to crate-private.
+pub fn client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .user_agent(user_agent())
@@ -21,8 +31,13 @@ pub(crate) fn client() -> &'static reqwest::Client {
 
 /// Shape of an error response from the cloud API.
 /// Most endpoints return `{ "error": "<code>", "message"?: "<detail>" }`.
+///
+/// Public for the same reason `client()` is — call sites that hand-
+/// roll their HTTP request need a way to parse the error body into
+/// the same shape `get()` / `post()` produce. Refactor stage 2 will
+/// hide this again once `put()` / `delete()` helpers exist.
 #[derive(Debug, serde::Deserialize)]
-pub(crate) struct ApiErrorBody {
+pub struct ApiErrorBody {
     pub error: String,
     #[serde(default)]
     pub message: Option<String>,
@@ -47,6 +62,11 @@ pub enum ApiError {
 
 /// Serialize for tauri::command return values — the frontend gets a
 /// `{ code, status, message }` object on rejection.
+///
+/// Note: this `Serialize` impl is independent of Tauri (it's just
+/// serde) but exists specifically so consuming apps can return
+/// `Result<_, ApiError>` from their `#[tauri::command]` handlers
+/// without any wrapping. Mobile reuses the exact same contract.
 impl serde::Serialize for ApiError {
     fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
     where
@@ -109,8 +129,8 @@ async fn request<B: Serialize, R: DeserializeOwned>(
     let status = res.status();
     if status.is_success() {
         if status == reqwest::StatusCode::NO_CONTENT {
-            // R must be `()` here in practice; if it isn't this just fails
-            // at deserialization, which is the right signal.
+            // R must be `()` here in practice; if it isn't this just
+            // fails at deserialization, which is the right signal.
             return serde_json::from_value(serde_json::Value::Null)
                 .map_err(|e| ApiError::Decode(e.to_string()));
         }

@@ -26,6 +26,17 @@ fn main() {
 
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
+    // Tell the cloud-client crate which product+version to advertise
+    // in the User-Agent. The shared crate can't bake this in via
+    // `env!()` because that would resolve to its own version (always
+    // 0.1.x), which is not what the cloud-side logs want to see.
+    localforge_cloud_client::init_user_agent(format!(
+        "LocalForge/{} ({} {})",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    ));
+
     tauri::Builder::default()
         // single-instance MUST be the first plugin: if a second copy
         // of LocalForge launches (which is what happens on Win/Linux
