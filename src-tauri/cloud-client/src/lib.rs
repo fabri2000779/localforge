@@ -24,6 +24,8 @@
 #![warn(unused_must_use)]
 
 pub mod api;
+pub mod auth;
+pub mod oauth;
 
 // ---------------------------------------------------------------------------
 // Global config / base helpers

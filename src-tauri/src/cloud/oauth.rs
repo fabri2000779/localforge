@@ -1,16 +1,23 @@
-//! OAuth via system browser.
+//! Desktop OAuth glue.
+//!
+//! URL building + token parsing live in `localforge-cloud-client::oauth`
+//! (so the mobile companion reuses the exact same shape). What stays
+//! here is the desktop-specific wiring: opening the system browser via
+//! `tauri_plugin_opener`, receiving deep-links via the single-instance
+//! / deep-link plugins, persisting the JWT to the OS keychain, and
+//! emitting events the React layer listens for.
 //!
 //! Flow:
 //!   1. UI calls `cloud_oauth_start("discord" | "google" | "github")`.
 //!   2. We open `${API_ORIGIN}/v1/auth/<provider>/start?redirect_to=localforge://auth/callback`
-//!      in the user's default browser via tauri-plugin-shell.
+//!      in the user's default browser via tauri-plugin-opener.
 //!   3. They sign in / authorise.
 //!   4. The cloud API 302s the browser to `localforge://auth/callback?token=<jwt>`.
 //!   5. The OS hands that URL to whichever process registered the
 //!      `localforge` scheme — that's us. The deep-link plugin fires
-//!      a tauri event we already subscribe to in `lib.rs::setup`.
-//!   6. The handler parses the URL, stashes the JWT, fetches /me, and
-//!      emits a `cloud://signed-in` event the React layer listens to.
+//!      a tauri event we subscribe to in `main.rs::setup`.
+//!   6. handle_auth_callback stashes the JWT, fetches /me, and emits
+//!      `cloud://signed-in` for the React layer.
 //!
 //! Errors land on a `cloud://auth-error` event with `{code, message}`.
 
@@ -19,29 +26,22 @@ use tauri_plugin_opener::OpenerExt;
 
 use super::{api_origin, auth, keychain};
 
+use localforge_cloud_client::oauth as shared;
+
 const REDIRECT_URI: &str = "localforge://auth/callback";
 
 #[tauri::command]
 pub async fn cloud_oauth_start(app: AppHandle, provider: String) -> Result<(), String> {
-    if !matches!(provider.as_str(), "discord" | "google" | "github") {
-        return Err(format!("unknown provider {provider}"));
-    }
-    // urlencode the redirect_to so providers don't fail on the colon
-    let encoded = urlencode(REDIRECT_URI);
-    let url = format!(
-        "{}/v1/auth/{}/start?redirect_to={}",
-        api_origin(),
-        provider,
-        encoded
-    );
+    let url = shared::start_url(&api_origin(), &provider, REDIRECT_URI)
+        .map_err(|e| e.to_string())?;
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|e| format!("failed to open browser: {e}"))
 }
 
-/// Process an incoming deep-link URL. Called from `lib.rs::setup` via the
-/// `tauri-plugin-deep-link` `on_open_url` callback. Tolerates noise (URLs
-/// for unrelated schemes/paths) by ignoring them silently.
+/// Process an incoming deep-link URL. Called from `main.rs::setup` via
+/// the `tauri-plugin-deep-link` `on_open_url` callback. Tolerates noise
+/// (URLs for unrelated schemes/paths) by ignoring them silently.
 pub async fn handle_deep_link(app: AppHandle, url: String) {
     // OAuth callback path — auth flow.
     if url.starts_with("localforge://auth/callback") {
@@ -56,19 +56,7 @@ pub async fn handle_deep_link(app: AppHandle, url: String) {
 }
 
 async fn handle_auth_callback(app: AppHandle, url: String) {
-
-    // Minimal parse — the URL is fixed-shape so we don't need a real
-    // URL crate. Anything we don't recognise → emit a bad_url error.
-    let token = url
-        .split_once('?')
-        .and_then(|(_, q)| {
-            q.split('&').find_map(|pair| {
-                let (k, v) = pair.split_once('=')?;
-                (k == "token").then(|| urldecode(v))
-            })
-        });
-
-    let Some(token) = token else {
+    let Some(token) = shared::parse_callback_token(&url) else {
         emit_error(&app, "no_token", "callback URL had no token");
         return;
     };
@@ -111,72 +99,16 @@ fn emit_error(app: &AppHandle, code: &str, message: &str) {
 /// asking the user whether to accept (they need to be logged in
 /// already; if not, the dialog prompts them to sign in first).
 async fn handle_invite(app: AppHandle, url: String) {
-    let token = url
-        .split_once('?')
-        .and_then(|(_, q)| {
-            q.split('&').find_map(|pair| {
-                let (k, v) = pair.split_once('=')?;
-                (k == "token").then(|| urldecode(v))
-            })
-        });
-    if let Some(t) = token {
-        if let Some(w) = app.get_webview_window("main") {
-            let _ = w.set_focus();
-            let _ = w.unminimize();
-        }
-        let _ = app.emit(
-            "cloud://invite-received",
-            serde_json::json!({ "token": t }),
-        );
-    } else {
+    let Some(token) = shared::parse_query_param(&url, "token") else {
         emit_error(&app, "no_invite_token", "the invite URL had no token");
+        return;
+    };
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_focus();
+        let _ = w.unminimize();
     }
-}
-
-/// Minimal URL-component encoder — we only encode a tiny fixed URL, so
-/// pulling `urlencoding` as a dep would be overkill.
-fn urlencode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 3);
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => {
-                out.push('%');
-                out.push_str(&format!("{:02X}", b));
-            }
-        }
-    }
-    out
-}
-
-/// Symmetric of urlencode for the small handful of percent-escapes
-/// providers might add (the JWT itself is base64url so it shouldn't have
-/// any, but the API uses `URLSearchParams` which percent-encodes `+`/
-/// `=` paddings in `?token=…`).
-fn urldecode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b == b'%' && i + 2 < bytes.len() {
-            if let (Some(h), Some(l)) = (
-                (bytes[i + 1] as char).to_digit(16),
-                (bytes[i + 2] as char).to_digit(16),
-            ) {
-                out.push(((h << 4) | l) as u8);
-                i += 3;
-                continue;
-            }
-        } else if b == b'+' {
-            out.push(b' ');
-            i += 1;
-            continue;
-        }
-        out.push(b);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    let _ = app.emit(
+        "cloud://invite-received",
+        serde_json::json!({ "token": token }),
+    );
 }

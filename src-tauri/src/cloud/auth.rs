@@ -1,85 +1,36 @@
-//! Auth commands invoked from the React layer:
+//! Desktop Tauri command surface for auth.
+//!
+//! The HTTP, types and pure parsing live in `localforge-cloud-client`.
+//! What stays here is the desktop-specific glue: OS keychain access
+//! (via `super::keychain`), the auto-setup/unlock of the envelope-
+//! encryption DEK after sign-in (via `super::vault`), and the
+//! `#[tauri::command]` registrations that connect those to the React
+//! layer.
+//!
+//! Commands:
 //!
 //!   cloud_signup(email, password, displayName?) -> Me
 //!   cloud_login(email, password)                -> Me
 //!   cloud_logout()                              -> ()
-//!   cloud_me()                                  -> Option<Me>      (None if not signed in)
-//!   cloud_request_reset(email)                  -> ()
+//!   cloud_me()                                  -> Option<Me>  (None if not signed in)
+//!   cloud_request_password_reset(email)         -> ()
 //!   cloud_resend_verification()                 -> ()
-//!
-//! All three "produce a Me" commands also stash the JWT in the OS
-//! keychain. `cloud_me()` is the one the frontend calls at startup to
-//! re-hydrate state from the stored token (no token → returns None,
-//! and the UI shows the "Sign in" affordance).
-use serde::{Deserialize, Serialize};
+//!   cloud_export_data()                         -> String      (path written)
 
 use super::{api, keychain};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Subscription {
-    pub plan: String, // 'free' | 'hobby' | 'team'
-    #[serde(rename = "currentPeriodEnd")]
-    pub current_period_end: Option<i64>,
-    #[serde(rename = "cancelAtPeriodEnd")]
-    pub cancel_at_period_end: bool,
-    #[serde(rename = "trialEndsAt")]
-    pub trial_ends_at: Option<i64>,
-    /// Unix ms when cloud-side data will be hard-deleted (set when the
-    /// user dropped to free; null while on a paid plan). Optional in
-    /// the API surface — older clients haven't seen it yet.
-    #[serde(rename = "purgeAt", default)]
-    pub purge_at: Option<i64>,
-}
+// Re-export the wire types so the React layer (via #[tauri::command]
+// return types) keeps seeing the same shape. The unused-import lint
+// fires on `Subscription` / `SyncKeyInfo` here because they only
+// appear transitively inside `Me`'s JSON — neither is named directly
+// in this file. Suppressing rather than dropping them keeps the
+// `cloud::auth::*` namespace stable in case any future desktop code
+// needs them.
+#[allow(unused_imports)]
+pub use localforge_cloud_client::auth::{Me, Subscription, SyncKeyInfo, fetch_me};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Me {
-    pub id: String,
-    pub email: String,
-    #[serde(rename = "displayName")]
-    pub display_name: Option<String>,
-    #[serde(rename = "emailVerifiedAt")]
-    pub email_verified_at: Option<i64>,
-    #[serde(rename = "createdAt")]
-    pub created_at: i64,
-    pub subscription: Subscription,
-    /// Envelope-encryption material. None when the user hasn't set
-    /// up their sync key yet (typical for fresh OAuth accounts —
-    /// they get prompted on first launch). Email/pwd users get this
-    /// populated automatically at signup.
-    #[serde(rename = "syncKey", default)]
-    pub sync_key: Option<SyncKeyInfo>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncKeyInfo {
-    pub wrapped_dek: String,
-    pub kek_salt: String,
-    // kek_params kept opaque — the desktop hard-codes the defaults
-    // and we'd consult these only when rotating to harder params.
-    #[serde(default)]
-    pub kek_params: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AuthResponse {
-    token: String,
-}
-
-#[derive(Debug, Serialize)]
-struct SignupBody<'a> {
-    email: &'a str,
-    password: &'a str,
-    #[serde(rename = "displayName", skip_serializing_if = "Option::is_none")]
-    display_name: Option<&'a str>,
-}
-
-#[derive(Debug, Serialize)]
-struct LoginBody<'a> {
-    email: &'a str,
-    password: &'a str,
-}
-
+// ---------------------------------------------------------------------------
+// Tauri commands
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
@@ -88,44 +39,28 @@ pub async fn cloud_signup(
     password: String,
     display_name: Option<String>,
 ) -> Result<Me, api::ApiError> {
-    let r: AuthResponse = api::post(
-        "/v1/auth/signup",
-        &SignupBody {
-            email: &email,
-            password: &password,
-            display_name: display_name.as_deref(),
-        },
-        None,
-    )
-    .await?;
-    keychain::save_token(&r.token).map_err(|e| api::ApiError::Decode(format!("keychain: {e}")))?;
+    let token =
+        localforge_cloud_client::auth::signup(&email, &password, display_name.as_deref()).await?;
+    keychain::save_token(&token).map_err(|e| api::ApiError::Decode(format!("keychain: {e}")))?;
     // Set up the envelope-encryption wrap NOW while we still have the
     // password in hand. Without this the user couldn't sync on a second
     // device without copying their recovery key by hand.
     if let Err(e) = super::vault::cloud_sync_key_setup(password.clone(), Some(false)).await {
         tracing::warn!("[signup] sync-key setup failed: {:?}", e);
     }
-    fetch_me(&r.token).await
+    fetch_me(&token).await
 }
 
 #[tauri::command]
 pub async fn cloud_login(email: String, password: String) -> Result<Me, api::ApiError> {
-    let r: AuthResponse = api::post(
-        "/v1/auth/login",
-        &LoginBody {
-            email: &email,
-            password: &password,
-        },
-        None,
-    )
-    .await?;
-    keychain::save_token(&r.token).map_err(|e| api::ApiError::Decode(format!("keychain: {e}")))?;
+    let token = localforge_cloud_client::auth::login(&email, &password).await?;
+    keychain::save_token(&token).map_err(|e| api::ApiError::Decode(format!("keychain: {e}")))?;
     // Best-effort: try to unlock the DEK with this password so the
     // user can sync immediately. If they never set up the wrap (legacy
-    // v0.1.14 user) this 412s silently and we fall back to the local
-    // vault key. If they DID set up but typed the wrong password the
-    // server would've already rejected the login above, so any error
-    // here means a desktop bug — log it loud.
+    // v0.1.14 user) this 412s silently and we fall back to setup. If
+    // they DID set up but typed the wrong password the server already
+    // rejected the login above, so any error here means a desktop bug
+    // — log it loud.
     if let Err(e) = super::vault::cloud_sync_key_unlock(password.clone()).await {
         match &e {
             api::ApiError::Server { code, .. } if code == "sync_key_not_set" => {
@@ -139,16 +74,16 @@ pub async fn cloud_login(email: String, password: String) -> Result<Me, api::Api
             _ => tracing::warn!("[login] sync-key unlock failed: {:?}", e),
         }
     }
-    fetch_me(&r.token).await
+    fetch_me(&token).await
 }
 
 #[tauri::command]
 pub async fn cloud_logout() -> Result<(), api::ApiError> {
     // Tell the API to revoke the session so other devices syncing from
-    // it stop working immediately. Fire-and-forget — if it fails (offline,
-    // etc.) we still clear the local copy.
+    // it stop working immediately. Fire-and-forget — if it fails
+    // (offline, etc.) we still clear the local copy.
     if let Some(t) = keychain::load_token() {
-        let _ = api::post::<_, serde_json::Value>("/v1/auth/logout", &serde_json::json!({}), Some(&t)).await;
+        let _ = localforge_cloud_client::auth::logout(&t).await;
     }
     keychain::clear_token().map_err(|e| api::ApiError::Decode(format!("keychain: {e}")))?;
     Ok(())
@@ -169,20 +104,9 @@ pub async fn cloud_me() -> Result<Option<Me>, api::ApiError> {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct EmailOnly<'a> {
-    email: &'a str,
-}
-
 #[tauri::command]
 pub async fn cloud_request_password_reset(email: String) -> Result<(), api::ApiError> {
-    let _: serde_json::Value = api::post(
-        "/v1/auth/request-password-reset",
-        &EmailOnly { email: &email },
-        None,
-    )
-    .await?;
-    Ok(())
+    localforge_cloud_client::auth::request_password_reset(&email).await
 }
 
 #[tauri::command]
@@ -194,18 +118,13 @@ pub async fn cloud_resend_verification() -> Result<(), api::ApiError> {
             message: None,
         });
     };
-    let _: serde_json::Value =
-        api::post("/v1/auth/resend-verification", &serde_json::json!({}), Some(&t)).await?;
-    Ok(())
+    localforge_cloud_client::auth::resend_verification(&t).await
 }
 
-/// Internal: pull /me with a known-good token.
-pub(super) async fn fetch_me(token: &str) -> Result<Me, api::ApiError> {
-    api::get("/v1/account/me", Some(token)).await
-}
-
-/// Convenience for other modules (sync, billing) that need the current
-/// bearer token. Returns None if the user isn't signed in.
+/// Convenience for other desktop modules (sync, billing, etc.) that
+/// need the current bearer token. Returns None if the user isn't
+/// signed in. This stays desktop-only because it reads from the OS
+/// keychain; mobile has its own equivalent backed by app-data storage.
 pub fn current_token() -> Option<String> {
     keychain::load_token()
 }
@@ -213,6 +132,10 @@ pub fn current_token() -> Option<String> {
 /// GET /v1/account/export, save the body to a path the user picks.
 /// Returns the absolute path written (or an error). The user sees a
 /// native save dialog so they choose where the file lands.
+///
+/// Stays here (not in the shared crate) because the save dialog is
+/// `tauri_plugin_dialog`-specific and `std::fs::write` doesn't make
+/// sense on mobile (sandboxed storage, share sheet instead).
 #[tauri::command]
 pub async fn cloud_export_data(app: tauri::AppHandle) -> Result<String, api::ApiError> {
     let token = current_token().ok_or_else(|| api::ApiError::Server {
@@ -258,4 +181,3 @@ pub async fn cloud_export_data(app: tauri::AppHandle) -> Result<String, api::Api
     std::fs::write(&chosen, &body).map_err(|e| api::ApiError::Decode(format!("write: {e}")))?;
     Ok(chosen.to_string_lossy().to_string())
 }
-
