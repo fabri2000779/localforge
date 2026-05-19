@@ -34,6 +34,9 @@ export function CloudAccountPanel() {
   const lastSyncResult = useAuthStore((s) => s.lastSyncResult);
   const syncNow = useAuthStore((s) => s.syncNow);
   const exportData = useAuthStore((s) => s.exportData);
+  const syncKeyStatus = useAuthStore((s) => s.syncKeyStatus);
+  const refreshSyncKeyStatus = useAuthStore((s) => s.refreshSyncKeyStatus);
+  const openSyncKeyDialog = useAuthStore((s) => s.openSyncKeyDialog);
 
   const [loginOpen, setLoginOpen] = useState(false);
   const [resendOk, setResendOk] = useState(false);
@@ -42,7 +45,10 @@ export function CloudAccountPanel() {
 
   // Re-pull /me when the panel mounts so the displayed plan is fresh
   // (the user might have just upgraded in a browser tab and come back).
-  useEffect(() => { void refreshMe(); }, [refreshMe]);
+  useEffect(() => {
+    void refreshMe();
+    void refreshSyncKeyStatus();
+  }, [refreshMe, refreshSyncKeyStatus]);
 
   // Signed-out card
   if (me === null || me === undefined) {
@@ -138,6 +144,28 @@ export function CloudAccountPanel() {
             </div>
             <button className="btn-primary" onClick={() => withBusy('hobby', () => openCheckout('hobby'))} disabled={busy === 'hobby'}>
               Re-subscribe
+            </button>
+          </div>
+        )}
+
+        {syncKeyStatus && syncKeyStatus !== 'unlocked' && (
+          <div className="cloud-warn">
+            <KeyRound size={14} className="shrink-0 text-amber-400 mt-[2px]" />
+            <div className="flex-1">
+              <strong>
+                {syncKeyStatus === 'not_set_up'
+                  ? 'Set up your sync password'
+                  : 'Unlock your synced data'}
+              </strong>
+              <p>
+                {syncKeyStatus === 'not_set_up'
+                  ? "Pick a passphrase the cloud can't read. You'll use it to access your configs on other devices."
+                  : 'Enter the sync password you created on your first device to decrypt configs here.'}
+              </p>
+            </div>
+            <button className="btn-secondary" onClick={openSyncKeyDialog}>
+              <KeyRound size={13} strokeWidth={2.2} />
+              {syncKeyStatus === 'not_set_up' ? 'Set up' : 'Unlock'}
             </button>
           </div>
         )}

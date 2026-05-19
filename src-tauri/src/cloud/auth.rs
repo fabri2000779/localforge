@@ -42,6 +42,23 @@ pub struct Me {
     #[serde(rename = "createdAt")]
     pub created_at: i64,
     pub subscription: Subscription,
+    /// Envelope-encryption material. None when the user hasn't set
+    /// up their sync key yet (typical for fresh OAuth accounts —
+    /// they get prompted on first launch). Email/pwd users get this
+    /// populated automatically at signup.
+    #[serde(rename = "syncKey", default)]
+    pub sync_key: Option<SyncKeyInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncKeyInfo {
+    pub wrapped_dek: String,
+    pub kek_salt: String,
+    // kek_params kept opaque — the desktop hard-codes the defaults
+    // and we'd consult these only when rotating to harder params.
+    #[serde(default)]
+    pub kek_params: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

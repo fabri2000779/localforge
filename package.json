@@ -1,6 +1,6 @@
 {
   "name": "localforge",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Run game servers locally with a single click",
   "author": "Fabrizio",
   "license": "MIT",

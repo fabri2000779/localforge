@@ -30,7 +30,23 @@ export interface Me {
   emailVerifiedAt: number | null;
   createdAt: number;
   subscription: Subscription;
+  /** Envelope-encryption material. null when the user hasn't set up
+   *  their sync key — typical for fresh OAuth accounts. The desktop
+   *  prompts them via SyncKeyDialog the first time they log in. */
+  syncKey: {
+    wrappedDek: string;
+    kekSalt: string;
+    kekParams?: { algo: string; n: number; r: number; p: number; len: number } | null;
+  } | null;
 }
+
+/** Three-state diagnostic that drives the SyncKeyDialog visibility:
+ *  - 'not_set_up': nothing on the cloud → setup mode (pick a passphrase)
+ *  - 'locked':     cloud has a wrap but local keychain is empty → unlock mode
+ *  - 'unlocked':   ready to sync
+ *  - null: not signed in / not yet checked
+ */
+export type SyncKeyStatus = 'not_set_up' | 'locked' | 'unlocked' | null;
 
 export interface ApiErrorShape {
   status: number;
@@ -83,6 +99,21 @@ interface AuthState {
   vaultHasKey: () => Promise<boolean>;
   /** Trigger the API export + native save dialog. Returns the chosen path or null. */
   exportData: () => Promise<string | null>;
+
+  // Envelope-encryption sync key status + setup/unlock helpers.
+  syncKeyStatus: SyncKeyStatus;
+  /** Counter the SyncKeyDialog watches to re-open after a user
+   *  clicked "Skip for now". Bumping it forces a re-show without
+   *  changing any other state. */
+  openSyncKeyTick: number;
+  openSyncKeyDialog: () => void;
+  refreshSyncKeyStatus: () => Promise<SyncKeyStatus>;
+  /** Setup a brand-new sync key — used by OAuth signups picking a
+   *  passphrase. Returns true on success. */
+  setupSyncKey: (secret: string) => Promise<boolean>;
+  /** Unlock with the passphrase on a second device. Returns true on
+   *  success, false on wrong secret (UI re-prompts). */
+  unlockSyncKey: (secret: string) => Promise<boolean>;
 }
 
 export interface RemoteServer {
@@ -160,6 +191,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // titlebar switcher + per-role gating across the app.
       if (me) {
         void get().fetchOrgs();
+        void get().refreshSyncKeyStatus();
       }
     } catch (e) {
       // Network failure / token rejected → land in "not signed in" so
@@ -178,6 +210,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         void invoke('cloud_relay_start');
       }
       void get().fetchOrgs();
+      // OAuth users will land here with syncKey=null on first device
+      // (or with syncKey set but no local DEK on a second device).
+      // refreshSyncKeyStatus drives the SyncKeyDialog to appear.
+      void get().refreshSyncKeyStatus();
     });
     const unPartial = await listen('cloud://signed-in-partial', () => {
       // OAuth landed but /me failed — pull fresh once so the UI catches up.
@@ -243,7 +279,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // Disconnect the relay first so we don't keep an authed WS dangling.
     try { await invoke<void>('cloud_relay_stop'); } catch { /* ignore */ }
     try { await invoke<void>('cloud_logout'); } catch { /* ignore */ }
-    set({ me: null, loading: false, error: null, lastSyncResult: null, lastSyncedAt: null });
+    set({
+      me: null,
+      loading: false,
+      error: null,
+      lastSyncResult: null,
+      lastSyncedAt: null,
+      syncKeyStatus: null,
+    });
   },
 
   refreshMe: async () => {
@@ -410,6 +453,53 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (ae.code === 'decode' && ae.message === 'cancelled') return null;
       set({ error: ae });
       return null;
+    }
+  },
+
+  // -------------------------------------------------------------------------
+  // Envelope-encryption sync key
+  // -------------------------------------------------------------------------
+  syncKeyStatus: null,
+  openSyncKeyTick: 0,
+  openSyncKeyDialog: () => set((s) => ({ openSyncKeyTick: s.openSyncKeyTick + 1 })),
+
+  refreshSyncKeyStatus: async () => {
+    try {
+      const s = await invoke<SyncKeyStatus>('cloud_sync_key_status');
+      set({ syncKeyStatus: s });
+      return s;
+    } catch {
+      // Treat any failure as not-yet-known; the dialog stays hidden
+      // rather than nagging the user about a transient network blip.
+      return get().syncKeyStatus;
+    }
+  },
+
+  setupSyncKey: async (secret) => {
+    set({ error: null });
+    try {
+      await invoke<void>('cloud_sync_key_setup', { secret });
+      await get().refreshSyncKeyStatus();
+      return true;
+    } catch (e) {
+      set({ error: asErr(e) });
+      return false;
+    }
+  },
+
+  unlockSyncKey: async (secret) => {
+    set({ error: null });
+    try {
+      await invoke<void>('cloud_sync_key_unlock', { secret });
+      await get().refreshSyncKeyStatus();
+      return true;
+    } catch (e) {
+      const ae = asErr(e);
+      // wrong_secret is the expected non-failure path — let the UI
+      // re-prompt cleanly without showing it as a global error.
+      if (ae.code === 'wrong_secret') return false;
+      set({ error: ae });
+      return false;
     }
   },
 }));
