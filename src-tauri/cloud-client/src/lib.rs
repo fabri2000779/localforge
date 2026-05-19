@@ -24,8 +24,12 @@
 #![warn(unused_must_use)]
 
 pub mod api;
+pub mod audit;
 pub mod auth;
+pub mod billing;
 pub mod oauth;
+pub mod orgs;
+pub mod relay;
 pub mod vault;
 
 // ---------------------------------------------------------------------------

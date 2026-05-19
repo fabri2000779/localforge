@@ -1,79 +1,37 @@
-//! Org / members / invitations — desktop side of the Team plan.
+//! Desktop org / member / invitation commands.
 //!
-//! Mirrors the cloud `/v1/orgs/*` API. The audit-log producer is the
-//! one helper that everyone else in the codebase eventually calls.
-
-use serde::{Deserialize, Serialize};
+//! All wire types + HTTP calls live in
+//! `localforge-cloud-client::orgs` so desktop and mobile see the
+//! identical shapes. The desktop layer here is just `#[tauri::command]`
+//! adapters that read the bearer token from the OS keychain and
+//! delegate. Re-exports keep `cloud::orgs::{OrgInfo, Member, …}` at
+//! the same path so the React layer's TypeScript bindings don't
+//! shift.
 
 use super::{api, auth};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct Member {
-    pub id: String,
-    pub email: String,
-    pub display_name: Option<String>,
-    pub avatar_url: Option<String>,
-    pub role: String, // owner | admin | operator | viewer
-    pub joined_at: i64,
-}
+#[allow(unused_imports)]
+pub use localforge_cloud_client::orgs::{Invitation, Member, OrgInfo, OrgSummary};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OrgInfo {
-    pub id: String,
-    pub name: String,
-    pub role: String,
-    pub is_owner: bool,
-    pub created_at: i64,
-    pub members: Vec<Member>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct Invitation {
-    pub id: String,
-    pub email: String,
-    pub role: String,
-    pub expires_at: i64,
-    pub created_at: i64,
-}
-
-// ---------------------------------------------------------------------------
-// Commands
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OrgSummary {
-    pub id: String,
-    pub name: String,
-    pub role: String,
-    pub is_owner: bool,
-    pub created_at: i64,
-    pub joined_at: i64,
+fn unauth() -> api::ApiError {
+    api::ApiError::Server {
+        status: 401,
+        code: "unauthenticated".into(),
+        message: None,
+    }
 }
 
 /// List every org the user belongs to. Used by the org switcher.
 #[tauri::command]
 pub async fn cloud_orgs_list() -> Result<Vec<OrgSummary>, api::ApiError> {
     let token = auth::current_token().ok_or_else(unauth)?;
-    #[derive(Deserialize)]
-    struct Resp { orgs: Vec<OrgSummary> }
-    let r: Resp = api::get("/v1/orgs", Some(&token)).await?;
-    Ok(r.orgs)
+    localforge_cloud_client::orgs::list(&token).await
 }
 
 #[tauri::command]
 pub async fn cloud_orgs_me() -> Result<OrgInfo, api::ApiError> {
     let token = auth::current_token().ok_or_else(unauth)?;
-    api::get("/v1/orgs/me", Some(&token)).await
-}
-
-#[derive(Serialize)]
-struct InviteBody<'a> {
-    email: &'a str,
-    role: &'a str,
+    localforge_cloud_client::orgs::me(&token).await
 }
 
 #[tauri::command]
@@ -83,21 +41,13 @@ pub async fn cloud_orgs_invite(
     role: String,
 ) -> Result<serde_json::Value, api::ApiError> {
     let token = auth::current_token().ok_or_else(unauth)?;
-    api::post(
-        &format!("/v1/orgs/{}/invitations", org_id),
-        &InviteBody { email: &email, role: &role },
-        Some(&token),
-    )
-    .await
+    localforge_cloud_client::orgs::invite(&org_id, &email, &role, &token).await
 }
 
 #[tauri::command]
 pub async fn cloud_orgs_list_invitations(org_id: String) -> Result<Vec<Invitation>, api::ApiError> {
-    #[derive(Deserialize)]
-    struct Resp { invitations: Vec<Invitation> }
     let token = auth::current_token().ok_or_else(unauth)?;
-    let r: Resp = api::get(&format!("/v1/orgs/{}/invitations", org_id), Some(&token)).await?;
-    Ok(r.invitations)
+    localforge_cloud_client::orgs::list_invitations(&org_id, &token).await
 }
 
 #[tauri::command]
@@ -106,27 +56,13 @@ pub async fn cloud_orgs_revoke_invitation(
     invitation_id: String,
 ) -> Result<(), api::ApiError> {
     let token = auth::current_token().ok_or_else(unauth)?;
-    let url = format!(
-        "{}/v1/orgs/{}/invitations/{}",
-        super::api_origin(),
-        org_id,
-        invitation_id,
-    );
-    let res = api::client()
-        .delete(&url)
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(api::ApiError::Network)?;
-    if res.status().is_success() {
-        Ok(())
-    } else {
-        Err(api::ApiError::Server {
-            status: res.status().as_u16(),
-            code: "delete_failed".into(),
-            message: None,
-        })
-    }
+    localforge_cloud_client::orgs::revoke_invitation(
+        &org_id,
+        &invitation_id,
+        &token,
+        &super::api_origin(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -135,27 +71,13 @@ pub async fn cloud_orgs_remove_member(
     user_id: String,
 ) -> Result<(), api::ApiError> {
     let token = auth::current_token().ok_or_else(unauth)?;
-    let url = format!(
-        "{}/v1/orgs/{}/members/{}",
-        super::api_origin(),
-        org_id,
-        user_id,
-    );
-    let res = api::client()
-        .delete(&url)
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(api::ApiError::Network)?;
-    if res.status().is_success() {
-        Ok(())
-    } else {
-        Err(api::ApiError::Server {
-            status: res.status().as_u16(),
-            code: "delete_failed".into(),
-            message: None,
-        })
-    }
+    localforge_cloud_client::orgs::remove_member(
+        &org_id,
+        &user_id,
+        &token,
+        &super::api_origin(),
+    )
+    .await
 }
 
 /// Accept an invitation token (delivered via the `localforge://invite`
@@ -164,21 +86,5 @@ pub async fn cloud_orgs_remove_member(
 #[tauri::command]
 pub async fn cloud_orgs_accept_invite(token: String) -> Result<String, api::ApiError> {
     let bearer = auth::current_token().ok_or_else(unauth)?;
-    #[derive(Deserialize)]
-    struct Resp { #[serde(rename = "organizationId")] org_id: String }
-    let r: Resp = api::post(
-        &format!("/v1/orgs/invitations/{}/accept", token),
-        &serde_json::json!({}),
-        Some(&bearer),
-    )
-    .await?;
-    Ok(r.org_id)
-}
-
-fn unauth() -> api::ApiError {
-    api::ApiError::Server {
-        status: 401,
-        code: "unauthenticated".into(),
-        message: None,
-    }
+    localforge_cloud_client::orgs::accept_invite(&token, &bearer).await
 }

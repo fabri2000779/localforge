@@ -167,7 +167,7 @@ pub async fn cloud_relay_start(
             };
             let url = format!(
                 "wss://{}/v1/relay/{}?token={}",
-                api_host(),
+                localforge_cloud_client::relay::ws_host(&super::api_origin()),
                 org_id,
                 urlencoded(&token),
             );
@@ -327,15 +327,10 @@ async fn handle_text(
     }
 }
 
-fn api_host() -> String {
-    // Strip the scheme so we can prepend `wss://`. api_origin defaults
-    // to https://api.localforge.gg.
-    super::api_origin()
-        .strip_prefix("https://")
-        .or_else(|| super::api_origin().strip_prefix("http://").map(|_| "api.localforge.gg"))
-        .unwrap_or("api.localforge.gg")
-        .to_string()
-}
+// `api_host` previously lived here as a string-stripping helper; it
+// moved to `localforge-cloud-client::relay::ws_host` so the mobile
+// companion picks up the exact same scheme→WSS mapping. Any change
+// to the rule needs to land in the shared crate, not here.
 
 fn urlencoded(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

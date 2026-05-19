@@ -1,23 +1,12 @@
-//! Audit log producer for the desktop.
+//! Desktop audit-log glue.
 //!
-//! Hits POST /v1/audit (the cloud has the queue + consumer wired). One
-//! call per user-initiated action — start, stop, restart, send console
-//! command, file write, etc. Free users still call this — the cloud
-//! drops their entries server-side.
-//!
-//! ALL calls are fire-and-forget. Audit is observational, not
-//! authoritative — if the network is dead it's fine to lose a record.
-
-use serde::Serialize;
+//! The POST logic lives in `localforge-cloud-client::audit`. What
+//! stays here is the desktop's fire-and-forget pattern — every UI
+//! action spawns a Tokio task so the caller doesn't pay any cost on
+//! the request path. Mobile will do something similar with its own
+//! spawn primitive.
 
 use super::{api, auth};
-
-#[derive(Debug, Serialize)]
-struct AuditPayload<'a> {
-    action: &'a str,
-    target: Option<&'a str>,
-    metadata: Option<serde_json::Value>,
-}
 
 /// Best-effort audit emit. Spawns the HTTP call so callers don't pay
 /// any cost on the request path.
@@ -27,38 +16,27 @@ pub fn emit(
     target: Option<String>,
     metadata: Option<serde_json::Value>,
 ) {
-    let app = app.clone();
+    let _ = app; // present so the desktop's command signature stays stable
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = emit_inner(&app, action, target.as_deref(), metadata).await {
+        if let Err(e) = emit_inner(action, target.as_deref(), metadata).await {
             tracing::debug!("[audit] emit({}) failed: {:?}", action, e);
         }
     });
 }
 
 async fn emit_inner(
-    _app: &tauri::AppHandle,
     action: &'static str,
     target: Option<&str>,
     metadata: Option<serde_json::Value>,
 ) -> Result<(), api::ApiError> {
     let Some(token) = auth::current_token() else { return Ok(()) };
-    // The cloud will need an org id eventually — for now the API
-    // route picks the caller's primary org. When we surface a switcher
-    // in the UI we'll pass it explicitly.
-    let _: serde_json::Value = api::post(
-        "/v1/audit",
-        &AuditPayload {
-            action,
-            target,
-            metadata,
-        },
-        Some(&token),
-    )
-    .await?;
-    Ok(())
+    localforge_cloud_client::audit::emit(action, target, metadata, &token).await
 }
 
-// Re-export for callers that have `&AppHandle`.
+/// IPC-facing audit emit. The frontend passes the action as a String,
+/// we map it to one of the recognised static strings; anything else
+/// is logged at debug and dropped (matches the cloud's drop-unknown
+/// policy so the wire contract stays in sync).
 #[tauri::command]
 pub async fn cloud_audit_emit(
     app: tauri::AppHandle,
@@ -66,9 +44,6 @@ pub async fn cloud_audit_emit(
     target: Option<String>,
     metadata: Option<serde_json::Value>,
 ) -> Result<(), String> {
-    // We keep `action` typed as String for the IPC contract, but the
-    // queue is fine with arbitrary strings — the cloud picks a stable
-    // set, anything else is ignored.
     let action_static: &'static str = match action.as_str() {
         "server.start" => "server.start",
         "server.stop" => "server.stop",
@@ -81,7 +56,6 @@ pub async fn cloud_audit_emit(
             return Ok(());
         }
     };
-    let _ = app;
-    emit(&app.clone(), action_static, target, metadata);
+    emit(&app, action_static, target, metadata);
     Ok(())
 }
