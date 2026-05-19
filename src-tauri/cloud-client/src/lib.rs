@@ -30,6 +30,7 @@ pub mod billing;
 pub mod oauth;
 pub mod orgs;
 pub mod relay;
+pub mod sync;
 pub mod vault;
 
 // ---------------------------------------------------------------------------
