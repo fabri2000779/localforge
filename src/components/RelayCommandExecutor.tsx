@@ -16,6 +16,7 @@ import { useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useAuthStore, roleAtLeast, type OrgRole } from '../stores/authStore';
+import { useServerStore } from '../stores/serverStore';
 
 interface RelayCmd {
   type: 'cmd';
@@ -66,6 +67,33 @@ export function RelayCommandExecutor() {
     let unlisten: (() => void) | null = null;
     listen<RelayCmd>('cloud://relay-cmd', async (event) => {
       const msg = event.payload;
+      // ---------------------------------------------------------------------
+      // state.snapshot — read-only enumeration of every server we know
+      // about, with current status. Driven by the mobile companion on
+      // relay connect + pull-to-refresh so it can render per-row badges
+      // without fetching the encrypted blob. Doesn't dispatch through
+      // CMD_MAP because the response isn't a cmd_result — it's its own
+      // event kind that carries the full list inline.
+      // ---------------------------------------------------------------------
+      if (msg.cmd === 'state.snapshot') {
+        const servers = useServerStore.getState().servers;
+        try {
+          await invoke('cloud_relay_send_event', {
+            payload: {
+              kind: 'state_snapshot',
+              request_id: msg.request_id,
+              servers: servers.map((s) => ({
+                id: s.id,
+                status: s.status,
+                container_id: s.container_id ?? null,
+              })),
+            },
+          });
+        } catch (e) {
+          console.error('[relay] state.snapshot reply failed', e);
+        }
+        return;
+      }
       const handler = CMD_MAP[msg.cmd];
       if (!handler) {
         return respond(msg, { success: false, error: `unknown_cmd:${msg.cmd}` });

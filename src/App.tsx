@@ -18,6 +18,7 @@ import { OAuthToast } from './components/OAuthToast';
 import { AcceptInviteToast } from './components/AcceptInviteToast';
 import { RelayCommandExecutor } from './components/RelayCommandExecutor';
 import { RelayLogBridge } from './components/RelayLogBridge';
+import { RelayStateBridge } from './components/RelayStateBridge';
 import { SyncKeyDialog } from './components/SyncKeyDialog';
 import { UpdateChecker } from './components/UpdateChecker';
 import './App.css';
@@ -88,6 +89,7 @@ function App() {
           <AcceptInviteToast />
           <RelayCommandExecutor />
           <RelayLogBridge />
+          <RelayStateBridge />
           <SyncKeyDialog />
           <UpdateChecker />
         </div>
