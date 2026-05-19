@@ -50,46 +50,48 @@ function App() {
     }
   }, [status?.running, fetchServers]);
 
-  // Show Docker requirement screen if Docker is not available
-  if (status && !status.running) {
-    return (
-      <div className="h-screen flex flex-col app-shell">
-        <TitleBar />
-        <DockerRequired status={status} onRetry={checkStatus} />
-        <OAuthToast />
-        <UpdateChecker />
-      </div>
-    );
-  }
-
+  // Wrap EVERY render path in BrowserRouter — TitleBar's AccountChip
+  // calls useNavigate, which throws (silent blank screen in React 19
+  // prod) when rendered outside a Router context. Pre-Phase-5 the
+  // DockerRequired return didn't need a Router; today it does.
   return (
     <BrowserRouter>
-      <div className="h-screen flex flex-col app-shell">
-        <TitleBar />
-        <div className="flex flex-1 overflow-hidden">
-          <Sidebar />
-          <main className="main-content">
-            <div className="page-container">
-              <Routes>
-                <Route path="/" element={<Home />} />
-                <Route path="/servers" element={<Servers />} />
-                <Route path="/servers/create" element={<CreateServer />} />
-                <Route path="/servers/:id" element={<ServerDetail />} />
-                <Route path="/games" element={<GamesPage />} />
-                <Route path="/nodes" element={<NodesPage />} />
-                <Route path="/settings" element={<Settings />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </div>
-          </main>
+      {status && !status.running ? (
+        <div className="h-screen flex flex-col app-shell">
+          <TitleBar />
+          <DockerRequired status={status} onRetry={checkStatus} />
+          <OAuthToast />
+          <SyncKeyDialog />
+          <UpdateChecker />
         </div>
-        <OAuthToast />
-        <AcceptInviteToast />
-        <RelayCommandExecutor />
-        <RelayLogBridge />
-        <SyncKeyDialog />
-        <UpdateChecker />
-      </div>
+      ) : (
+        <div className="h-screen flex flex-col app-shell">
+          <TitleBar />
+          <div className="flex flex-1 overflow-hidden">
+            <Sidebar />
+            <main className="main-content">
+              <div className="page-container">
+                <Routes>
+                  <Route path="/" element={<Home />} />
+                  <Route path="/servers" element={<Servers />} />
+                  <Route path="/servers/create" element={<CreateServer />} />
+                  <Route path="/servers/:id" element={<ServerDetail />} />
+                  <Route path="/games" element={<GamesPage />} />
+                  <Route path="/nodes" element={<NodesPage />} />
+                  <Route path="/settings" element={<Settings />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </div>
+            </main>
+          </div>
+          <OAuthToast />
+          <AcceptInviteToast />
+          <RelayCommandExecutor />
+          <RelayLogBridge />
+          <SyncKeyDialog />
+          <UpdateChecker />
+        </div>
+      )}
     </BrowserRouter>
   );
 }
