@@ -82,6 +82,12 @@ pub async fn cloud_signup(
     )
     .await?;
     keychain::save_token(&r.token).map_err(|e| api::ApiError::Decode(format!("keychain: {e}")))?;
+    // Set up the envelope-encryption wrap NOW while we still have the
+    // password in hand. Without this the user couldn't sync on a second
+    // device without copying their recovery key by hand.
+    if let Err(e) = super::vault::cloud_sync_key_setup(password.clone(), Some(false)).await {
+        tracing::warn!("[signup] sync-key setup failed: {:?}", e);
+    }
     fetch_me(&r.token).await
 }
 
@@ -97,6 +103,25 @@ pub async fn cloud_login(email: String, password: String) -> Result<Me, api::Api
     )
     .await?;
     keychain::save_token(&r.token).map_err(|e| api::ApiError::Decode(format!("keychain: {e}")))?;
+    // Best-effort: try to unlock the DEK with this password so the
+    // user can sync immediately. If they never set up the wrap (legacy
+    // v0.1.14 user) this 412s silently and we fall back to the local
+    // vault key. If they DID set up but typed the wrong password the
+    // server would've already rejected the login above, so any error
+    // here means a desktop bug — log it loud.
+    if let Err(e) = super::vault::cloud_sync_key_unlock(password.clone()).await {
+        match &e {
+            api::ApiError::Server { code, .. } if code == "sync_key_not_set" => {
+                // Legacy user — set up the wrap so future logins work.
+                if let Err(ee) =
+                    super::vault::cloud_sync_key_setup(password.clone(), Some(false)).await
+                {
+                    tracing::warn!("[login] sync-key setup on legacy user failed: {:?}", ee);
+                }
+            }
+            _ => tracing::warn!("[login] sync-key unlock failed: {:?}", e),
+        }
+    }
     fetch_me(&r.token).await
 }
 

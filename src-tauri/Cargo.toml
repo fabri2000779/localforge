@@ -3,7 +3,7 @@ members = [".", "core", "backend-local", "backend-remote", "agent"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.14"
+version = "0.1.15"
 authors = ["Fabrizio"]
 edition = "2021"
 license = "MIT"
@@ -99,6 +99,12 @@ shell-words = "1.1"
 # unknown) random nonce per record.
 aes-gcm = "0.10"
 rand = "0.9"
+# scrypt is the KDF that derives the KEK (Key Encryption Key) from the
+# user's password / sync passphrase. Deliberately slow (~150-300ms per
+# call) so a stolen DB row can't be brute-forced cheaply. Runs once
+# per login on a fresh device, then we cache the unwrapped DEK in the
+# OS keychain.
+scrypt = { version = "0.11", default-features = false }
 # WS client for the cloud relay. rustls so we don't pull OpenSSL.
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
 # We use this to compute a stable hash of a Server's cloud-relevant
