@@ -7,6 +7,9 @@
 A native desktop app for running game servers without a web panel.
 Pair remote agents over HTTPS and manage local + remote game servers from the same UI.
 
+### **[⬇️ Download for your OS at localforge.gg](https://localforge.gg)** &nbsp;·&nbsp; [Releases](https://github.com/fabri2000779/localforge/releases/latest)
+
+[![Website](https://img.shields.io/badge/website-localforge.gg-3b82f6)](https://localforge.gg)
 [![Release](https://img.shields.io/github/v/release/fabri2000779/localforge?include_prereleases&sort=semver)](https://github.com/fabri2000779/localforge/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Built with Tauri](https://img.shields.io/badge/Tauri-2.x-24C8DB?logo=tauri)](https://tauri.app/)
@@ -54,7 +57,9 @@ Add your own via **Settings → Custom games** using a JSON template.
 
 ### 1 · Install the desktop app
 
-Download from [Releases](https://github.com/fabri2000779/localforge/releases/latest):
+Easiest: **[localforge.gg](https://localforge.gg)** — the download button detects your OS and links straight to the right installer.
+
+Or pick a build by hand from [Releases](https://github.com/fabri2000779/localforge/releases/latest):
 
 | OS | Asset |
 |----|-------|
