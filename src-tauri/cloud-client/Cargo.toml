@@ -28,6 +28,18 @@ tracing = { workspace = true }
 # whole workspace dedupes one TLS stack.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
 
+# TLS roots. reqwest 0.13's rustls backend DEFAULTS to
+# rustls-platform-verifier, which on Android panics ("Expect
+# rustls-platform-verifier to be initialized") unless it's handed the
+# JNI context at startup + a companion Kotlin component — a brittle
+# integration. Instead we hand reqwest a preconfigured rustls config
+# that trusts the bundled Mozilla webpki roots, which behaves
+# identically on desktop, iOS and Android with zero init. The cloud
+# (Cloudflare) chains to a public CA in this bundle. Mirrors the
+# sibling backend-remote crate's approach.
+rustls = { version = "0.23", features = ["ring"] }
+webpki-roots = "1"
+
 # Envelope encryption — AES-256-GCM for the wrap + scrypt for the KEK
 # derivation. Both pure-Rust and cross-compile to iOS/Android cleanly.
 aes-gcm = "0.10"

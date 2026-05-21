@@ -24,9 +24,41 @@ pub fn client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .user_agent(user_agent())
             .timeout(std::time::Duration::from_secs(30))
+            // Hand reqwest an explicit rustls config so it does NOT fall
+            // back to its default verifier (rustls-platform-verifier),
+            // which panics on Android without JNI init. See
+            // `webpki_tls_config` below.
+            .use_preconfigured_tls(webpki_tls_config())
             .build()
             .expect("reqwest client build")
     })
+}
+
+/// A rustls client config that trusts the bundled Mozilla webpki root
+/// store and nothing else.
+///
+/// reqwest 0.13's rustls backend, left to its defaults, builds a
+/// `rustls_platform_verifier::Verifier`. On Android that verifier
+/// aborts the process ("Expect rustls-platform-verifier to be
+/// initialized") unless the app wires the JNI context + a companion
+/// Kotlin class into it at startup. Rather than carry that brittle
+/// per-platform plumbing, we pin verification to the compiled-in
+/// Mozilla roots — identical behaviour on every OS, no init required.
+/// `api.localforge.gg` (Cloudflare) chains to a public CA in the
+/// bundle. This mirrors `localforge-backend-remote::build_tls_config`.
+fn webpki_tls_config() -> rustls::ClientConfig {
+    // reqwest is built with `rustls-no-provider`, so no process-default
+    // CryptoProvider is installed automatically and
+    // `ClientConfig::builder()` would panic without one. Install ring
+    // here; it's idempotent, so it's harmless if the host app (mobile
+    // `lib.rs`, or backend-remote) already installed it.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth()
 }
 
 /// Shape of an error response from the cloud API.
