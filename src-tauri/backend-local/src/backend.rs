@@ -26,7 +26,7 @@ use std::time::Duration;
 use sysinfo::{Disks, System};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
 pub struct LocalDockerBackend {
@@ -604,10 +604,10 @@ impl NodeBackend for LocalDockerBackend {
                 let mut s = server.clone();
                 s.installed = true;
                 persistence::save_server(&self.data_root, &s).map_err(BackendError::io)?;
-                let (tx, rx) = tokio::sync::mpsc::channel(1);
-                let _ = tx.send(Ok(InstallEvent::Done { exit_code: 0 })).await;
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                let _ = tx.send(Ok(InstallEvent::Done { exit_code: 0 }));
                 drop(tx);
-                return Ok(Box::pin(ReceiverStream::new(rx)));
+                return Ok(Box::pin(UnboundedReceiverStream::new(rx)));
             }
         };
 
@@ -623,7 +623,7 @@ impl NodeBackend for LocalDockerBackend {
         server.status = ServerStatus::Installing;
         persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
 
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<InstallEvent>>(64);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<InstallEvent>>();
         let docker = self.docker.clone();
         let data_root = self.data_root.clone();
         let server_id = server.id.clone();
@@ -642,11 +642,11 @@ impl NodeBackend for LocalDockerBackend {
             )
             .await;
             if let Err(e) = install_result {
-                let _ = tx.send(Err(e)).await;
+                let _ = tx.send(Err(e));
             }
         });
 
-        Ok(Box::pin(ReceiverStream::new(rx)))
+        Ok(Box::pin(UnboundedReceiverStream::new(rx)))
     }
 
     async fn download_file(&self, path: &str) -> Result<ByteStream> {
@@ -728,7 +728,7 @@ async fn run_install_inner(
     install_image: String,
     volume_path: String,
     install_script: String,
-    tx: tokio::sync::mpsc::Sender<Result<InstallEvent>>,
+    tx: tokio::sync::mpsc::UnboundedSender<Result<InstallEvent>>,
 ) -> Result<()> {
     // Persist the install container id as soon as the helper creates
     // it, so log recovery works if the install is interrupted.
@@ -742,15 +742,19 @@ async fn run_install_inner(
     };
 
     // Channel adapter: DockerManager::run_script takes a sync callback,
-    // but we want to emit events on an async mpsc. blocking_send is
-    // fine here because the callback runs on a worker thread spawned by
-    // bollard's log reader.
+    // but the events flow out on an mpsc. The channel is UNBOUNDED so
+    // `send` is synchronous and never blocks. This is critical: the
+    // callback runs on a tokio worker thread (run_script awaits the log
+    // stream inline), and `blocking_send` on a *full* bounded channel
+    // tries to park the runtime thread → panics ("Cannot block the
+    // current thread from within a runtime"), which with panic=abort
+    // crashed the whole app on a burst of install output.
     let tx_lines = tx.clone();
     let on_output = move |line: String| {
         if let Some(url) = detect_oauth_url(&line) {
-            let _ = tx_lines.blocking_send(Ok(InstallEvent::OauthUrl { url }));
+            let _ = tx_lines.send(Ok(InstallEvent::OauthUrl { url }));
         }
-        let _ = tx_lines.blocking_send(Ok(InstallEvent::Log { line }));
+        let _ = tx_lines.send(Ok(InstallEvent::Log { line }));
     };
 
     let (exit_code, install_container_id) = docker
@@ -780,6 +784,6 @@ async fn run_install_inner(
         let _ = persistence::save_server(&data_root, &srv);
     }
 
-    let _ = tx.send(Ok(InstallEvent::Done { exit_code })).await;
+    let _ = tx.send(Ok(InstallEvent::Done { exit_code }));
     Ok(())
 }
