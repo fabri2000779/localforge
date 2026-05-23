@@ -6,6 +6,7 @@
  * "upgrade to use this".
  */
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { Users, UserPlus, X, MailWarning, Trash2 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
@@ -192,7 +193,7 @@ function InviteDialog({ open, orgId, onClose }: { open: boolean; orgId: string; 
     } finally { setSubmitting(false); }
   }
 
-  return (
+  return createPortal(
     <div className="auth-overlay" onClick={onClose} role="dialog" aria-modal="true">
       <div className="auth-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
         <button className="auth-close" onClick={onClose}><X size={16} strokeWidth={2.2} /></button>
@@ -220,6 +221,7 @@ function InviteDialog({ open, orgId, onClose }: { open: boolean; orgId: string; 
           </button>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

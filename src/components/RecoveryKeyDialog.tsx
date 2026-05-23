@@ -12,6 +12,7 @@
  * transfer.
  */
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Copy, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 
@@ -63,7 +64,7 @@ export function RecoveryKeyDialog({ open, mode, onClose }: Props) {
     }
   }
 
-  return (
+  return createPortal(
     <div className="auth-overlay" onClick={onClose} role="dialog" aria-modal="true">
       <div className="auth-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
         <button className="auth-close" onClick={onClose} aria-label="Close">
@@ -116,6 +117,7 @@ export function RecoveryKeyDialog({ open, mode, onClose }: Props) {
           </button>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
