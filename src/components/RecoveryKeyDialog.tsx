@@ -5,8 +5,11 @@
  *   "import" — paste an existing key from another device; replaces the
  *              local one. Used to set up cloud sync on a second install.
  *
- * The key is a 256-bit AES-GCM key base64-encoded. We NEVER send it
- * to our cloud — it's purely a local artifact.
+ * The key is a 256-bit AES-GCM key (the DEK) base64-encoded. The cloud
+ * never sees it in the clear — only a copy WRAPPED behind the user's
+ * password/passphrase (see cloud_sync_key_setup) so other devices can
+ * unlock it. This dialog handles the raw key for manual device-to-device
+ * transfer.
  */
 import { useEffect, useState } from 'react';
 import { X, Copy, ShieldCheck, AlertTriangle } from 'lucide-react';
@@ -95,7 +98,7 @@ export function RecoveryKeyDialog({ open, mode, onClose }: Props) {
         {mode === 'show' && (
           <div className="vault-warn">
             <ShieldCheck size={14} className="shrink-0 text-emerald-400 mt-[2px]" />
-            <span>This key never leaves your computer. Treat it like a password — anyone who gets it can read your synced configs.</span>
+            <span>Treat this like a password — anyone who has it can read your synced configs. The cloud only ever stores it encrypted behind your account password (or sync passphrase), so we can't.</span>
           </div>
         )}
         {mode === 'import' && (

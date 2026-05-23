@@ -70,6 +70,19 @@ interface ServerState {
 /// switching nodes mid-flight doesn't strand stale calls.
 const currentNodeId = () => useNodesStore.getState().activeNodeId;
 
+/// Fire-and-forget push of the local servers to the cloud after a
+/// config-changing mutation (create / config edit / delete), so the new
+/// state lands on the user's other devices and the mobile app without a
+/// manual "Sync now". Best-effort: `cloud_sync_now` rejects when the user
+/// isn't signed in or hasn't set up sync — we swallow that. It only ever
+/// pushes the LOCAL node's servers (see cloud::sync), so it's safe to call
+/// regardless of which node is active.
+function autoSyncToCloud() {
+  void invoke('cloud_sync_now').catch(() => {
+    /* not signed in / sync not set up — nothing to push */
+  });
+}
+
 export const useServerStore = create<ServerState>((set, get) => ({
   servers: [],
   selectedServer: null,
@@ -108,6 +121,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
       });
       if (response.success && response.server) {
         await get().fetchServers();
+        autoSyncToCloud();
         set({ isLoading: false });
         return response.server;
       } else {
@@ -182,6 +196,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
       const selected = get().selectedServer;
       if (selected?.id === serverId) set({ selectedServer: null });
       await get().fetchServers();
+      autoSyncToCloud();
       set({ isLoading: false });
     } catch (error) {
       set({ error: String(error), isLoading: false });
@@ -198,6 +213,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
       if (response.success) {
         emitAudit('server.update_config', serverId);
         await get().fetchServers();
+        autoSyncToCloud();
         return true;
       }
       return false;

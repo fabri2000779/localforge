@@ -5,6 +5,7 @@ use bollard::models::{ContainerCreateBody, ContainerStateStatusEnum, HostConfig,
 use bollard::query_parameters::{
     AttachContainerOptions, CreateContainerOptions, CreateImageOptions, LogsOptions,
     RemoveContainerOptions, StartContainerOptions, StatsOptions, StopContainerOptions,
+    WaitContainerOptions,
 };
 use bollard::Docker;
 use futures_util::stream::StreamExt;
@@ -651,7 +652,7 @@ impl DockerManager {
             .start_container(&container_id, None::<StartContainerOptions>)
             .await?;
 
-        // Stream logs with follow=true
+        // Follow the container's logs and forward them line-by-line.
         let log_options = LogsOptions {
             follow: true,
             stdout: true,
@@ -659,75 +660,79 @@ impl DockerManager {
             timestamps: false,
             ..Default::default()
         };
-        
         let mut log_stream = self.docker.logs(&container_id, Some(log_options));
-        
-        loop {
-            // Use timeout to periodically check if container is still running
-            match tokio::time::timeout(
-                tokio::time::Duration::from_secs(1),
-                log_stream.next()
-            ).await {
-                Ok(Some(Ok(output))) => {
-                    let text = match output {
-                        LogOutput::StdOut { message } => String::from_utf8_lossy(&message).to_string(),
-                        LogOutput::StdErr { message } => String::from_utf8_lossy(&message).to_string(),
-                        LogOutput::Console { message } => String::from_utf8_lossy(&message).to_string(),
-                        _ => String::new(),
-                    };
-                    for line in text.lines() {
-                        if !line.is_empty() {
-                            on_output(line.to_string());
-                        }
+
+        // Authoritative completion signal. `wait_container` resolves the
+        // instant the container leaves the running state, carrying the exit
+        // code. We race it against the log stream so trailing output is
+        // still forwarded — but completion NEVER hinges on the follow-log
+        // stream terminating. On Windows that follow stream over the Docker
+        // named pipe doesn't reliably end (and inspect-on-timeout could
+        // wedge), which previously left installs stuck in "installing"
+        // forever even though the container had exited 0.
+        let mut wait_stream = self
+            .docker
+            .wait_container(&container_id, None::<WaitContainerOptions>);
+
+        let mut exit_code: Option<i64> = None;
+        while exit_code.is_none() {
+            tokio::select! {
+                log = log_stream.next() => {
+                    match log {
+                        Some(Ok(output)) => emit_log_lines(output, &mut on_output),
+                        Some(Err(e)) => tracing::warn!("Install log stream error: {}", e),
+                        // Logs ended before the wait fired: container is gone.
+                        None => break,
                     }
                 }
-                Ok(Some(Err(e))) => {
-                    tracing::warn!("Log stream error: {}", e);
-                    break;
-                }
-                Ok(None) => {
-                    tracing::info!("Log stream ended");
-                    break;
-                }
-                Err(_) => {
-                    // Timeout - check if container is still running
-                    match self.docker.inspect_container(&container_id, None).await {
-                        Ok(info) => {
-                            if let Some(state) = info.state {
-                                if state.running != Some(true) {
-                                    tracing::info!("Install container stopped");
-                                    break;
-                                }
-                            }
+                wait = wait_stream.next() => {
+                    exit_code = Some(match wait {
+                        Some(Ok(resp)) => resp.status_code,
+                        // bollard surfaces a non-zero exit as an error that
+                        // carries the code; treat it as the exit status.
+                        Some(Err(bollard::errors::Error::DockerContainerWaitError { code, .. })) => code,
+                        Some(Err(e)) => {
+                            tracing::warn!("wait_container error: {}", e);
+                            -1
                         }
-                        Err(_) => {
-                            tracing::info!("Container not found, assuming finished");
-                            break;
-                        }
-                    }
+                        None => -1,
+                    });
                 }
             }
         }
-        
-        // Log stream ended, container should be stopped now
-        // Get exit code by inspecting the container
-        let exit_code = match self.docker.inspect_container(&container_id, None).await {
-            Ok(info) => {
-                info.state
-                    .and_then(|s| s.exit_code)
-                    .unwrap_or(-1)
+
+        // Drain logs buffered up to the exit so the final lines (e.g.
+        // "installed successfully!") aren't truncated. Bounded by a short
+        // timeout so a non-terminating follow stream can't wedge us.
+        loop {
+            match tokio::time::timeout(
+                tokio::time::Duration::from_millis(500),
+                log_stream.next(),
+            )
+            .await
+            {
+                Ok(Some(Ok(output))) => emit_log_lines(output, &mut on_output),
+                _ => break,
             }
-            Err(e) => {
-                tracing::error!("Failed to inspect container for exit code: {}", e);
-                -1
-            }
+        }
+
+        // If the log stream ended before the wait produced a code, fall back
+        // to inspecting the container for its exit status.
+        let exit_code = match exit_code {
+            Some(code) => code,
+            None => match self.docker.inspect_container(&container_id, None).await {
+                Ok(info) => info.state.and_then(|s| s.exit_code).unwrap_or(-1),
+                Err(e) => {
+                    tracing::error!("Failed to inspect container for exit code: {}", e);
+                    -1
+                }
+            },
         };
-        
+
         tracing::info!("Install container finished with exit code: {}", exit_code);
-        
-        // Don't remove the container yet - keep it for log retrieval
-        // It will be removed when install completes or server is deleted
-        
+
+        // Don't remove the container yet — keep it for log retrieval. It's
+        // removed when install completes (run_install_inner) or on delete.
         Ok((exit_code, container_id))
     }
 
@@ -744,5 +749,21 @@ impl DockerManager {
             )
             .await;
         Ok(())
+    }
+}
+
+/// Decode a Docker log frame to UTF-8 and forward each non-empty line to
+/// `on_output`. Shared by the live install loop and the post-exit drain.
+fn emit_log_lines<F: FnMut(String)>(output: LogOutput, on_output: &mut F) {
+    let text = match output {
+        LogOutput::StdOut { message } => String::from_utf8_lossy(&message).to_string(),
+        LogOutput::StdErr { message } => String::from_utf8_lossy(&message).to_string(),
+        LogOutput::Console { message } => String::from_utf8_lossy(&message).to_string(),
+        _ => String::new(),
+    };
+    for line in text.lines() {
+        if !line.is_empty() {
+            on_output(line.to_string());
+        }
     }
 }
