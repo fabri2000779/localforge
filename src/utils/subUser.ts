@@ -80,14 +80,20 @@ export function useCanAct(action: ActionKind): boolean {
 export function useDisplayedServers(): Server[] {
   const local = useServerStore((s) => s.servers);
   const isSubUser = useIsSubUser();
-  const remote = useAuthStore((s) => s.lastSyncResult?.remote ?? []);
+  // Select the STABLE `lastSyncResult` reference, not a derived array.
+  // Returning `s.lastSyncResult?.remote ?? []` from the selector minted a
+  // brand-new `[]` every render whenever there was no sync result (i.e.
+  // for any owner), so useSyncExternalStore saw an ever-changing snapshot
+  // and React aborted with "Maximum update depth exceeded" (#185). The
+  // `?? []` now happens inside the memo, off the selector path.
+  const lastSyncResult = useAuthStore((s) => s.lastSyncResult);
 
   return useMemo(() => {
     if (!isSubUser) return local;
     // Map decrypted remote to a Server-shaped object so the existing
     // ServerCard / list components render unchanged. Fields we don't
     // know about server-side go to safe defaults.
-    return remote
+    return (lastSyncResult?.remote ?? [])
       .filter((r) => r.decrypted)
       .map<Server>((r) => ({
         id: r.decrypted!.id,
@@ -103,7 +109,7 @@ export function useDisplayedServers(): Server[] {
         installed: true,
         install_container_id: null,
       } as unknown as Server));
-  }, [isSubUser, local, remote]);
+  }, [isSubUser, local, lastSyncResult]);
 }
 
 /**
