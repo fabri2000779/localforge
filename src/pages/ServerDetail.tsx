@@ -187,11 +187,16 @@ export function ServerDetail() {
     return () => clearInterval(interval);
   }, [server?.status, server?.created_at]);
 
-  // Clear logs when server stops
+  // Clear the console whenever the server transitions INTO 'stopped'
+  // from any other state. The previous check required the prior status
+  // to be exactly 'running', but the real flow is
+  // 'running' → 'stopping' → 'stopped' under status polling, so by the
+  // time we saw 'stopped' the prior status was 'stopping' and the logs
+  // were never cleared.
   const prevStatusRef = useRef(server?.status);
   useEffect(() => {
-    if (prevStatusRef.current === 'running' && server?.status === 'stopped') {
-      // Server just stopped - clear logs
+    const prev = prevStatusRef.current;
+    if (prev && prev !== 'stopped' && server?.status === 'stopped') {
       setLogs([]);
       setIsStreaming(false);
       userScrolledRef.current = false;
