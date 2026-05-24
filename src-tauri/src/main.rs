@@ -26,6 +26,11 @@ fn main() {
 
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
+    // Install the OS-native credential store BEFORE anything reads the
+    // keychain (cloud login, sync-key storage, relay). keyring 4 selects
+    // the backend at runtime, not via Cargo features.
+    cloud::keychain::init();
+
     // Tell the cloud-client crate which product+version to advertise
     // in the User-Agent. The shared crate can't bake this in via
     // `env!()` because that would resolve to its own version (always
@@ -205,6 +210,9 @@ fn main() {
             cloud::orgs::cloud_orgs_revoke_invitation,
             cloud::orgs::cloud_orgs_remove_member,
             cloud::orgs::cloud_orgs_accept_invite,
+            cloud::nodes::cloud_node_create,
+            cloud::nodes::cloud_node_list,
+            cloud::nodes::cloud_node_revoke,
             cloud::audit::cloud_audit_emit,
             cloud::auth::cloud_export_data,
         ])

@@ -2,4 +2,4 @@
 
 mod manager;
 
-pub use manager::{DockerError, DockerManager};
+pub use manager::{CreateContainerSpec, DockerError, DockerManager};

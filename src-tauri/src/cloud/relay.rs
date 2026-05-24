@@ -248,7 +248,7 @@ async fn handle_text(
 
     // Detect DO restarts (or first connection) — fetch state on epoch change.
     if let Some(ep) = &env_msg.epoch {
-        let changed = last_epoch.as_ref().map_or(false, |prev| prev != ep);
+        let changed = last_epoch.as_ref().is_some_and(|prev| prev != ep);
         let first = last_epoch.is_none();
         *last_epoch = Some(ep.clone());
         if first || changed {

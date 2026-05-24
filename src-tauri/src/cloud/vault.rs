@@ -33,8 +33,8 @@ const KEY_LEN: usize = crypto::KEY_LEN;
 // shape).
 // ---------------------------------------------------------------------------
 
-fn entry() -> Result<keyring::Entry, keyring::Error> {
-    keyring::Entry::new(SERVICE, ACCOUNT)
+fn entry() -> Result<keyring_core::Entry, keyring_core::Error> {
+    keyring_core::Entry::new(SERVICE, ACCOUNT)
 }
 
 /// Get-or-generate the local DEK. First call after a fresh install
@@ -62,7 +62,7 @@ pub fn load_key() -> Result<Option<[u8; KEY_LEN]>, String> {
             out.copy_from_slice(&bytes);
             Ok(Some(out))
         }
-        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(keyring_core::Error::NoEntry) => Ok(None),
         Err(err) => Err(err.to_string()),
     }
 }

@@ -146,7 +146,7 @@ pub async fn stop_server(
     // by game_type).
     {
         let games_manager = games_state.manager.lock().await;
-        if let Ok(Some(server)) = backend.get_server(&server_id).await.map(|s| s) {
+        if let Ok(Some(server)) = backend.get_server(&server_id).await {
             if let Some(game) = games_manager.get_game(&server.game_type) {
                 if !game.stop_command.is_empty() {
                     let _ = backend.send_command(&server_id, &game.stop_command).await;
@@ -223,7 +223,7 @@ pub async fn list_servers(
             server.status = status;
         }
     }
-    servers.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    servers.sort_by_key(|s| std::cmp::Reverse(s.created_at));
     Ok(servers)
 }
 

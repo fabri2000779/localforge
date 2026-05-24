@@ -24,10 +24,6 @@ export function useIsSubUser(): boolean {
   });
 }
 
-export function useCurrentRole(): OrgRole | null {
-  return useAuthStore((s) => s.currentRole);
-}
-
 export type ActionKind =
   | 'server.start'
   | 'server.stop'

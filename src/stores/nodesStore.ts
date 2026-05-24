@@ -19,6 +19,24 @@ export interface ClusterSummary {
   images: number;
 }
 
+/** An agent enrolled for direct cloud-relay control. `online` is live
+ *  (the relay's socket set); `id` matches the local NodeRecord.id. */
+export interface CloudNodeSummary {
+  id: string;
+  name: string;
+  createdAt: number;
+  lastSeenAt: number | null;
+  revoked: boolean;
+  online: boolean;
+}
+
+/** Result of enrolling a node — `enrollmentBlob` is shown ONCE. */
+export interface CloudNodeCreated {
+  node: { id: string; name: string; createdAt: number };
+  enrollmentBlob: string;
+  nodeToken: string;
+}
+
 interface NodesState {
   nodes: NodeRecord[];
   isLoading: boolean;
@@ -42,6 +60,12 @@ interface NodesState {
     label?: string;
     version?: string;
   }) => Promise<{ linux: string; windows: string }>;
+
+  // Cloud-relay enrollment (direct agent control without the desktop).
+  cloudNodes: CloudNodeSummary[];
+  fetchCloudNodes: () => Promise<void>;
+  linkNodeToCloud: (nodeId: string, name: string) => Promise<CloudNodeCreated>;
+  revokeCloudNode: (nodeId: string) => Promise<void>;
 }
 
 /**
@@ -139,4 +163,27 @@ export const useNodesStore = create<NodesState>((set, get) => ({
       label,
       version,
     }),
+
+  cloudNodes: [],
+
+  fetchCloudNodes: async () => {
+    try {
+      const cloudNodes = await invoke<CloudNodeSummary[]>('cloud_node_list');
+      set({ cloudNodes });
+    } catch {
+      // Signed out / free plan / offline — no cloud nodes to show.
+      set({ cloudNodes: [] });
+    }
+  },
+
+  linkNodeToCloud: async (nodeId, name) => {
+    const res = await invoke<CloudNodeCreated>('cloud_node_create', { nodeId, name });
+    await get().fetchCloudNodes();
+    return res;
+  },
+
+  revokeCloudNode: async (nodeId) => {
+    await invoke('cloud_node_revoke', { nodeId });
+    await get().fetchCloudNodes();
+  },
 }));

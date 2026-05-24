@@ -72,7 +72,7 @@ pub fn list_servers(root: &Path) -> std::io::Result<Vec<Server>> {
             }
         }
     }
-    out.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    out.sort_by_key(|a| a.created_at);
     Ok(out)
 }
 

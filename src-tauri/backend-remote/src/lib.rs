@@ -540,7 +540,7 @@ impl NodeBackend for RemoteAgentBackend {
         // wrap_stream; map our BackendError into io::Error so the
         // streaming body builder is happy.
         let mapped =
-            body.map(|r| r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+            body.map(|r| r.map_err(|e| std::io::Error::other(e.to_string())));
         let resp = self
             .http
             .put(url)

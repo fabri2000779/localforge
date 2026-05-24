@@ -5,7 +5,7 @@
 //! create [`DockerManager`] themselves; this is what makes "local" and
 //! "remote" nodes interchangeable from the UI's point of view.
 
-use crate::docker::DockerManager;
+use crate::docker::{CreateContainerSpec, DockerManager};
 use crate::persistence;
 use async_trait::async_trait;
 use bollard::container::LogOutput;
@@ -394,17 +394,17 @@ impl NodeBackend for LocalDockerBackend {
 
         let container_id = self
             .docker
-            .create_container(
-                &server_id,
-                &game.docker_image,
+            .create_container(CreateContainerSpec {
+                name: &server_id,
+                image: &game.docker_image,
                 port,
-                &data_path,
-                &env,
-                &extra_ports,
-                Some(&game.volume_path),
-                Some(memory_mb),
-                startup_command.as_deref(),
-            )
+                data_path: &data_path,
+                env: &env,
+                extra_ports: &extra_ports,
+                volume_path: Some(&game.volume_path),
+                memory_mb: Some(memory_mb),
+                startup_command: startup_command.as_deref(),
+            })
             .await
             .map_err(BackendError::docker)?;
 

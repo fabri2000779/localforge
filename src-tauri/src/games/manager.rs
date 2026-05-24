@@ -10,6 +10,12 @@ pub struct GamesManager {
     custom_games_path: PathBuf,
 }
 
+impl Default for GamesManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GamesManager {
     pub fn new() -> Self {
         let custom_games_path = get_games_config_path();

@@ -23,6 +23,7 @@ use tracing_subscriber::EnvFilter;
 
 mod auth;
 mod config;
+mod relay;
 mod routes;
 mod tls;
 
@@ -73,6 +74,16 @@ enum Command {
 
     /// Serve HTTPS using the configured token + TLS cert.
     Serve,
+
+    /// Link this agent to a LocalForge cloud org for direct relay control,
+    /// so mobile / another desktop can drive it with the owner's desktop
+    /// offline. Paste the one-time enrollment blob from the desktop's
+    /// "Link node" action (or the dashboard). Purely additive — the
+    /// standalone HTTPS surface is unchanged.
+    Link {
+        /// The one-time enrollment blob (base64url) issued by the cloud.
+        blob: String,
+    },
 }
 
 #[tokio::main]
@@ -108,6 +119,22 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", outcome.pairing_summary());
             Ok(())
         }
+        Command::Link { blob } => {
+            use base64::Engine;
+            let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(blob.trim())
+                .map_err(|e| anyhow::anyhow!("invalid enrollment blob: {}", e))?;
+            let link: config::CloudLink = serde_json::from_slice(&raw)
+                .map_err(|e| anyhow::anyhow!("malformed enrollment blob: {}", e))?;
+            let node_id = link.node_id.clone();
+            config::save_cloud_link(&config_path, link)?;
+            println!(
+                "Linked to cloud (node {}). It connects to the relay on next start; \
+                 restart the service to connect now: systemctl restart localforge-agent",
+                node_id,
+            );
+            Ok(())
+        }
         Command::Serve => serve(&config_path).await,
     }
 }
@@ -129,7 +156,25 @@ async fn serve(config_path: &std::path::Path) -> anyhow::Result<()> {
     let app_state = routes::AppState {
         backend,
         token: cfg.token.clone(),
+        config_path: config_path.to_path_buf(),
+        relay_started: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
+
+    // If this agent has been linked to a cloud org, start the relay client
+    // alongside the HTTPS server so mobile / another desktop can drive it
+    // with the owner's desktop offline. Un-linked agents skip this entirely
+    // (standalone, no cloud).
+    if let Some(link) = cfg.cloud.clone() {
+        tracing::info!(
+            "cloud link present (node {} / org {}); starting relay client",
+            link.node_id,
+            link.org_id,
+        );
+        app_state
+            .relay_started
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        relay::spawn(app_state.backend.clone(), link);
+    }
 
     let tls_config = tls::rustls_config(&cfg.tls_cert_pem, &cfg.tls_key_pem).await?;
     let addr: std::net::SocketAddr = format!("{}:{}", cfg.bind, cfg.port).parse()?;

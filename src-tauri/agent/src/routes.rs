@@ -26,6 +26,11 @@ use std::sync::Arc;
 pub struct AppState {
     pub backend: Arc<dyn NodeBackend>,
     pub token: String,
+    /// Path to agent.toml — `POST /link` persists the cloud link here.
+    pub config_path: std::path::PathBuf,
+    /// Set once the relay client is running, so `POST /link` doesn't spawn a
+    /// second connection loop.
+    pub relay_started: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -33,6 +38,8 @@ pub fn router(state: AppState) -> Router {
         // health + info
         .route("/info", get(get_info))
         .route("/node/stats", get(get_node_stats))
+        // cloud-relay enrollment (desktop auto-provision)
+        .route("/link", post(link_node))
         // server CRUD + lifecycle
         .route("/servers", get(list_servers).post(create_server))
         .route("/servers/{id}", get(get_server).delete(delete_server))
@@ -133,6 +140,35 @@ async fn get_info(State(s): State<AppState>) -> Result<Json<DockerInfo>, ApiErro
 
 async fn get_node_stats(State(s): State<AppState>) -> Result<Json<NodeStats>, ApiError> {
     s.backend.node_stats().await.map(Json).map_err(map_err)
+}
+
+#[derive(Deserialize)]
+struct LinkBody {
+    /// One-time enrollment blob (base64url) issued by the cloud's
+    /// `POST /v1/nodes`. The desktop pushes it here over the existing HTTPS
+    /// session so the operator doesn't have to paste anything on the VPS.
+    blob: String,
+}
+
+async fn link_node(
+    State(s): State<AppState>,
+    Json(b): Json<LinkBody>,
+) -> Result<StatusCode, ApiError> {
+    use base64::Engine;
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(b.blob.trim())
+        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: format!("invalid blob: {e}") })?;
+    let link: crate::config::CloudLink = serde_json::from_slice(&raw)
+        .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: format!("malformed blob: {e}") })?;
+    crate::config::save_cloud_link(&s.config_path, link.clone())
+        .map_err(|e| ApiError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
+    // Connect now without a restart. swap() returns the prior value: only the
+    // first link spawns a loop. (A re-link with a new token applies on next
+    // restart — fine, re-linking is rare.)
+    if !s.relay_started.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        crate::relay::spawn(s.backend.clone(), link);
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_servers(State(s): State<AppState>) -> Result<Json<Vec<Server>>, ApiError> {
@@ -440,7 +476,7 @@ async fn fs_download(
         .download_file(&q.path)
         .await
         .map_err(map_err)?
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()));
+        .map_err(|e| std::io::Error::other(e.to_string()));
     let filename = std::path::Path::new(&q.path)
         .file_name()
         .map(|f| f.to_string_lossy().to_string())

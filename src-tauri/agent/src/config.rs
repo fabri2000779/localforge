@@ -29,6 +29,32 @@ pub struct Config {
 
     /// PEM-encoded TLS private key (PKCS#8).
     pub tls_key_pem: String,
+
+    /// Optional cloud-relay link. Present only when the agent has been
+    /// enrolled (`localforge-agent link <blob>` or desktop auto-provision).
+    /// Absent = standalone HTTPS only, no cloud — the default, so an
+    /// account-less install is completely unaffected.
+    #[serde(default)]
+    pub cloud: Option<CloudLink>,
+}
+
+/// Credential + addressing for the agent's direct relay connection. The raw
+/// `node_token` lives only here (and hashed in the cloud's `nodes` table).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudLink {
+    pub api_origin: String,
+    pub org_id: String,
+    pub node_id: String,
+    pub node_token: String,
+}
+
+/// Persist a cloud-relay link into an existing agent config. Used by the
+/// `link` CLI subcommand and the desktop auto-provision endpoint (`POST /link`).
+pub fn save_cloud_link(config_path: &Path, link: CloudLink) -> anyhow::Result<()> {
+    let mut cfg = Config::load(config_path)?;
+    cfg.cloud = Some(link);
+    cfg.save(config_path)?;
+    Ok(())
 }
 
 impl Config {
@@ -142,6 +168,7 @@ pub fn install(opts: InstallOptions<'_>) -> anyhow::Result<InstallOutcome> {
         data_root: opts.data_root.to_path_buf(),
         tls_cert_pem: cert_pem,
         tls_key_pem: key_pem,
+        cloud: None,
     };
     cfg.save(opts.config_path)?;
 

@@ -143,6 +143,10 @@ pub async fn get<R: DeserializeOwned>(path: &str, bearer: Option<&str>) -> Resul
     request::<(), R>(reqwest::Method::GET, path, None, bearer).await
 }
 
+pub async fn delete<R: DeserializeOwned>(path: &str, bearer: Option<&str>) -> Result<R, ApiError> {
+    request::<(), R>(reqwest::Method::DELETE, path, None, bearer).await
+}
+
 async fn request<B: Serialize, R: DeserializeOwned>(
     method: reqwest::Method,
     path: &str,

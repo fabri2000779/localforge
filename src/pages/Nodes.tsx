@@ -5,12 +5,16 @@ import {
   Trash2,
   Server,
   Cloud,
+  CloudOff,
   Wifi,
   Cpu,
   HardDrive,
   MemoryStick,
+  Link2,
+  Copy,
+  X,
 } from 'lucide-react';
-import { useNodesStore } from '../stores/nodesStore';
+import { useNodesStore, type CloudNodeSummary } from '../stores/nodesStore';
 import type { NodeRecord, NodeStats } from '../types';
 import { AddNodeWizard } from '../components/AddNodeWizard';
 
@@ -18,18 +22,25 @@ export function NodesPage() {
   const {
     nodes,
     nodeStats,
+    cloudNodes,
     fetchNodes,
     fetchNodeStats,
+    fetchCloudNodes,
+    linkNodeToCloud,
+    revokeCloudNode,
     removeNode,
     reconnectNode,
     isLoading,
   } = useNodesStore();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // The `localforge-agent link <blob>` command shown after enrolling a node.
+  const [linkCmd, setLinkCmd] = useState<string | null>(null);
 
   useEffect(() => {
     fetchNodes();
-  }, [fetchNodes]);
+    fetchCloudNodes();
+  }, [fetchNodes, fetchCloudNodes]);
 
   // Auto-refresh host stats for every known node every 5s.
   useEffect(() => {
@@ -61,6 +72,34 @@ export function NodesPage() {
     setBusyId(node.id);
     try {
       await reconnectNode(node.id);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleLink = async (node: NodeRecord) => {
+    setBusyId(node.id);
+    try {
+      const res = await linkNodeToCloud(node.id, node.label);
+      setLinkCmd(`localforge-agent link ${res.enrollmentBlob}`);
+    } catch (e) {
+      window.alert(`Couldn't link to cloud: ${e}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleUnlink = async (node: NodeRecord) => {
+    if (
+      !window.confirm(
+        `Unlink "${node.label}" from the cloud relay? Mobile / other desktops won't control it directly until you re-link. The agent keeps running.`,
+      )
+    ) {
+      return;
+    }
+    setBusyId(node.id);
+    try {
+      await revokeCloudNode(node.id);
     } finally {
       setBusyId(null);
     }
@@ -118,9 +157,12 @@ export function NodesPage() {
               key={node.id}
               node={node}
               stats={nodeStats[node.id]}
+              cloudNode={cloudNodes.find((cn) => cn.id === node.id && !cn.revoked)}
               busy={busyId === node.id}
               onRemove={() => handleRemove(node)}
               onReconnect={() => handleReconnect(node)}
+              onLink={() => handleLink(node)}
+              onUnlink={() => handleUnlink(node)}
             />
           ))
         )}
@@ -131,6 +173,65 @@ export function NodesPage() {
         onClose={() => setWizardOpen(false)}
         onComplete={fetchNodes}
       />
+
+      {linkCmd && (
+        <LinkCommandDialog command={linkCmd} onClose={() => setLinkCmd(null)} />
+      )}
+    </div>
+  );
+}
+
+/** Shows the one-time `localforge-agent link <blob>` command after enrolling
+ *  a node. The operator runs it on the VPS (then restarts the agent) and the
+ *  agent connects to the relay. Shown once — the token isn't recoverable. */
+function LinkCommandDialog({
+  command,
+  onClose,
+}: {
+  command: string;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard blocked — the user can select manually */
+    }
+  };
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      onClick={onClose}
+    >
+      <div
+        className="card card-elevated max-w-lg w-full"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4 mb-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-100">Link this node</h2>
+            <p className="text-sm text-slate-400 mt-1">
+              Run this on the VPS, then restart the agent. It&apos;ll connect to
+              the relay so you can control it from your phone with this desktop
+              closed. Shown once — copy it now.
+            </p>
+          </div>
+          <button className="btn-icon" onClick={onClose} aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="flex items-stretch gap-2">
+          <code className="flex-1 text-xs bg-slate-900/80 border border-slate-700 rounded-lg p-3 font-mono break-all text-slate-300 max-h-32 overflow-auto">
+            {command}
+          </code>
+          <button className="btn btn-secondary btn-sm shrink-0 self-start" onClick={copy}>
+            <Copy size={13} /> {copied ? 'Copied' : 'Copy'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -138,15 +239,21 @@ export function NodesPage() {
 function NodeCard({
   node,
   stats,
+  cloudNode,
   busy,
   onRemove,
   onReconnect,
+  onLink,
+  onUnlink,
 }: {
   node: NodeRecord;
   stats?: NodeStats;
+  cloudNode?: CloudNodeSummary;
   busy: boolean;
   onRemove: () => void;
   onReconnect: () => void;
+  onLink: () => void;
+  onUnlink: () => void;
 }) {
   const isLocal = node.kind.kind === 'local';
   const url = !isLocal && node.kind.kind === 'remote' ? node.kind.url : null;
@@ -199,10 +306,38 @@ function NodeCard({
                 Your Docker daemon
               </div>
             )}
+            {!isLocal && cloudNode && (
+              <div className="text-xs mt-1 flex items-center gap-1">
+                {cloudNode.online ? (
+                  <Cloud size={11} className="text-emerald-400" />
+                ) : (
+                  <CloudOff size={11} className="text-slate-500" />
+                )}
+                <span
+                  className={cloudNode.online ? 'text-emerald-400' : 'text-slate-500'}
+                >
+                  Cloud relay {cloudNode.online ? 'online' : 'offline'}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {!isLocal && (
+            <button
+              className={`btn-icon ${cloudNode ? 'text-emerald-400 hover:text-red-400' : ''}`}
+              onClick={cloudNode ? onUnlink : onLink}
+              disabled={busy}
+              title={
+                cloudNode
+                  ? 'Unlink from cloud relay'
+                  : 'Link to cloud relay — control from your phone with this desktop closed'
+              }
+            >
+              {cloudNode ? <Cloud size={16} /> : <Link2 size={16} />}
+            </button>
+          )}
           {!isLocal && (
             <button
               className="btn-icon"

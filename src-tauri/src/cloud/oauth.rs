@@ -51,7 +51,6 @@ pub async fn handle_deep_link(app: AppHandle, url: String) {
     // Invite acceptance path — user clicked an invite link.
     if url.starts_with("localforge://invite") {
         handle_invite(app, url).await;
-        return;
     }
 }
 

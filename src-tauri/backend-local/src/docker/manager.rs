@@ -38,6 +38,21 @@ pub struct DockerManager {
     docker: Docker,
 }
 
+/// Inputs for [`DockerManager::create_container`]. Grouped into a struct
+/// because creating a game-server container legitimately needs many knobs;
+/// a 9-positional-argument call is easy to get wrong at the call site.
+pub struct CreateContainerSpec<'a> {
+    pub name: &'a str,
+    pub image: &'a str,
+    pub port: u16,
+    pub data_path: &'a Path,
+    pub env: &'a HashMap<String, String>,
+    pub extra_ports: &'a [PortConfig],
+    pub volume_path: Option<&'a str>,
+    pub memory_mb: Option<u32>,
+    pub startup_command: Option<&'a str>,
+}
+
 impl DockerManager {
     /// Create a new Docker manager instance
     pub async fn new() -> Result<Self, DockerError> {
@@ -103,16 +118,19 @@ impl DockerManager {
     /// Create a new container
     pub async fn create_container(
         &self,
-        name: &str,
-        image: &str,
-        port: u16,
-        data_path: &Path,
-        env: &HashMap<String, String>,
-        extra_ports: &[PortConfig],
-        volume_path: Option<&str>,
-        memory_mb: Option<u32>,
-        startup_command: Option<&str>,
+        spec: CreateContainerSpec<'_>,
     ) -> Result<String, DockerError> {
+        let CreateContainerSpec {
+            name,
+            image,
+            port,
+            data_path,
+            env,
+            extra_ports,
+            volume_path,
+            memory_mb,
+            startup_command,
+        } = spec;
         // Ensure image is available
         self.pull_image(image).await?;
 
@@ -620,7 +638,7 @@ impl DockerManager {
             ..Default::default()
         };
         
-        let container_name = format!("localforge-install-{}", Uuid::new_v4().to_string()[..8].to_string());
+        let container_name = format!("localforge-install-{}", &Uuid::new_v4().to_string()[..8]);
         
         let config = ContainerCreateBody {
             image: Some(image.to_string()),
@@ -704,16 +722,13 @@ impl DockerManager {
         // Drain logs buffered up to the exit so the final lines (e.g.
         // "installed successfully!") aren't truncated. Bounded by a short
         // timeout so a non-terminating follow stream can't wedge us.
-        loop {
-            match tokio::time::timeout(
-                tokio::time::Duration::from_millis(500),
-                log_stream.next(),
-            )
-            .await
-            {
-                Ok(Some(Ok(output))) => emit_log_lines(output, &mut on_output),
-                _ => break,
-            }
+        while let Ok(Some(Ok(output))) = tokio::time::timeout(
+            tokio::time::Duration::from_millis(500),
+            log_stream.next(),
+        )
+        .await
+        {
+            emit_log_lines(output, &mut on_output);
         }
 
         // If the log stream ended before the wait produced a code, fall back

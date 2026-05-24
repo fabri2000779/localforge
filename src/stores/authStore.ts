@@ -503,8 +503,3 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 }));
-
-// Convenience selector hooks the components can use without re-rendering
-// on unrelated state changes.
-export const useIsSignedIn = () => useAuthStore((s) => s.me != null && s.me !== undefined);
-export const useCurrentPlan = () => useAuthStore((s) => s.me?.subscription.plan ?? 'free');

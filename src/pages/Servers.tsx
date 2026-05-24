@@ -1,11 +1,19 @@
 import { useNavigate } from 'react-router-dom';
 import { Plus, RefreshCw, Server } from 'lucide-react';
 import { useServerStore } from '../stores/serverStore';
+import { useCanAct, useDisplayedServers } from '../utils/subUser';
 import { ServerCard } from '../components/ServerCard';
 
 export function Servers() {
   const navigate = useNavigate();
-  const { servers, isLoading, fetchServers } = useServerStore();
+  // Owner → local Docker servers; sub-user → the owner's cloud-synced
+  // servers (decrypted). `useDisplayedServers` returns the local list
+  // unchanged when you're not a sub-user, so the owner path is identical.
+  const servers = useDisplayedServers();
+  const { isLoading, fetchServers } = useServerStore();
+  // Sub-users below admin role can't create servers on the owner's host;
+  // hide the CTA for them. Always true for the owner / local mode.
+  const canCreate = useCanAct('server.create');
 
   return (
     <div className="animate-fade-in">
@@ -26,13 +34,15 @@ export function Servers() {
           >
             <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} />
           </button>
-          <button
-            onClick={() => navigate('/servers/create')}
-            className="btn btn-primary"
-          >
-            <Plus size={15} strokeWidth={2.2} />
-            Create Server
-          </button>
+          {canCreate && (
+            <button
+              onClick={() => navigate('/servers/create')}
+              className="btn btn-primary"
+            >
+              <Plus size={15} strokeWidth={2.2} />
+              Create Server
+            </button>
+          )}
         </div>
       </header>
 
@@ -53,16 +63,19 @@ export function Servers() {
             No servers yet
           </h2>
           <p className="text-sm text-slate-400 mb-6 max-w-sm">
-            You haven&apos;t created any servers. Get started by creating your
-            first one.
+            {canCreate
+              ? "You haven't created any servers. Get started by creating your first one."
+              : 'No servers have been shared with you yet. Ask the owner to add one.'}
           </p>
-          <button
-            onClick={() => navigate('/servers/create')}
-            className="btn btn-primary"
-          >
-            <Plus size={15} strokeWidth={2.2} />
-            Create your first server
-          </button>
+          {canCreate && (
+            <button
+              onClick={() => navigate('/servers/create')}
+              className="btn btn-primary"
+            >
+              <Plus size={15} strokeWidth={2.2} />
+              Create your first server
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

@@ -27,6 +27,7 @@ pub mod api;
 pub mod audit;
 pub mod auth;
 pub mod billing;
+pub mod nodes;
 pub mod oauth;
 pub mod orgs;
 pub mod relay;

@@ -19,10 +19,7 @@ description = "Shared LocalForge Cloud client (HTTP, envelope crypto, relay) for
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
-async-trait = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 
 # HTTP client. rustls-no-provider so we don't pull OpenSSL and so the
 # whole workspace dedupes one TLS stack.
@@ -46,4 +43,3 @@ aes-gcm = "0.10"
 scrypt = { version = "0.11", default-features = false }
 rand = "0.9"
 base64 = "0.22"
-sha2 = "0.10"

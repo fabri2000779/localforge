@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useServerStore } from '../stores/serverStore';
 import { useGamesStore } from '../stores/gamesStore';
+import { useCanAct, useDisplayedServers } from '../utils/subUser';
 import { findGameConfig } from '../utils/gameTypes';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -22,7 +23,10 @@ export function ServerDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   
-  const servers = useServerStore((s) => s.servers);
+  // Owner → local servers; sub-user → the owner's synced servers, so the
+  // detail view resolves by id in both modes (returns the local list
+  // unchanged for owners).
+  const servers = useDisplayedServers();
   const isLoading = useServerStore((s) => s.isLoading);
   const stats = useServerStore((s) => s.stats);
   const fetchServers = useServerStore((s) => s.fetchServers);
@@ -35,7 +39,13 @@ export function ServerDetail() {
   const updateServerConfig = useServerStore((s) => s.updateServerConfig);
   const reinstallServer = useServerStore((s) => s.reinstallServer);
   const updateServerGame = useServerStore((s) => s.updateServerGame);
-  
+
+  // Role-based UI gating for sub-users. Both are always true for the
+  // owner / local mode, so this never restricts your own machine — the
+  // cloud also enforces these server-side regardless.
+  const canOperate = useCanAct('server.start'); // start / stop / restart / send
+  const canAdmin = useCanAct('server.delete');  // delete / reinstall / config
+
   const { games } = useGamesStore();
 
   const [activeTab, setActiveTab] = useState<TabType>('console');
@@ -602,15 +612,15 @@ export function ServerDetail() {
         {/* Action Buttons */}
         <div className="flex items-center gap-3 mt-6 pt-6 border-t border-zinc-800">
           {server.status === 'stopped' ? (
-            <button onClick={handleStart} disabled={isLoading} className="btn btn-success">
+            <button onClick={handleStart} disabled={isLoading || !canOperate} className="btn btn-success">
               <Play size={18} /> Start Server
             </button>
           ) : server.status === 'running' ? (
             <>
-              <button onClick={handleStop} disabled={isLoading} className="btn btn-secondary">
+              <button onClick={handleStop} disabled={isLoading || !canOperate} className="btn btn-secondary">
                 <Square size={18} /> Stop
               </button>
-              <button onClick={handleRestart} disabled={isLoading} className="btn btn-secondary">
+              <button onClick={handleRestart} disabled={isLoading || !canOperate} className="btn btn-secondary">
                 <RotateCcw size={18} /> Restart
               </button>
             </>
@@ -629,9 +639,9 @@ export function ServerDetail() {
           
           <div className="flex-1" />
           
-          <button 
-            onClick={() => setShowDeleteDialog(true)} 
-            disabled={isLoading || server.status === 'running'} 
+          <button
+            onClick={() => setShowDeleteDialog(true)}
+            disabled={isLoading || server.status === 'running' || !canAdmin}
             className="btn btn-danger"
           >
             <Trash2 size={18} /> Delete
@@ -813,9 +823,9 @@ export function ServerDetail() {
                 className="console-input"
                 placeholder="Type a command... (↑↓ for history)"
               />
-              <button 
-                onClick={handleSendCommand} 
-                disabled={!command.trim()} 
+              <button
+                onClick={handleSendCommand}
+                disabled={!command.trim() || !canOperate}
                 className="text-zinc-500 hover:text-white disabled:opacity-30 transition-colors"
               >
                 <Send size={16} />
@@ -1034,7 +1044,7 @@ export function ServerDetail() {
                       setLogs([]);
                       await updateServerGame(server.id);
                     }}
-                    disabled={isLoading || server.status === 'running' || server.status === 'installing'}
+                    disabled={isLoading || server.status === 'running' || server.status === 'installing' || !canAdmin}
                     className="btn btn-secondary"
                   >
                     <RefreshCw size={16} /> Update
@@ -1054,7 +1064,7 @@ export function ServerDetail() {
                         await reinstallServer(server.id);
                       }
                     }}
-                    disabled={isLoading || server.status === 'running' || server.status === 'installing'}
+                    disabled={isLoading || server.status === 'running' || server.status === 'installing' || !canAdmin}
                     className="btn btn-secondary border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/10"
                   >
                     <RotateCcw size={16} /> Reinstall
@@ -1072,9 +1082,9 @@ export function ServerDetail() {
                 <div className="font-medium">Delete Server</div>
                 <div className="text-sm text-zinc-400">Remove the server and optionally delete all data.</div>
               </div>
-              <button 
-                onClick={() => setShowDeleteDialog(true)} 
-                disabled={isLoading || server.status === 'running'} 
+              <button
+                onClick={() => setShowDeleteDialog(true)}
+                disabled={isLoading || server.status === 'running' || !canAdmin}
                 className="btn btn-danger"
               >
                 <Trash2 size={18} /> Delete

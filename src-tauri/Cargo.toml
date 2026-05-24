@@ -3,7 +3,7 @@ members = [".", "core", "backend-local", "backend-remote", "agent", "cloud-clien
 resolver = "2"
 
 [workspace.package]
-version = "0.1.24"
+version = "0.1.25"
 authors = ["Fabrizio"]
 edition = "2021"
 license = "MIT"
@@ -66,23 +66,26 @@ tauri-plugin-deep-link = "2"
 # process that can never deliver the URL.
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # OS-native credential storage (Win Credential Manager, macOS Keychain,
-# Linux Secret Service). Used to stash the JWT — never localStorage.
-# IMPORTANT: keyring 3.x ships a mock backend by default. Each platform
-# needs an explicit feature flag, otherwise save_token() silently
-# succeeds and load_token() always returns NoEntry — meaning the user
-# appears to log in, the name flashes from /me, then on the next
-# render the panel reads the keychain (empty), nulls `me`, and shows
-# the sign-in prompt again. Reported by user in v0.1.12 dogfood.
-keyring = { version = "3", features = [
-  "windows-native",
-  "apple-native",
-  "sync-secret-service",
-  "linux-native-sync-persistent",
-] }
-# Cloud API client. rustls so we don't depend on the system OpenSSL.
-# `rustls-no-provider` matches what the backend-remote crate uses, so
-# Cargo dedupes the dependency tree.
-reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
+# Linux Secret Service). Used to stash the JWT + the sync DEK — never
+# localStorage.
+#
+# keyring 4 reworked the model: the backend is NO LONGER chosen at
+# compile time via Cargo features. Instead the app installs a credential
+# store at runtime (see `cloud::keychain::init`). This crate bundles the
+# per-platform native stores; we register the right one on startup with
+# `keyring::use_*_store()`. On Linux we pick the pure-Rust zbus Secret
+# Service backend so the build needs no system libdbus.
+#
+# The v0.1.14 "silent mock backend → endless re-login" bug is now
+# structurally impossible: if `init()` can't install the native store it
+# logs an error loudly instead of silently falling back to a no-op store.
+keyring = "4"
+# keyring 4 split the Entry/Error API into keyring-core; the `keyring`
+# crate only provides the per-platform store installers. Pin to the same
+# major keyring 4.0 resolves so there's ONE keyring-core (the default
+# store is process-global state on keyring-core — two copies would mean
+# Entry can't see the store we installed).
+keyring-core = "1"
 tokio-util = { version = "0.7", features = ["io"] }
 bytes = "1"
 serde = { workspace = true }
@@ -92,30 +95,13 @@ bollard = "0.21"
 uuid = { workspace = true }
 chrono = { workspace = true }
 directories = "6"
-thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-async-trait = { workspace = true }
-lazy_static = "1.5"
 futures-util = { workspace = true }
 base64 = "0.22"
-shell-words = "1.1"
-# Client-side AES-256-GCM for cloud-synced server configs. The cloud
-# never sees the plaintext — only the encrypted blob + a (server-side
-# unknown) random nonce per record.
-aes-gcm = "0.10"
 rand = "0.9"
-# scrypt is the KDF that derives the KEK (Key Encryption Key) from the
-# user's password / sync passphrase. Deliberately slow (~150-300ms per
-# call) so a stolen DB row can't be brute-forced cheaply. Runs once
-# per login on a fresh device, then we cache the unwrapped DEK in the
-# OS keychain.
-scrypt = { version = "0.11", default-features = false }
 # WS client for the cloud relay. rustls so we don't pull OpenSSL.
-tokio-tungstenite = { version = "0.28", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
-# We use this to compute a stable hash of a Server's cloud-relevant
-# fields so we can skip re-encrypt+upload when nothing changed.
-sha2 = "0.10"
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
 
 [features]
 default = ["custom-protocol"]
