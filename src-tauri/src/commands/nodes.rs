@@ -120,6 +120,18 @@ pub fn agent_install_command(
     let domain = domain.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let label = label.as_deref().map(str::trim).filter(|s| !s.is_empty());
 
+    // GitHub serves "latest" at a DIFFERENT path than a pinned tag:
+    //   latest : /releases/latest/download/<asset>
+    //   tag    : /releases/download/<tag>/<asset>
+    // Building `/releases/download/latest/...` 404s, and `curl -sSL`
+    // (no -f) would pipe the "Not Found" page into the shell, producing
+    // the cryptic `Not: command not found`.
+    let base = if version == "latest" {
+        "https://github.com/fabri2000779/localforge/releases/latest/download".to_string()
+    } else {
+        format!("https://github.com/fabri2000779/localforge/releases/download/{version}")
+    };
+
     // Linux: env-var prefix before sudo bash. POSIX shell quoting.
     let mut linux_env = String::new();
     if let Some(d) = domain {
@@ -128,9 +140,14 @@ pub fn agent_install_command(
     if let Some(l) = label {
         linux_env.push_str(&format!("LOCALFORGE_AGENT_LABEL={} ", shell_escape(l)));
     }
+    // The env vars go AFTER `sudo` (`sudo VAR=x bash`), not before. With
+    // them before (`VAR=x sudo bash`) the shell sets them on the sudo
+    // process, whose default env_reset strips them before exec'ing bash —
+    // so the install script never sees DOMAIN/LABEL. `-f` makes curl fail
+    // loudly on a bad URL instead of piping an HTML error page into bash.
     let linux = format!(
-        "curl -sSL https://github.com/fabri2000779/localforge/releases/download/{ver}/install-agent.sh | {env}sudo bash",
-        ver = version,
+        "curl -fsSL {base}/install-agent.sh | sudo {env}bash",
+        base = base,
         env = linux_env,
     );
 
@@ -144,9 +161,9 @@ pub fn agent_install_command(
         ps_env.push_str(&format!("$env:LOCALFORGE_AGENT_LABEL = {}; ", ps_quote(l)));
     }
     let windows = format!(
-        "{env}iex \"& {{ $(irm https://github.com/fabri2000779/localforge/releases/download/{ver}/install-agent.ps1) }}\"",
+        "{env}iex \"& {{ $(irm {base}/install-agent.ps1) }}\"",
         env = ps_env,
-        ver = version,
+        base = base,
     );
 
     AgentInstallCommands { linux, windows }
