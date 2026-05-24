@@ -195,8 +195,9 @@ if ($pairingOutput) {
 # Register auto-start (scheduled task by default, service if requested)
 # ---------------------------------------------------------------------------
 
-$args = "--config `"$ConfigPath`" serve"
-$cmd  = "`"$Exe`" --config `"$ConfigPath`" serve"
+# NB: don't use $args — it's a PowerShell automatic variable.
+$taskArgs = "--config `"$ConfigPath`" serve"
+$cmd      = "`"$Exe`" --config `"$ConfigPath`" serve"
 
 if ($InstallAsService) {
     Write-Step "Registering Windows Service 'LocalForgeAgent' via sc.exe..."
@@ -211,7 +212,7 @@ if ($InstallAsService) {
 } else {
     Write-Step "Registering scheduled task 'LocalForgeAgent' (runs at boot as SYSTEM)..."
     Unregister-ScheduledTask -TaskName LocalForgeAgent -Confirm:$false -ErrorAction SilentlyContinue
-    $action    = New-ScheduledTaskAction    -Execute $Exe -Argument $args
+    $action    = New-ScheduledTaskAction    -Execute $Exe -Argument $taskArgs
     $trigger   = New-ScheduledTaskTrigger   -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest -LogonType ServiceAccount
     $settings  = New-ScheduledTaskSettingsSet `

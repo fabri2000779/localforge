@@ -1,0 +1,10 @@
+# Shell scripts MUST stay LF on every checkout — including Windows CI
+# runners (which default to core.autocrlf=true). install-agent.sh ships
+# as a release asset and runs via `curl ... | bash` on Linux, where a
+# CRLF shebang/`set -euo pipefail` line breaks with
+# "$'\r': command not found" / "invalid option name". eol=lf overrides
+# autocrlf, so the asset uploaded from the Windows agent-build job is LF.
+*.sh text eol=lf
+
+# PowerShell stays CRLF (Windows convention; harmless to `irm | iex`).
+*.ps1 text eol=crlf

@@ -394,6 +394,11 @@ jobs:
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft \
               --title "LocalForge $TAG" --notes "See assets below."
           fi
+          # Belt-and-suspenders for the CRLF bug: this matrix includes a
+          # Windows runner whose checkout could ship install-agent.sh with
+          # CRLF (breaks `curl ... | bash`). The .gitattributes eol=lf is
+          # the primary fix; strip any stray CR here too. No-op on LF.
+          sed -i 's/\r$//' scripts/install-agent.sh
           gh release upload "$TAG" \
             "$AGENT_BIN" scripts/install-agent.sh scripts/install-agent.ps1 \
             --repo "$GITHUB_REPOSITORY" --clobber
