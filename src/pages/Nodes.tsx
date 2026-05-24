@@ -64,16 +64,28 @@ export function NodesPage() {
 
   const handleRemove = async (node: NodeRecord) => {
     if (node.kind.kind === 'local') return;
+    const linked = cloudNodes.find((cn) => cn.id === node.id && !cn.revoked);
     if (
       !window.confirm(
-        `Remove "${node.label}"? Its persisted token will be deleted; the agent on the server keeps running until you stop it manually.`,
+        linked
+          ? `Remove "${node.label}"? It's linked to the cloud relay, so this also unlinks it — mobile / other desktops lose direct access and the node slot is freed. The agent on the server keeps running until you stop it manually.`
+          : `Remove "${node.label}"? Its persisted token will be deleted; the agent on the server keeps running until you stop it manually.`,
       )
     ) {
       return;
     }
     setBusyId(node.id);
     try {
+      // Cascade: unlink from the cloud FIRST (hard-deletes the enrollment +
+      // frees the cap slot + drops the relay socket). Doing it before the
+      // local removal means a failure here aborts cleanly instead of leaving
+      // an orphaned cloud node with no UI left to unlink it.
+      if (linked) {
+        await revokeCloudNode(node.id);
+      }
       await removeNode(node.id);
+    } catch (e) {
+      window.alert(`Couldn't remove node: ${e}`);
     } finally {
       setBusyId(null);
     }
