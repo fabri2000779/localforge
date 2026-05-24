@@ -92,6 +92,15 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
 
+    // rustls 0.23 can't auto-select a crypto provider when BOTH `ring` (our
+    // HTTPS server) and `aws-lc-rs` (pulled transitively by the relay's
+    // tokio-tungstenite) end up in the dependency tree. Install ring as the
+    // process default before ANY TLS work — otherwise building the server's
+    // ServerConfig (or a relay ClientConfig) panics with "Could not
+    // automatically determine the process-level CryptoProvider". Idempotent;
+    // ignore the Err if something already installed one.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let cli = Cli::parse();
     let config_path = cli
         .config
