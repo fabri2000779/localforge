@@ -137,11 +137,29 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("malformed enrollment blob: {}", e))?;
             let node_id = link.node_id.clone();
             config::save_cloud_link(&config_path, link)?;
-            println!(
-                "Linked to cloud (node {}). It connects to the relay on next start; \
-                 restart the service to connect now: systemctl restart localforge-agent",
-                node_id,
-            );
+            // Best-effort: bounce the systemd service so the agent picks up
+            // the cloud link and connects to the relay right away — the user
+            // shouldn't have to run a second command. Writing the 0600 config
+            // above already required root, so `systemctl` will have the
+            // privileges it needs. If we're not under systemd (foreground /
+            // WSL without systemd), fall back to printing instructions.
+            let restarted = std::process::Command::new("systemctl")
+                .args(["restart", "localforge-agent"])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if restarted {
+                println!(
+                    "Linked to cloud (node {node_id}) and restarted the agent — \
+                     it's connecting to the relay now."
+                );
+            } else {
+                println!(
+                    "Linked to cloud (node {node_id}). Restart the agent to connect now:\n  \
+                     sudo systemctl restart localforge-agent\n\
+                     (or, if you run it in the foreground, stop it and re-run `serve`)."
+                );
+            }
             Ok(())
         }
         Command::Serve => serve(&config_path).await,

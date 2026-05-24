@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Loader2, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Loader2, AlertTriangle, Server } from 'lucide-react';
 import { useServerStore } from '../stores/serverStore';
 import { useGamesStore } from '../stores/gamesStore';
+import { useNodesStore } from '../stores/nodesStore';
 import { GameIcon } from '../components/GameIcon';
 import type { GameType, CreateServerRequest, Variable } from '../types';
 
@@ -23,6 +24,11 @@ export function CreateServer() {
   const location = useLocation();
   const { createServer, isLoading, error, clearError } = useServerStore();
   const { games } = useGamesStore();
+  const { nodes, activeNodeId } = useNodesStore();
+  // The server is created on whichever node is active in the top-left
+  // switcher. Surface it so the user knows where it'll land — and how to
+  // change it — before they commit.
+  const activeNode = nodes.find((n) => n.id === activeNodeId);
 
   const initialGameType = (location.state as { gameType?: GameType })?.gameType;
 
@@ -151,6 +157,24 @@ export function CreateServer() {
           Choose a game and configure your server in a few steps.
         </p>
       </header>
+
+      <div
+        className="flex items-start gap-2 text-[12.5px] text-slate-400 mb-6 px-3 py-2.5 rounded-lg"
+        style={{
+          background: 'rgba(59,130,246,0.06)',
+          border: '1px solid rgba(59,130,246,0.15)',
+        }}
+      >
+        <Server size={14} className="text-blue-300 shrink-0 mt-0.5" />
+        <span>
+          This server will be created on{' '}
+          <span className="font-medium text-slate-200">
+            {activeNode?.label ?? 'this machine'}
+          </span>
+          . To use a different machine or VPS, switch nodes in the selector at
+          the top-left first.
+        </span>
+      </div>
 
       {!selectedGame ? (
         <section>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Server, Cloud, Check, Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { listen } from '@tauri-apps/api/event';
 import { useNodesStore } from '../stores/nodesStore';
 
 /**
@@ -17,6 +18,16 @@ export function NodeSelector() {
 
   useEffect(() => {
     fetchNodes();
+    // The backend loads persisted remote nodes asynchronously at startup
+    // (after Docker connects), so this initial fetch can race ahead of them
+    // and show only the local node until you open the Nodes page. Re-fetch
+    // when the backend signals remotes are loaded.
+    const un = listen('nodes-changed', () => {
+      void fetchNodes();
+    });
+    return () => {
+      void un.then((f) => f());
+    };
   }, [fetchNodes]);
 
   // Click-outside to close.

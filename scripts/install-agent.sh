@@ -316,6 +316,15 @@ print_summary() {
   Status: systemctl status localforge-agent
   Logs:   journalctl -u localforge-agent -f
 
+  ── Control it from your phone (or another desktop), with this one OFF ──
+  On a paid plan (Hobby/Team) you can enroll this agent on the LocalForge
+  cloud relay so it's reachable without your main desktop running:
+    1. In the LocalForge desktop app, open Nodes → "Link to cloud".
+    2. Copy the one-line code it shows, then run it here:
+         localforge-agent link <code>
+  The agent dials out to the cloud — no inbound ports, NAT-friendly. On a
+  free/standalone setup, the "Add Node" pairing above is all you need.
+
   If you have a domain pointing at this server, you can re-run with:
     LOCALFORGE_AGENT_DOMAIN=node.example.com bash $0
 

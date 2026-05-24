@@ -13,7 +13,7 @@ use backend::NodeRegistry;
 use commands::games::GamesState;
 use commands::server::ServerState;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tracing_subscriber::EnvFilter;
 
@@ -105,6 +105,11 @@ fn main() {
                 if let Err(e) = state.load_remotes().await {
                     tracing::warn!("Failed to load remote nodes: {}", e);
                 }
+                // Tell the UI the persisted remote nodes are now in the
+                // registry, so the node switcher (which fetched at mount,
+                // before this finished) re-fetches and shows them without
+                // the user having to open the Nodes page first.
+                let _ = handle.emit("nodes-changed", ());
             });
 
             // Deep-link listener: the OS hands us localforge://… URLs

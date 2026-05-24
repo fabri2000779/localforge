@@ -15,8 +15,13 @@ import {
   X,
 } from 'lucide-react';
 import { useNodesStore, type CloudNodeSummary } from '../stores/nodesStore';
+import { useAuthStore } from '../stores/authStore';
 import type { NodeRecord, NodeStats } from '../types';
 import { AddNodeWizard } from '../components/AddNodeWizard';
+
+/** Agent-node caps per plan — mirrors the cloud's NODE_CAP. Counts
+ *  cloud-linked agents only; desktop installs are unlimited. */
+const NODE_CAP: Record<string, number> = { free: 0, hobby: 2, team: 10 };
 
 export function NodesPage() {
   const {
@@ -36,6 +41,12 @@ export function NodesPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   // The `localforge-agent link <blob>` command shown after enrolling a node.
   const [linkCmd, setLinkCmd] = useState<string | null>(null);
+
+  // Agent-node usage vs the plan cap, so paid users see their limit clearly.
+  const plan = useAuthStore((s) => s.me?.subscription.plan ?? 'free');
+  const nodeCap = NODE_CAP[plan] ?? 0;
+  const usedNodes = cloudNodes.filter((cn) => !cn.revoked).length;
+  const atCap = nodeCap > 0 && usedNodes >= nodeCap;
 
   useEffect(() => {
     fetchNodes();
@@ -114,6 +125,15 @@ export function NodesPage() {
           <p className="page-subtitle">
             Local Docker plus any remote LocalForge agents you&apos;ve paired.
           </p>
+          {plan !== 'free' && (
+            <p className="text-[12px] text-slate-500 mt-1.5">
+              Cloud-linked agent nodes:{' '}
+              <span className={`font-medium ${atCap ? 'text-amber-400' : 'text-slate-300'}`}>
+                {usedNodes} of {nodeCap}
+              </span>{' '}
+              used{atCap ? ' — limit reached' : ''}. Desktop installs don&apos;t count.
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button

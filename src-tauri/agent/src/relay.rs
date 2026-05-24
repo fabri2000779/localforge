@@ -168,9 +168,21 @@ async fn handle_cmd(f: RelayFrame, backend: Arc<dyn NodeBackend>, out: Outbound,
     match cmd.as_str() {
         "state.snapshot" => match backend.list_servers().await {
             Ok(servers) => {
+                // Include name + game_type so a relay client that doesn't
+                // already know this server (e.g. the mobile app discovering
+                // an agent's servers) can render a full row, not just a
+                // status badge. Extra fields are ignored by older consumers.
                 let arr: Vec<Value> = servers
                     .iter()
-                    .map(|s| json!({ "id": s.id, "status": s.status, "container_id": s.container_id }))
+                    .map(|s| {
+                        json!({
+                            "id": s.id,
+                            "status": s.status,
+                            "container_id": s.container_id,
+                            "name": s.name,
+                            "game_type": s.game_type,
+                        })
+                    })
                     .collect();
                 let _ = out.send(
                     json!({ "type": "event", "kind": "state_snapshot", "request_id": rid, "servers": arr })
