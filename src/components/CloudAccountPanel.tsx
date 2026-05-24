@@ -200,7 +200,7 @@ export function CloudAccountPanel() {
               </div>
             </div>
             <button
-              className="btn-primary"
+              className="btn-secondary"
               disabled={busy === 'portal'}
               onClick={() => withBusy('portal', () => openPortal())}
             >
@@ -244,7 +244,7 @@ export function CloudAccountPanel() {
               Cloud sync
             </div>
             <button
-              className="btn-primary"
+              className="btn-secondary"
               onClick={() => withBusy('sync', async () => { await syncNow(); })}
               disabled={syncing}
             >
@@ -292,7 +292,8 @@ export function CloudAccountPanel() {
             </button>
             <span className="sync-hint">
               <Download size={11} className="inline mr-1" />
-              The key is on this device only — store it like a password.
+              The raw key stays on this device — store it like a password. The
+              cloud keeps only a copy encrypted behind your sync passphrase.
             </span>
           </div>
         </section>

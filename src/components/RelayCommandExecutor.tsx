@@ -94,6 +94,34 @@ export function RelayCommandExecutor() {
         }
         return;
       }
+      // ---------------------------------------------------------------------
+      // server.logs — return the recent console backlog (last N lines) so a
+      // freshly-opened mobile console isn't blank until the next live line
+      // arrives. The desktop UI populates its console the same way (a direct
+      // get_server_logs call on open); the relay had no equivalent, so a
+      // sub-user/mobile only ever saw lines emitted AFTER it attached. Reply
+      // with its own event kind (logs_snapshot), not a cmd_result.
+      // ---------------------------------------------------------------------
+      if (msg.cmd === 'server.logs') {
+        try {
+          const res = await invoke<{ logs: string[] }>('get_server_logs', {
+            serverId: msg.target,
+            lines: typeof msg.args?.lines === 'number' ? msg.args.lines : 200,
+            nodeId: (msg.args?.nodeId as string | undefined) ?? 'local',
+          });
+          await invoke('cloud_relay_send_event', {
+            payload: {
+              kind: 'logs_snapshot',
+              request_id: msg.request_id,
+              target: msg.target,
+              lines: res.logs ?? [],
+            },
+          });
+        } catch (e) {
+          console.error('[relay] server.logs reply failed', e);
+        }
+        return;
+      }
       const handler = CMD_MAP[msg.cmd];
       if (!handler) {
         return respond(msg, { success: false, error: `unknown_cmd:${msg.cmd}` });
