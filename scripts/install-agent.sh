@@ -231,8 +231,11 @@ install_systemd_unit() {
 [Unit]
 Description=LocalForge remote agent
 After=network-online.target docker.service
-Wants=network-online.target
-Requires=docker.service
+# Soft deps only. The agent talks to the Docker socket directly, so it must
+# NOT hard-require docker.service — that unit doesn't exist under Docker
+# Desktop / WSL, and Requires= on a missing unit blocks startup entirely.
+# `After=` still orders it after docker when docker.service is present.
+Wants=network-online.target docker.service
 
 [Service]
 Type=simple
@@ -251,8 +254,16 @@ WantedBy=multi-user.target
 UNIT
 
   systemctl daemon-reload
-  systemctl enable --now localforge-agent
-  ok "Systemd service registered and started."
+  # Don't let a start failure abort the installer (set -e) — the user still
+  # needs the pairing summary printed below. Surface it as a warning.
+  if systemctl enable --now localforge-agent; then
+    ok "Systemd service registered and started."
+  else
+    warn "Service registered but did NOT start. Inspect with:"
+    warn "  journalctl -u localforge-agent -e --no-pager"
+    warn "Or run it directly (e.g. on WSL without systemd-managed Docker):"
+    warn "  sudo -u ${SERVICE_USER} ${INSTALL_DIR}/localforge-agent --config ${CONFIG_PATH} serve"
+  fi
 }
 
 # ---------------------------------------------------------------------------
