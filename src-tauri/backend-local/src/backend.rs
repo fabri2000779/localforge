@@ -374,7 +374,7 @@ impl NodeBackend for LocalDockerBackend {
             .join(game.game_type.to_string())
             .join(&server_id);
 
-        std::fs::create_dir_all(&data_path).map_err(BackendError::io)?;
+        create_server_data_dir(&data_path)?;
 
         let user_config = request.config.clone().unwrap_or_default();
         let env = build_env_vars(&game, memory_mb, port, &user_config);
@@ -468,6 +468,22 @@ impl NodeBackend for LocalDockerBackend {
             .container_id
             .clone()
             .ok_or_else(|| BackendError::invalid("server has no container"))?;
+
+        // Self-heal volume permissions on boot. Servers created before the
+        // data dir was made world-writable (or whose dir was created by a
+        // differently-owned process) may be unwritable by the container's
+        // uid 1000 while the agent runs as the localforge user (uid ~999),
+        // which crashes the server on first start (e.g. it can't create the
+        // jar's cache dir). Best-effort widen so the existing dir heals
+        // without a reset. cfg-gated out on Windows/macOS.
+        #[cfg(unix)]
+        if server.data_path.exists() {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                &server.data_path,
+                std::fs::Permissions::from_mode(0o777),
+            );
+        }
 
         self.docker
             .start_container(&container_id)
@@ -586,7 +602,7 @@ impl NodeBackend for LocalDockerBackend {
         if server.data_path.exists() {
             std::fs::remove_dir_all(&server.data_path).map_err(BackendError::io)?;
         }
-        std::fs::create_dir_all(&server.data_path).map_err(BackendError::io)?;
+        create_server_data_dir(&server.data_path)?;
         server.installed = false;
         server.install_container_id = None;
         server.status = ServerStatus::Stopped;
@@ -700,6 +716,29 @@ impl NodeBackend for LocalDockerBackend {
             extension,
         })
     }
+}
+
+/// Create a server's on-disk data directory and make it writable by the
+/// container's runtime user.
+///
+/// Game images run their process as uid 1000 (`container`), but the agent's
+/// systemd service runs as the unprivileged `localforge` user (uid ~999). A
+/// bind-mounted volume is created owned by whoever runs the agent, so without
+/// this the container can't create its working files (e.g. the server jar's
+/// `/mnt/server/cache`) on first boot and dies with `AccessDeniedException`.
+/// We can't `chown` to another uid as a non-root process, but we own the dir
+/// we just created, so we widen its mode to 0o777. On the desktop (where the
+/// user is usually uid 1000 already) this is a harmless no-op; on Windows and
+/// macOS the cfg-gate compiles it out entirely.
+fn create_server_data_dir(path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path).map_err(BackendError::io)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777))
+            .map_err(BackendError::io)?;
+    }
+    Ok(())
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
