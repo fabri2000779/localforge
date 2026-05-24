@@ -874,6 +874,17 @@ html {
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
+.plan-badge {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  line-height: 1.4;
+}
 .plan-free  { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; }
 .plan-hobby { background: rgba(59, 130, 246, 0.22);  color: #93c5fd; }
 .plan-team  { background: rgba(167, 139, 250, 0.22); color: #c4b5fd; }

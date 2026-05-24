@@ -122,6 +122,31 @@ export function RelayCommandExecutor() {
         }
         return;
       }
+      // ---------------------------------------------------------------------
+      // server.stats — one-shot container resource usage (CPU% + memory),
+      // polled by the mobile while viewing a running server. Reuses the
+      // existing get_server_stats command; replies with a stats_snapshot
+      // event carrying the raw ContainerStats.
+      // ---------------------------------------------------------------------
+      if (msg.cmd === 'server.stats') {
+        try {
+          const stats = await invoke('get_server_stats', {
+            serverId: msg.target,
+            nodeId: (msg.args?.nodeId as string | undefined) ?? 'local',
+          });
+          await invoke('cloud_relay_send_event', {
+            payload: {
+              kind: 'stats_snapshot',
+              request_id: msg.request_id,
+              target: msg.target,
+              stats,
+            },
+          });
+        } catch (e) {
+          console.error('[relay] server.stats reply failed', e);
+        }
+        return;
+      }
       const handler = CMD_MAP[msg.cmd];
       if (!handler) {
         return respond(msg, { success: false, error: `unknown_cmd:${msg.cmd}` });

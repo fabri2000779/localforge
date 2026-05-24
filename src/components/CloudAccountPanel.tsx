@@ -63,7 +63,7 @@ export function CloudAccountPanel() {
         <div className="cloud-empty">
           <p>Sign in to sync your servers across devices, get crash alerts and (with Team) invite teammates.</p>
           <p className="cloud-empty-sub">Optional — LocalForge works fully without an account.</p>
-          <button className="btn-primary mt-3" disabled={loading} onClick={() => setLoginOpen(true)}>
+          <button className="btn btn-primary mt-3" disabled={loading} onClick={() => setLoginOpen(true)}>
             Sign in / Create account
           </button>
         </div>
@@ -98,7 +98,7 @@ export function CloudAccountPanel() {
             <Cloud size={15} className="text-sky-400" />
             Cloud account
           </div>
-          <button className="btn-ghost" onClick={() => void logout()} title="Sign out">
+          <button className="btn btn-ghost" onClick={() => void logout()} title="Sign out">
             <LogOut size={13} strokeWidth={2.2} />
             <span>Sign out</span>
           </button>
@@ -120,7 +120,7 @@ export function CloudAccountPanel() {
               <p>We sent a link to <code>{me.email}</code>. Click it to unlock all features.</p>
             </div>
             <button
-              className="btn-secondary"
+              className="btn btn-secondary"
               disabled={resendOk || busy === 'resend'}
               onClick={async () => {
                 await withBusy('resend', async () => {
@@ -142,7 +142,7 @@ export function CloudAccountPanel() {
               <strong>Your cloud data will be deleted {purgeDays === 0 ? 'today' : purgeDays === 1 ? 'tomorrow' : `in ${purgeDays} days`}</strong>
               <p>Re-subscribe to keep your synced configs, or export them below before the deletion runs.</p>
             </div>
-            <button className="btn-primary" onClick={() => withBusy('hobby', () => openCheckout('hobby'))} disabled={busy === 'hobby'}>
+            <button className="btn btn-primary" onClick={() => withBusy('hobby', () => openCheckout('hobby'))} disabled={busy === 'hobby'}>
               Re-subscribe
             </button>
           </div>
@@ -163,7 +163,7 @@ export function CloudAccountPanel() {
                   : 'Enter the sync password you created on your first device to decrypt configs here.'}
               </p>
             </div>
-            <button className="btn-secondary" onClick={openSyncKeyDialog}>
+            <button className="btn btn-secondary" onClick={openSyncKeyDialog}>
               <KeyRound size={13} strokeWidth={2.2} />
               {syncKeyStatus === 'not_set_up' ? 'Set up' : 'Unlock'}
             </button>
@@ -200,7 +200,7 @@ export function CloudAccountPanel() {
               </div>
             </div>
             <button
-              className="btn-secondary"
+              className="btn btn-secondary"
               disabled={busy === 'portal'}
               onClick={() => withBusy('portal', () => openPortal())}
             >
@@ -244,7 +244,7 @@ export function CloudAccountPanel() {
               Cloud sync
             </div>
             <button
-              className="btn-secondary"
+              className="btn btn-secondary"
               onClick={() => withBusy('sync', async () => { await syncNow(); })}
               disabled={syncing}
             >
@@ -282,11 +282,11 @@ export function CloudAccountPanel() {
           )}
 
           <div className="vault-actions">
-            <button className="btn-secondary" onClick={() => setKeyDialog('show')}>
+            <button className="btn btn-secondary" onClick={() => setKeyDialog('show')}>
               <KeyRound size={13} strokeWidth={2.2} />
               Show recovery key
             </button>
-            <button className="btn-ghost" onClick={() => setKeyDialog('import')}>
+            <button className="btn btn-ghost" onClick={() => setKeyDialog('import')}>
               <Upload size={13} strokeWidth={2.2} />
               Restore from a key
             </button>
@@ -333,7 +333,7 @@ function TierCard({
       <ul className="tier-features">
         {features.map((f) => <li key={f}>{f}</li>)}
       </ul>
-      <button className={`btn-${featured ? 'primary' : 'secondary'} w-full`} onClick={onClick} disabled={busy}>
+      <button className={`btn btn-${featured ? 'primary' : 'secondary'} w-full`} onClick={onClick} disabled={busy}>
         {busy ? '…' : `Start ${name}`}
       </button>
     </div>

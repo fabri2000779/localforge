@@ -90,7 +90,7 @@ export function MembersPanel() {
           Team
         </div>
         {canManage && (
-          <button className="btn-secondary" onClick={() => setInviteOpen(true)}>
+          <button className="btn btn-secondary" onClick={() => setInviteOpen(true)}>
             <UserPlus size={13} strokeWidth={2.2} />
             Invite member
           </button>
