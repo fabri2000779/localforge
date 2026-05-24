@@ -76,7 +76,19 @@ export function RelayCommandExecutor() {
       // event kind that carries the full list inline.
       // ---------------------------------------------------------------------
       if (msg.cmd === 'state.snapshot') {
-        const servers = useServerStore.getState().servers;
+        // Report the LOCAL node's servers — those are what get cloud-synced
+        // and therefore what the mobile lists. Reading serverStore here would
+        // report the ACTIVE node instead, so when the desktop is switched to
+        // a remote/VPS node the mobile's local servers lose their status
+        // badges. (Agent-node servers get their status from the agent itself,
+        // which the mobile queries directly over the relay.)
+        type SnapServer = { id: string; status: string; container_id?: string | null };
+        let servers: SnapServer[];
+        try {
+          servers = await invoke<SnapServer[]>('list_servers', { nodeId: 'local' });
+        } catch {
+          servers = useServerStore.getState().servers;
+        }
         try {
           await invoke('cloud_relay_send_event', {
             payload: {
