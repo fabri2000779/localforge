@@ -55,21 +55,23 @@ function App() {
   // calls useNavigate, which throws (silent blank screen in React 19
   // prod) when rendered outside a Router context. Pre-Phase-5 the
   // DockerRequired return didn't need a Router; today it does.
+  // The Sidebar (and its NodeSelector) is ALWAYS mounted — when the active
+  // node is unreachable we show the gate only in the content area, never
+  // full-screen. Otherwise switching to an offline remote node would hide
+  // the switcher and trap the user with no way back (dockerStore re-checks
+  // on activeNodeId change, so switching back to a live node clears it).
+  // Relay bridges target the LOCAL node, so they run regardless of which
+  // node is active in the UI.
+  const activeDown = status != null && !status.running;
   return (
     <BrowserRouter>
-      {status && !status.running ? (
-        <div className="h-screen flex flex-col app-shell">
-          <TitleBar />
-          <DockerRequired status={status} onRetry={checkStatus} />
-          <OAuthToast />
-          <SyncKeyDialog />
-          <UpdateChecker />
-        </div>
-      ) : (
-        <div className="h-screen flex flex-col app-shell">
-          <TitleBar />
-          <div className="flex flex-1 overflow-hidden">
-            <Sidebar />
+      <div className="h-screen flex flex-col app-shell">
+        <TitleBar />
+        <div className="flex flex-1 overflow-hidden">
+          <Sidebar />
+          {activeDown ? (
+            <DockerRequired status={status} onRetry={checkStatus} />
+          ) : (
             <main className="main-content">
               <div className="page-container">
                 <Routes>
@@ -84,16 +86,16 @@ function App() {
                 </Routes>
               </div>
             </main>
-          </div>
-          <OAuthToast />
-          <AcceptInviteToast />
-          <RelayCommandExecutor />
-          <RelayLogBridge />
-          <RelayStateBridge />
-          <SyncKeyDialog />
-          <UpdateChecker />
+          )}
         </div>
-      )}
+        <OAuthToast />
+        <AcceptInviteToast />
+        <RelayCommandExecutor />
+        <RelayLogBridge />
+        <RelayStateBridge />
+        <SyncKeyDialog />
+        <UpdateChecker />
+      </div>
     </BrowserRouter>
   );
 }
