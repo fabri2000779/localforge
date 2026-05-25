@@ -1,7 +1,7 @@
 //! Tauri commands that the "Nodes" UI uses to list, add, remove, test
 //! and re-connect remote agents.
 
-use crate::backend::{NodeKindRecord, NodeRecord, NodeRegistry};
+use crate::backend::{NodeKindRecord, NodeRecord, NodeRegistry, ThisMachine};
 use crate::commands::require_backend;
 use localforge_backend_remote::RemoteAgentConfig;
 use localforge_core::{DockerInfo, NodeId, NodeStats};
@@ -27,6 +27,28 @@ pub struct AddRemoteNodeRequest {
 #[tauri::command]
 pub async fn list_nodes(state: State<'_, NodeRegistry>) -> Result<Vec<NodeRecord>, String> {
     Ok(state.list_records().await)
+}
+
+/// This machine's stable identity (id + name). `None` before the local
+/// node is installed (i.e. Docker not yet reachable).
+#[tauri::command]
+pub async fn get_this_machine(
+    state: State<'_, NodeRegistry>,
+) -> Result<Option<ThisMachine>, String> {
+    Ok(state.this_machine().await)
+}
+
+/// Rename this machine. The stable id is never changed — only the label
+/// the user sees in the switcher.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn set_machine_name(
+    name: String,
+    state: State<'_, NodeRegistry>,
+) -> Result<ThisMachine, String> {
+    state
+        .set_machine_name(name)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Try to reach a candidate agent — used by the "Test connection" button

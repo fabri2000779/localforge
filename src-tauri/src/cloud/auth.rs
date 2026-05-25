@@ -86,6 +86,9 @@ pub async fn cloud_logout() -> Result<(), api::ApiError> {
         let _ = localforge_cloud_client::auth::logout(&t).await;
     }
     keychain::clear_token().map_err(|e| api::ApiError::Decode(format!("keychain: {e}")))?;
+    // Allow the next sign-in to re-claim this machine (the target org may
+    // differ if a different account logs in).
+    super::nodes::reset_desktop_claim();
     Ok(())
 }
 

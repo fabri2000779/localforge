@@ -139,6 +139,14 @@ pub async fn post<B: Serialize, R: DeserializeOwned>(
     request(reqwest::Method::POST, path, Some(body), bearer).await
 }
 
+pub async fn put<B: Serialize, R: DeserializeOwned>(
+    path: &str,
+    body: &B,
+    bearer: Option<&str>,
+) -> Result<R, ApiError> {
+    request(reqwest::Method::PUT, path, Some(body), bearer).await
+}
+
 pub async fn get<R: DeserializeOwned>(path: &str, bearer: Option<&str>) -> Result<R, ApiError> {
     request::<(), R>(reqwest::Method::GET, path, None, bearer).await
 }

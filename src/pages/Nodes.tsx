@@ -13,6 +13,8 @@ import {
   Link2,
   Copy,
   X,
+  Pencil,
+  Check,
 } from 'lucide-react';
 import { useNodesStore, type CloudNodeSummary } from '../stores/nodesStore';
 import { useAuthStore } from '../stores/authStore';
@@ -35,6 +37,9 @@ export function NodesPage() {
     revokeCloudNode,
     removeNode,
     reconnectNode,
+    renameMachine,
+    cloudMachines,
+    fetchMachines,
     isLoading,
   } = useNodesStore();
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -51,7 +56,8 @@ export function NodesPage() {
   useEffect(() => {
     fetchNodes();
     fetchCloudNodes();
-  }, [fetchNodes, fetchCloudNodes]);
+    fetchMachines();
+  }, [fetchNodes, fetchCloudNodes, fetchMachines]);
 
   // Auto-refresh host stats for every known node every 5s.
   useEffect(() => {
@@ -195,10 +201,66 @@ export function NodesPage() {
               onReconnect={() => handleReconnect(node)}
               onLink={() => handleLink(node)}
               onUnlink={() => handleUnlink(node)}
+              onRename={
+                node.kind.kind === 'local' ? renameMachine : undefined
+              }
             />
           ))
         )}
       </div>
+
+      {cloudMachines.length > 0 && (
+        <section className="card mt-5">
+          <div className="section-title mb-1">
+            <Cloud size={15} className="text-purple-400" />
+            Machines in this organization
+          </div>
+          <p className="text-xs text-slate-500 mb-3">
+            Every machine you (and your team) can reach over the cloud relay —
+            desktops and VPS agents, wherever they are.
+          </p>
+          <div className="space-y-1.5">
+            {cloudMachines.map((m) => (
+              <div
+                key={m.id}
+                className="flex items-center gap-2.5 px-2 py-1.5 rounded-md hover:bg-slate-800/50"
+              >
+                <div
+                  className={`shrink-0 w-7 h-7 rounded-md flex items-center justify-center ${
+                    m.kind === 'desktop' ? 'bg-blue-500/15' : 'bg-purple-500/15'
+                  }`}
+                >
+                  {m.kind === 'desktop' ? (
+                    <Server size={13} className="text-blue-400" />
+                  ) : (
+                    <Cloud size={13} className="text-purple-400" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-slate-100 truncate">
+                    {m.name}
+                  </div>
+                  <div className="text-[11px] text-slate-500 capitalize">
+                    {m.kind}
+                  </div>
+                </div>
+                <span
+                  className={`flex items-center gap-1 text-[11px] ${
+                    m.online ? 'text-emerald-400' : 'text-slate-500'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      m.online ? 'bg-emerald-400' : 'bg-slate-600'
+                    }`}
+                  />
+                  {m.online ? 'online' : 'offline'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <AddNodeWizard
         isOpen={wizardOpen}
@@ -277,6 +339,7 @@ function NodeCard({
   onReconnect,
   onLink,
   onUnlink,
+  onRename,
 }: {
   node: NodeRecord;
   stats?: NodeStats;
@@ -286,8 +349,35 @@ function NodeCard({
   onReconnect: () => void;
   onLink: () => void;
   onUnlink: () => void;
+  /** Only supplied for the local node — renames THIS machine. */
+  onRename?: (name: string) => Promise<void>;
 }) {
   const isLocal = node.kind.kind === 'local';
+  // Inline machine-rename state (local node only).
+  const [editingName, setEditingName] = useState(false);
+  const [draftName, setDraftName] = useState(node.label);
+  const [savingName, setSavingName] = useState(false);
+
+  const beginRename = () => {
+    setDraftName(node.label);
+    setEditingName(true);
+  };
+  const commitRename = async () => {
+    const next = draftName.trim();
+    if (!onRename || !next || next === node.label) {
+      setEditingName(false);
+      return;
+    }
+    setSavingName(true);
+    try {
+      await onRename(next);
+      setEditingName(false);
+    } catch (e) {
+      console.error('[Nodes] rename machine:', e);
+    } finally {
+      setSavingName(false);
+    }
+  };
   const url = !isLocal && node.kind.kind === 'remote' ? node.kind.url : null;
   const fingerprint =
     !isLocal && node.kind.kind === 'remote' ? node.kind.fingerprint : null;
@@ -314,13 +404,60 @@ function NodeCard({
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <h3 className="font-semibold">{node.label}</h3>
-              <span className="text-xs text-slate-500">({node.id})</span>
-              {!stats && (
-                <span className="text-xs text-amber-500 flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                  offline
-                </span>
+              {editingName ? (
+                <>
+                  <input
+                    autoFocus
+                    value={draftName}
+                    onChange={(e) => setDraftName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void commitRename();
+                      if (e.key === 'Escape') setEditingName(false);
+                    }}
+                    disabled={savingName}
+                    maxLength={40}
+                    className="bg-slate-800 border border-slate-600 rounded px-2 py-0.5 text-sm font-semibold text-slate-100 outline-none focus:border-blue-500 w-44 min-w-0"
+                    aria-label="Machine name"
+                  />
+                  <button
+                    className="btn-icon text-emerald-400"
+                    onClick={() => void commitRename()}
+                    disabled={savingName}
+                    title="Save name"
+                  >
+                    <Check size={14} />
+                  </button>
+                  <button
+                    className="btn-icon"
+                    onClick={() => setEditingName(false)}
+                    disabled={savingName}
+                    title="Cancel"
+                  >
+                    <X size={14} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <h3 className="font-semibold">{node.label}</h3>
+                  {onRename && (
+                    <button
+                      className="btn-icon text-slate-500 hover:text-slate-300"
+                      onClick={beginRename}
+                      title="Rename this machine"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                  )}
+                  {!isLocal && (
+                    <span className="text-xs text-slate-500">({node.id})</span>
+                  )}
+                  {!stats && (
+                    <span className="text-xs text-amber-500 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      offline
+                    </span>
+                  )}
+                </>
               )}
             </div>
             {url && (

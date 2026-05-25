@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   AddRemoteNodeRequest,
   DockerInfo,
+  Machine,
   NodeRecord,
   NodeStats,
 } from '../types';
@@ -55,11 +56,22 @@ interface NodesState {
   addRemote: (req: AddRemoteNodeRequest) => Promise<NodeRecord>;
   removeNode: (id: string) => Promise<void>;
   reconnectNode: (id: string) => Promise<void>;
+  /** Rename THIS machine (the local node). Updates the persisted
+   *  identity on the Rust side, then re-fetches so the label refreshes
+   *  everywhere. The machine's stable id is never changed. */
+  renameMachine: (name: string) => Promise<void>;
   installCommand: (params: {
     domain?: string;
     label?: string;
     version?: string;
   }) => Promise<{ linux: string; windows: string }>;
+
+  // Every machine in the org (desktops + agents) — the cross-machine fleet
+  // a sub-user (or the owner from another desktop) can see and target.
+  // Sourced from the cloud, so it spans machines this install can't reach
+  // directly. Empty when signed out / free / offline.
+  cloudMachines: Machine[];
+  fetchMachines: () => Promise<void>;
 
   // Cloud-relay enrollment (direct agent control without the desktop).
   cloudNodes: CloudNodeSummary[];
@@ -157,12 +169,29 @@ export const useNodesStore = create<NodesState>((set, get) => ({
     await get().fetchNodes();
   },
 
+  renameMachine: async (name: string) => {
+    await invoke('set_machine_name', { name });
+    await get().fetchNodes();
+  },
+
   installCommand: async ({ domain, label, version }) =>
     invoke<{ linux: string; windows: string }>('agent_install_command', {
       domain,
       label,
       version,
     }),
+
+  cloudMachines: [],
+
+  fetchMachines: async () => {
+    try {
+      const cloudMachines = await invoke<Machine[]>('cloud_list_machines');
+      set({ cloudMachines });
+    } catch {
+      // Signed out / free / offline — nothing to enumerate.
+      set({ cloudMachines: [] });
+    }
+  },
 
   cloudNodes: [],
 

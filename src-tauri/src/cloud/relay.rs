@@ -165,12 +165,26 @@ pub async fn cloud_relay_start(
                     return;
                 }
             };
-            let url = format!(
+            // Assert THIS machine's device id so commands aimed at it route to
+            // this exact desktop (not broadcast to all the owner's desktops).
+            // Re-read per connect so a local node that came up AFTER relay
+            // start is picked up on the next reconnect. Omitted when there's
+            // no local node yet — the cloud then falls back to owner broadcast.
+            let device_id = app_for_loop
+                .state::<crate::backend::NodeRegistry>()
+                .this_machine()
+                .await
+                .map(|m| m.id);
+            let mut url = format!(
                 "wss://{}/v1/relay/{}?token={}",
                 localforge_cloud_client::relay::ws_host(&super::api_origin()),
                 org_id,
                 urlencoded(&token),
             );
+            if let Some(did) = &device_id {
+                url.push_str("&device_id=");
+                url.push_str(&urlencoded(did));
+            }
 
             tracing::debug!("[relay] connecting to {}", url);
             match tokio_tungstenite::connect_async(&url).await {

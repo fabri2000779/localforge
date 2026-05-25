@@ -56,6 +56,31 @@ pub async fn create(name: &str, node_id: &str, bearer: &str) -> Result<NodeCreat
     api::post("/v1/nodes", &CreateBody { name, node_id }, Some(bearer)).await
 }
 
+#[derive(Serialize)]
+struct ClaimDesktopBody<'a> {
+    node_id: &'a str,
+    name: &'a str,
+}
+
+#[derive(Deserialize)]
+struct DesktopClaimResp {
+    node: NodeRef,
+}
+
+/// Claim THIS machine as a desktop node in the caller's org. The cloud ADOPTS
+/// the locally-minted `node_id` (so it matches what the device already uses
+/// offline), registers it `kind='desktop'` (uncapped, JWT-authed — no token),
+/// and returns the row. Idempotent: re-claiming just refreshes the name.
+pub async fn claim_desktop(node_id: &str, name: &str, bearer: &str) -> Result<NodeRef, ApiError> {
+    let r: DesktopClaimResp = api::put(
+        "/v1/nodes/desktop",
+        &ClaimDesktopBody { node_id, name },
+        Some(bearer),
+    )
+    .await?;
+    Ok(r.node)
+}
+
 #[derive(Deserialize)]
 struct NodesList {
     nodes: Vec<NodeSummary>,
@@ -64,6 +89,33 @@ struct NodesList {
 pub async fn list(bearer: &str) -> Result<Vec<NodeSummary>, ApiError> {
     let r: NodesList = api::get("/v1/nodes", Some(bearer)).await?;
     Ok(r.nodes)
+}
+
+/// A machine in the org — a desktop OR an agent. Powers the cross-machine
+/// switcher: owner + sub-users enumerate everything they can address.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Machine {
+    pub id: String,
+    pub name: String,
+    /// "desktop" | "agent".
+    pub kind: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    #[serde(rename = "lastSeenAt")]
+    pub last_seen_at: Option<i64>,
+    pub online: bool,
+}
+
+#[derive(Deserialize)]
+struct MachinesList {
+    machines: Vec<Machine>,
+}
+
+/// Every machine in the caller's org (desktops + agents), with live online
+/// status from the relay.
+pub async fn machines(bearer: &str) -> Result<Vec<Machine>, ApiError> {
+    let r: MachinesList = api::get("/v1/nodes/machines", Some(bearer)).await?;
+    Ok(r.machines)
 }
 
 #[derive(Deserialize)]

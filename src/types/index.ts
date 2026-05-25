@@ -131,6 +131,19 @@ export interface NodeRecord {
   kind: NodeKind;
 }
 
+/** A machine registered in the cloud org — a desktop OR an agent — as
+ *  returned by `cloud_list_machines` (GET /v1/nodes/machines). Powers the
+ *  cross-machine fleet view: owner + sub-users see everything they can
+ *  address over the relay, with live online status. */
+export interface Machine {
+  id: string;
+  name: string;
+  kind: 'desktop' | 'agent';
+  createdAt: number;
+  lastSeenAt: number | null;
+  online: boolean;
+}
+
 export interface AddRemoteNodeRequest {
   label: string;
   url: string;

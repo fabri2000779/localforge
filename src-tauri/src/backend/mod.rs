@@ -10,7 +10,7 @@
 pub mod registry;
 
 pub use localforge_backend_local::LocalDockerBackend;
-pub use registry::{NodeKindRecord, NodeRecord, NodeRegistry};
+pub use registry::{NodeKindRecord, NodeRecord, NodeRegistry, ThisMachine};
 
 use localforge_core::NodeBackend;
 use std::sync::Arc;

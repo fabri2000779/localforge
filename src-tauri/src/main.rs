@@ -179,6 +179,8 @@ fn main() {
             commands::files::download_file_to_local,
             commands::files::upload_file_from_local,
             commands::nodes::list_nodes,
+            commands::nodes::get_this_machine,
+            commands::nodes::set_machine_name,
             commands::nodes::test_remote_node,
             commands::nodes::add_remote_node,
             commands::nodes::remove_node,
@@ -217,7 +219,9 @@ fn main() {
             cloud::orgs::cloud_orgs_accept_invite,
             cloud::nodes::cloud_node_create,
             cloud::nodes::cloud_node_list,
+            cloud::nodes::cloud_list_machines,
             cloud::nodes::cloud_node_revoke,
+            cloud::nodes::cloud_claim_desktop,
             cloud::audit::cloud_audit_emit,
             cloud::auth::cloud_export_data,
         ])

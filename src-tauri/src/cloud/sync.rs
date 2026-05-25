@@ -15,7 +15,6 @@ use crate::backend::NodeRegistry;
 use crate::backend::registry::RemoteNodeForSync;
 use localforge_backend_remote::RemoteAgentConfig;
 use localforge_core::types::{GameType, Server};
-use localforge_core::NodeId;
 
 /// What we actually serialise + encrypt per server. NOT the full Server
 /// — we drop container_id, data_path, install state, all of which are
@@ -103,34 +102,32 @@ pub struct SyncResult {
 // Push
 // ---------------------------------------------------------------------------
 
-async fn list_local_servers(
+/// Every server across all of this desktop's nodes, each tagged with the
+/// node id to sync it under. The local node is tagged with this machine's
+/// global device id (so the cloud + relay address it specifically); remote
+/// agents use their own id. See `NodeRegistry::list_servers_for_sync`.
+async fn list_servers_for_sync(
     state: &tauri::State<'_, NodeRegistry>,
-) -> Result<Vec<Server>, String> {
-    // Only the LOCAL node syncs — remote nodes have their own desktop
-    // somewhere else. Plus, "the local Docker backend" is the canonical
-    // ground truth for the user's own configs.
-    let Some(backend) = state.backend(&NodeId::local()).await else {
-        return Ok(vec![]);
-    };
-    backend.list_servers().await.map_err(|e| e.to_string())
+) -> Vec<(Server, String)> {
+    state.list_servers_for_sync().await
 }
 
 async fn push(
     token: &str,
     key: &[u8; 32],
-    local: &[Server],
+    servers: &[(Server, String)],
 ) -> Result<(usize, Vec<String>), api::ApiError> {
-    if local.is_empty() {
+    if servers.is_empty() {
         return Ok((0, vec![]));
     }
     let now = chrono::Utc::now().timestamp_millis();
-    let mut payload: Vec<(String, String, String)> = Vec::with_capacity(local.len());
-    for s in local {
-        // For now we only sync servers from the LOCAL node — multi-node
-        // sync (iterating all NodeRegistry entries) is a follow-up.
-        // Tag everything as "local" so the receiving side knows to
-        // route commands at the owner's local Docker.
-        let cfg = CloudServerConfig::from_server(s, "local".to_string());
+    let mut payload: Vec<(String, String, String)> = Vec::with_capacity(servers.len());
+    for (s, node_id) in servers {
+        // Tag each server with the node it actually lives on (this machine's
+        // device id, or a remote agent's id) so the receiving side — a
+        // sub-user or the owner's other desktop — routes commands to the
+        // right executor over the relay.
+        let cfg = CloudServerConfig::from_server(s, node_id.clone());
         let plaintext = serde_json::to_vec(&cfg)
             .map_err(|e| api::ApiError::Decode(format!("serialize: {e}")))?;
         let envelope = vault::encrypt(key, &plaintext)
@@ -164,7 +161,7 @@ async fn push(
         Err(api::ApiError::Server { status: 409, .. }) => {
             // For now the only writer is this device, so 409 means the
             // other side already had this state — record + continue.
-            Ok((0, local.iter().map(|s| s.id.clone()).collect()))
+            Ok((0, servers.iter().map(|(s, _)| s.id.clone()).collect()))
         }
         Err(e) => Err(e),
     }
@@ -274,13 +271,11 @@ pub async fn cloud_sync_now(
     })?;
     let key = vault::ensure_key().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
 
-    let local = list_local_servers(&state)
-        .await
-        .map_err(|e| api::ApiError::Decode(format!("local list: {e}")))?;
+    let tagged = list_servers_for_sync(&state).await;
     let local_ids: std::collections::HashSet<String> =
-        local.iter().map(|s| s.id.clone()).collect();
+        tagged.iter().map(|(s, _)| s.id.clone()).collect();
 
-    let (pushed, conflicts) = push(&token, &key, &local).await?;
+    let (pushed, conflicts) = push(&token, &key, &tagged).await?;
     let remote = pull(&token, &key, &local_ids).await?;
 
     Ok(SyncResult {
@@ -302,11 +297,9 @@ pub async fn cloud_sync_pull(
         message: None,
     })?;
     let key = vault::ensure_key().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
-    let local = list_local_servers(&state)
-        .await
-        .map_err(|e| api::ApiError::Decode(format!("local list: {e}")))?;
+    let tagged = list_servers_for_sync(&state).await;
     let local_ids: std::collections::HashSet<String> =
-        local.iter().map(|s| s.id.clone()).collect();
+        tagged.iter().map(|(s, _)| s.id.clone()).collect();
     pull(&token, &key, &local_ids).await
 }
 

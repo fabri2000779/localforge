@@ -192,6 +192,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (me) {
         void get().fetchOrgs();
         void get().refreshSyncKeyStatus();
+        // Claim THIS machine in the cloud so it gets a stable, addressable
+        // identity (idempotent + once-per-session server/client-side).
+        void invoke('cloud_claim_desktop').catch(() => {});
       }
     } catch (e) {
       // Network failure / token rejected → land in "not signed in" so
@@ -214,6 +217,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // (or with syncKey set but no local DEK on a second device).
       // refreshSyncKeyStatus drives the SyncKeyDialog to appear.
       void get().refreshSyncKeyStatus();
+      void invoke('cloud_claim_desktop').catch(() => {});
     });
     const unPartial = await listen('cloud://signed-in-partial', () => {
       // OAuth landed but /me failed — pull fresh once so the UI catches up.
@@ -243,6 +247,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const me = await invoke<Me>('cloud_signup', { email, password, displayName });
       set({ me, loading: false });
+      void invoke('cloud_claim_desktop').catch(() => {});
       return true;
     } catch (e) {
       set({ loading: false, error: asErr(e) });
@@ -255,6 +260,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const me = await invoke<Me>('cloud_login', { email, password });
       set({ me, loading: false });
+      void invoke('cloud_claim_desktop').catch(() => {});
       return true;
     } catch (e) {
       set({ loading: false, error: asErr(e) });
