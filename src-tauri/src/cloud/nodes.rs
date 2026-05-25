@@ -79,10 +79,31 @@ pub async fn cloud_claim_desktop(state: State<'_, NodeRegistry>) -> Result<bool,
     let Some(token) = auth::current_token() else {
         return Ok(false);
     };
-    let Some(machine) = state.this_machine().await else {
+    // The local node is installed asynchronously once Docker is reachable,
+    // which races with sign-in at startup. Wait briefly for it rather than
+    // giving up on the first miss — otherwise a fresh launch would never
+    // register this machine until the user happened to sign in again.
+    let mut machine = state.this_machine().await;
+    let mut waited = 0;
+    while machine.is_none() && waited < 20 {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        machine = state.this_machine().await;
+        waited += 1;
+    }
+    let Some(machine) = machine else {
         return Ok(false);
     };
-    localforge_cloud_client::nodes::claim_desktop(&machine.id, &machine.name, &token).await?;
-    DESKTOP_CLAIMED.store(true, Ordering::Relaxed);
-    Ok(true)
+    match localforge_cloud_client::nodes::claim_desktop(&machine.id, &machine.name, &token).await {
+        Ok(_) => {
+            DESKTOP_CLAIMED.store(true, Ordering::Relaxed);
+            Ok(true)
+        }
+        Err(e) => {
+            // Surface in logs (the frontend call is fire-and-forget) so a
+            // real failure isn't invisible; leave the guard unset so a later
+            // sign-in retries.
+            tracing::warn!("[cloud] desktop claim failed: {}", e);
+            Err(e)
+        }
+    }
 }
