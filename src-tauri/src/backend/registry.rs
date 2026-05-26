@@ -354,7 +354,23 @@ impl NodeRegistry {
     }
 
     pub async fn backend(&self, id: &NodeId) -> Option<DynBackend> {
-        self.inner.read().await.backends.get(id).cloned()
+        let state = self.inner.read().await;
+        if let Some(b) = state.backends.get(id) {
+            return Some(b.clone());
+        }
+        // The local node is keyed under "local" INTERNALLY, but the cloud +
+        // relay address it by this machine's GLOBAL device id (this_machine.id).
+        // So a command relayed from a sub-user (or the owner's other device)
+        // arrives targeting that device id — map it back to the local backend,
+        // otherwise it'd fail with "node not connected" even though it's us.
+        if state
+            .this_machine
+            .as_ref()
+            .map_or(false, |m| m.id.as_str() == id.as_str())
+        {
+            return state.backends.get(&NodeId::local()).cloned();
+        }
+        None
     }
 
     /// Every server across ALL connected nodes (this desktop + reachable
@@ -393,9 +409,23 @@ impl NodeRegistry {
             } else {
                 rec.id.to_string()
             };
-            if let Ok(servers) = backend.list_servers().await {
-                for s in servers {
-                    out.push((s, tag.clone()));
+            // Best-effort + bounded: a remote that was reachable at startup
+            // but has since gone down would otherwise block here for the
+            // full request timeout (~60s) and stall the whole sync. Cap each
+            // node at a few seconds and skip on timeout/error.
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(6),
+                backend.list_servers(),
+            )
+            .await
+            {
+                Ok(Ok(servers)) => {
+                    for s in servers {
+                        out.push((s, tag.clone()));
+                    }
+                }
+                _ => {
+                    tracing::warn!("sync: skipping unresponsive node '{}'", rec.id);
                 }
             }
         }
