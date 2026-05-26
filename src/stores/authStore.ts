@@ -86,6 +86,10 @@ interface AuthState {
   currentRole: OrgRole | null;
   fetchOrgs: () => Promise<void>;
   setCurrentOrg: (orgId: string) => void;
+  /** (Re)connect the cloud relay to the ACTIVE org so a sub-user observing
+   *  someone else's machines is routed into the right Durable Object — not
+   *  their own primary org. Idempotent: skips when already on that org. */
+  ensureRelay: () => void;
 
   // Tier 1 — cloud sync
   syncing: boolean;
@@ -158,6 +162,13 @@ export function roleAtLeast(role: OrgRole | null | undefined, min: OrgRole): boo
 
 const CURRENT_ORG_KEY = 'localforge_current_org';
 
+/** The org the relay loop is currently pointed at (module-scoped so
+ *  `ensureRelay` can skip redundant reconnects). `'__primary__'` means
+ *  "started before orgs loaded, using the Rust primary-org fallback".
+ *  Reset to null on sign-in / sign-out so the next `ensureRelay` always
+ *  (re)connects fresh (catches plan upgrades mid-session). */
+let relayOrg: string | null = null;
+
 function asErr(e: unknown): AuthError {
   if (e && typeof e === 'object') {
     const o = e as Record<string, unknown>;
@@ -181,11 +192,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const me = await invoke<Me | null>('cloud_me');
+      relayOrg = null;
       set({ me, loading: false });
-      // Auto-connect the relay on startup so this device is reachable
-      // for sync pushes from elsewhere as soon as the app opens.
-      if (me && me.subscription.plan !== 'free') {
-        void invoke('cloud_relay_start');
+      // Auto-connect the relay on startup so this device is reachable for
+      // sync pushes from elsewhere as soon as the app opens. Uses the
+      // primary org here; `fetchOrgs` re-points it at the active org once
+      // the membership list (and the stored active org) is known.
+      if (me) {
+        get().ensureRelay();
       }
       // Also pull the list of orgs we belong to — needed by the
       // titlebar switcher + per-role gating across the app.
@@ -206,12 +220,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   subscribeToEvents: async () => {
     const unSignedIn = await listen<Me>('cloud://signed-in', (event) => {
+      relayOrg = null;
       set({ me: event.payload, error: null, loading: false });
       // Spin up the relay so other devices' edits land here instantly.
-      // Free users get a 402 at upgrade time, which we silently ignore.
-      if (event.payload.subscription.plan !== 'free') {
-        void invoke('cloud_relay_start');
-      }
+      // `ensureRelay` no-ops for free owners; `fetchOrgs` re-points it at
+      // the active org once memberships load.
+      get().ensureRelay();
       void get().fetchOrgs();
       // OAuth users will land here with syncKey=null on first device
       // (or with syncKey set but no local DEK on a second device).
@@ -282,6 +296,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: async () => {
     set({ loading: true });
+    relayOrg = null;
     // Disconnect the relay first so we don't keep an authed WS dangling.
     try { await invoke<void>('cloud_relay_stop'); } catch { /* ignore */ }
     try { await invoke<void>('cloud_logout'); } catch { /* ignore */ }
@@ -435,6 +450,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
       const role = orgs.find((o) => o.id === current)?.role ?? null;
       set({ orgs, currentOrgId: current, currentRole: role });
+      // Now that we know the active org, make sure the relay is pointed at
+      // it (rather than the primary-org fallback used at startup).
+      get().ensureRelay();
     } catch (e) {
       set({ error: asErr(e) });
     }
@@ -445,8 +463,40 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!o) return;
     localStorage.setItem(CURRENT_ORG_KEY, orgId);
     set({ currentOrgId: orgId, currentRole: o.role });
-    // Pull fresh sync state for the new org context.
+    // Point the relay at the newly-active org so live status + control
+    // target the right machines, then pull fresh sync state for it.
+    get().ensureRelay();
     void get().syncPull();
+  },
+
+  ensureRelay: () => {
+    const { me, orgs, currentOrgId } = get();
+    if (!me) {
+      relayOrg = null;
+      return;
+    }
+    const cur = orgs.find((o) => o.id === currentOrgId);
+    // Owner of the active org needs their OWN paid plan; a sub-user (member)
+    // is allowed through — the cloud gates them on the host owner being on
+    // Team and 402s otherwise (the loop then just backs off). Before orgs
+    // load, fall back to "own plan must be paid" + the Rust primary-org.
+    const allowed = cur
+      ? cur.isOwner
+        ? me.subscription.plan !== 'free'
+        : true
+      : me.subscription.plan !== 'free';
+    if (!allowed) {
+      if (relayOrg !== null) {
+        relayOrg = null;
+        void invoke('cloud_relay_stop').catch(() => {});
+      }
+      return;
+    }
+    const orgId = cur?.id;
+    const target = orgId ?? '__primary__';
+    if (target === relayOrg) return; // already connected there
+    relayOrg = target;
+    void invoke('cloud_relay_start', { orgId }).catch(() => {});
   },
 
   exportData: async () => {

@@ -10,6 +10,7 @@ import type {
   Machine,
   NodeRecord,
   NodeStats,
+  ThisMachine,
 } from '../types';
 
 export interface ClusterSummary {
@@ -72,6 +73,15 @@ interface NodesState {
   // directly. Empty when signed out / free / offline.
   cloudMachines: Machine[];
   fetchMachines: () => Promise<void>;
+
+  // This desktop's stable identity (id + name). The `id` is the GLOBAL
+  // device id the cloud/relay address THIS machine by — i.e. the
+  // synced-server `node_id` of every server hosted on the local Docker.
+  // Used to tell "my own machine" apart from the rest of the fleet so the
+  // local servers stay on the fast direct-Docker path while everything
+  // else routes over the relay. `null` until the local node is installed.
+  thisMachine: ThisMachine | null;
+  fetchThisMachine: () => Promise<void>;
 
   // Cloud-relay enrollment (direct agent control without the desktop).
   cloudNodes: CloudNodeSummary[];
@@ -190,6 +200,17 @@ export const useNodesStore = create<NodesState>((set, get) => ({
     } catch {
       // Signed out / free / offline — nothing to enumerate.
       set({ cloudMachines: [] });
+    }
+  },
+
+  thisMachine: null,
+
+  fetchThisMachine: async () => {
+    try {
+      const thisMachine = await invoke<ThisMachine | null>('get_this_machine');
+      set({ thisMachine: thisMachine ?? null });
+    } catch {
+      // Local node not installed yet (Docker unreachable) — leave null.
     }
   },
 

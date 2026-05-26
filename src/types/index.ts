@@ -131,6 +131,15 @@ export interface NodeRecord {
   kind: NodeKind;
 }
 
+/** This desktop's stable local identity, as returned by `get_this_machine`.
+ *  `id` is the GLOBAL device id the cloud adopts (and the synced-server
+ *  `node_id` for everything hosted on the local Docker); `name` is the
+ *  user-facing label shown in the fleet. */
+export interface ThisMachine {
+  id: string;
+  name: string;
+}
+
 /** A machine registered in the cloud org — a desktop OR an agent — as
  *  returned by `cloud_list_machines` (GET /v1/nodes/machines). Powers the
  *  cross-machine fleet view: owner + sub-users see everything they can

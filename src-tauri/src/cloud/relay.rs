@@ -116,10 +116,20 @@ async fn fetch_org_id(token: &str) -> Result<String, api::ApiError> {
     Ok(r.id)
 }
 
-#[tauri::command]
+/// Start (or restart) the relay loop for a specific org.
+///
+/// `org_id` is the org whose relay Durable Object to join. The OWNER's
+/// own org and a sub-user's host org are different DOs, so the caller
+/// passes the ACTIVE org — that's how a sub-user observing someone else's
+/// machines gets routed into the right relay (and tagged `member`, with
+/// the owner tagged `owner`). When omitted we fall back to the caller's
+/// primary org (`/v1/orgs/me`) — the historical behaviour, still correct
+/// for an owner looking at their own fleet.
+#[tauri::command(rename_all = "camelCase")]
 pub async fn cloud_relay_start(
     app: AppHandle,
     state: tauri::State<'_, Arc<RelayState>>,
+    org_id: Option<String>,
 ) -> Result<(), String> {
     // Replace any prior loop.
     {
@@ -133,9 +143,12 @@ pub async fn cloud_relay_start(
         Some(t) => t,
         None => return Err("unauthenticated".into()),
     };
-    let org_id = fetch_org_id(&token)
-        .await
-        .map_err(|e| format!("fetch org: {e}"))?;
+    let org_id = match org_id {
+        Some(id) if !id.is_empty() => id,
+        _ => fetch_org_id(&token)
+            .await
+            .map_err(|e| format!("fetch org: {e}"))?,
+    };
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
     let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<String>();

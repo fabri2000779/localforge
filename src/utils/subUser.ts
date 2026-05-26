@@ -14,7 +14,19 @@ import { invoke } from '@tauri-apps/api/core';
 import { useMemo } from 'react';
 import { useAuthStore, roleAtLeast, type OrgRole } from '../stores/authStore';
 import { useServerStore } from '../stores/serverStore';
+import { useNodesStore } from '../stores/nodesStore';
+import { useFleetStore } from '../stores/fleetStore';
 import type { Server } from '../types';
+
+/** Where a displayed server actually lives, for fleet grouping + labels. */
+export interface ServerMachine {
+  /** The cloud node id (or synced `node_id`) the server is hosted on. */
+  machineId: string;
+  /** Human label — the machine's name, falling back to a short id. */
+  machineName: string;
+  /** 'desktop' | 'agent' | 'unknown' — drives the icon. */
+  machineKind: 'desktop' | 'agent' | 'unknown';
+}
 
 export function useIsSubUser(): boolean {
   return useAuthStore((s) => {
@@ -87,6 +99,10 @@ export function useDisplayedServers(): Server[] {
   // and React aborted with "Maximum update depth exceeded" (#185). The
   // `?? []` now happens inside the memo, off the selector path.
   const lastSyncResult = useAuthStore((s) => s.lastSyncResult);
+  // Live, cross-machine status from relay discovery (RelayFleetBridge).
+  // Replaces the old hardcoded 'stopped' placeholder so a sub-user sees
+  // real Running / Stopped / Starting badges, identical to the mobile app.
+  const statuses = useFleetStore((s) => s.statuses);
 
   return useMemo(() => {
     if (!isSubUser) return local;
@@ -99,7 +115,9 @@ export function useDisplayedServers(): Server[] {
         id: r.decrypted!.id,
         name: r.decrypted!.name,
         game_type: r.decrypted!.game_type as Server['game_type'],
-        status: 'stopped' as Server['status'], // we don't know remote status without a sub-fetch
+        // Live status from discovery; fall back to 'stopped' until the
+        // hosting machine's snapshot lands (or if it's offline).
+        status: (statuses[r.decrypted!.id] ?? 'stopped') as Server['status'],
         container_id: null,
         port: r.decrypted!.port,
         memory_mb: r.decrypted!.memory_mb,
@@ -109,7 +127,63 @@ export function useDisplayedServers(): Server[] {
         installed: true,
         install_container_id: null,
       } as unknown as Server));
-  }, [isSubUser, local, lastSyncResult]);
+  }, [isSubUser, local, lastSyncResult, statuses]);
+}
+
+/**
+ * Per-server machine attribution for the displayed servers — drives the
+ * "group by machine" chips + the little machine label on each card.
+ *
+ * For a sub-user, the synced server config carries the real `node_id`
+ * (the owner's machine that hosts it), which we resolve against the cloud
+ * fleet (`cloudMachines`) for a friendly name + kind. The owner's own
+ * local servers all live on THIS machine, so they collapse to a single
+ * group (and the UI then hides the chips — nothing to switch between).
+ *
+ * Returns a record keyed by server id. Servers we can't attribute are
+ * simply absent (the UI treats them as "no machine label").
+ */
+export function useServerMachineInfo(): Record<string, ServerMachine> {
+  const isSubUser = useIsSubUser();
+  const lastSyncResult = useAuthStore((s) => s.lastSyncResult);
+  const cloudMachines = useNodesStore((s) => s.cloudMachines);
+  const thisMachine = useNodesStore((s) => s.thisMachine);
+  const localServers = useServerStore((s) => s.servers);
+  const serverMachine = useFleetStore((s) => s.serverMachine);
+
+  return useMemo(() => {
+    const out: Record<string, ServerMachine> = {};
+    const named = (id: string): ServerMachine => {
+      const m = cloudMachines.find((x) => x.id === id);
+      return {
+        machineId: id,
+        machineName: m?.name ?? (id.length > 10 ? `${id.slice(0, 8)}…` : id),
+        machineKind: m?.kind ?? 'unknown',
+      };
+    };
+
+    if (isSubUser) {
+      for (const r of lastSyncResult?.remote ?? []) {
+        if (!r.decrypted) continue;
+        const nid =
+          (r.decrypted as { node_id?: string }).node_id ??
+          serverMachine[r.decrypted.id];
+        if (nid) out[r.decrypted.id] = named(nid);
+      }
+      return out;
+    }
+
+    // Owner: everything in the local list lives on THIS machine.
+    if (thisMachine) {
+      const self: ServerMachine = {
+        machineId: thisMachine.id,
+        machineName: thisMachine.name,
+        machineKind: 'desktop',
+      };
+      for (const s of localServers) out[s.id] = self;
+    }
+    return out;
+  }, [isSubUser, lastSyncResult, cloudMachines, thisMachine, localServers, serverMachine]);
 }
 
 /**

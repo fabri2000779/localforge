@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Play, Square, Trash2, Network, ArrowRight } from 'lucide-react';
+import { Play, Square, Trash2, Network, ArrowRight, Cloud, Server as ServerIcon } from 'lucide-react';
 import type { Server } from '../types';
 import { useServerStore } from '../stores/serverStore';
 import { useGamesStore } from '../stores/gamesStore';
@@ -8,6 +8,19 @@ import { GameIcon } from './GameIcon';
 
 interface Props {
   server: Server;
+  /** When the visible servers span more than one machine, the card shows
+   *  which machine hosts this one. Undefined → no label (single-machine
+   *  view, e.g. a solo owner). */
+  machineLabel?: string;
+  machineKind?: 'desktop' | 'agent' | 'local' | 'unknown';
+  /** Override the "open detail" behaviour. The cross-machine fleet view
+   *  uses this to first switch the active node to the server's machine so
+   *  the detail screen resolves it. Default: navigate to /servers/:id. */
+  onOpen?: () => void;
+  /** Override start/stop/delete so they target the server's OWN node rather
+   *  than the globally-active one. Default: the serverStore actions (which
+   *  act on the active node / relay-route for sub-users). */
+  onAction?: (action: 'start' | 'stop' | 'delete') => void;
 }
 
 const STATUS_LABEL: Record<Server['status'], string> = {
@@ -28,21 +41,28 @@ const STATUS_CLASS: Record<Server['status'], string> = {
   error: 'status-error',
 };
 
-export function ServerCard({ server }: Props) {
+export function ServerCard({ server, machineLabel, machineKind, onOpen, onAction }: Props) {
   const navigate = useNavigate();
   const { startServer, stopServer, deleteServer, isLoading } = useServerStore();
   const { games } = useGamesStore();
 
   const gameConfig = findGameConfig(games, server.game_type);
 
+  const open = () => {
+    if (onOpen) onOpen();
+    else navigate(`/servers/${server.id}`);
+  };
+
   const handleStart = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    await startServer(server.id);
+    if (onAction) onAction('start');
+    else await startServer(server.id);
   };
 
   const handleStop = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    await stopServer(server.id);
+    if (onAction) onAction('stop');
+    else await stopServer(server.id);
   };
 
   const handleDelete = async (e: React.MouseEvent) => {
@@ -52,19 +72,19 @@ export function ServerCard({ server }: Props) {
         `Delete server "${server.name}"? Your world data will be preserved.`,
       )
     ) {
-      await deleteServer(server.id);
+      if (onAction) onAction('delete');
+      else await deleteServer(server.id);
     }
   };
 
   return (
     <div
-      onClick={() => navigate(`/servers/${server.id}`)}
+      onClick={open}
       className="server-card group"
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ')
-          navigate(`/servers/${server.id}`);
+        if (e.key === 'Enter' || e.key === ' ') open();
       }}
     >
       <div className="flex items-start gap-3.5">
@@ -97,6 +117,16 @@ export function ServerCard({ server }: Props) {
               <Network size={12} className="text-slate-600" />
               <span className="font-mono tabular-nums">:{server.port}</span>
             </span>
+            {machineLabel && (
+              <span className="inline-flex items-center gap-1.5 min-w-0" title={machineLabel}>
+                {machineKind === 'agent' ? (
+                  <Cloud size={12} className="text-slate-600 shrink-0" />
+                ) : (
+                  <ServerIcon size={12} className="text-slate-600 shrink-0" />
+                )}
+                <span className="truncate">{machineLabel}</span>
+              </span>
+            )}
           </div>
         </div>
       </div>

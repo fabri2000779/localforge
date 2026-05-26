@@ -19,6 +19,8 @@ import { AcceptInviteToast } from './components/AcceptInviteToast';
 import { RelayCommandExecutor } from './components/RelayCommandExecutor';
 import { RelayLogBridge } from './components/RelayLogBridge';
 import { RelayStateBridge } from './components/RelayStateBridge';
+import { RelayFleetBridge } from './components/RelayFleetBridge';
+import { MachineNameDialog } from './components/MachineNameDialog';
 import { SyncKeyDialog } from './components/SyncKeyDialog';
 import { UpdateChecker } from './components/UpdateChecker';
 import './App.css';
@@ -93,7 +95,9 @@ function App() {
         <RelayCommandExecutor />
         <RelayLogBridge />
         <RelayStateBridge />
+        <RelayFleetBridge />
         <SyncKeyDialog />
+        <MachineNameDialog />
         <UpdateChecker />
       </div>
     </BrowserRouter>
