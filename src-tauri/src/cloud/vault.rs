@@ -380,29 +380,40 @@ pub async fn cloud_unlock_org_dek(org_id: String) -> Result<&'static str, super:
         code: "unauthenticated".into(),
         message: None,
     })?;
-    // Fast + durable path: a DEK we already cached (invite handoff, or a grant
-    // opened earlier) survives restarts without re-opening.
+    // Prefer the CURRENT grant from the cloud so a rotated DEK is picked up
+    // (the owner re-seals a fresh grant after rotating). The cached DEK is
+    // only a fallback — for the invite-handoff member (no grant yet) and for
+    // offline use. This costs one small GET per org switch, which is fine for
+    // a user-initiated action and is the price of correctness across rotation.
+    let have_keypair = match load_x25519_sk() {
+        Ok(opt) => opt,
+        Err(e) => return Err(api::ApiError::Decode(format!("x25519: {e}"))),
+    };
+    if let Some(sk) = have_keypair {
+        match localforge_cloud_client::keys::my_grant(&org_id, &token).await {
+            Ok(Some(grant)) => {
+                if let Ok(dek) = crypto::open_sealed(&sk, &grant.sealed_epk, &grant.sealed_dek) {
+                    let _ = save_org_dek(&org_id, &dek);
+                    set_active_dek_override(Some(dek));
+                    return Ok("granted");
+                }
+                // A grant exists but won't open with our key (our keypair was
+                // regenerated) — fall through to the cache / no_grant.
+            }
+            Ok(None) => { /* no grant yet — invite-handoff member uses the cache */ }
+            Err(_) => { /* offline / transient — use the cache if we have one */ }
+        }
+    }
+    // Fallback: a DEK we cached earlier (invite handoff, or a previously
+    // opened grant). Durable across restarts + works offline.
     if let Some(dek) = load_org_dek(&org_id) {
         set_active_dek_override(Some(dek));
         return Ok("granted");
     }
-    let Some(sk) = load_x25519_sk().map_err(|e| api::ApiError::Decode(format!("x25519: {e}")))?
-    else {
+    if have_keypair.is_none() {
         return Ok("no_keypair");
-    };
-    let Some(grant) = localforge_cloud_client::keys::my_grant(&org_id, &token).await? else {
-        return Ok("no_grant");
-    };
-    let dek = crypto::open_sealed(&sk, &grant.sealed_epk, &grant.sealed_dek)
-        .map_err(|e| api::ApiError::Server {
-            status: 400,
-            code: "grant_open_failed".into(),
-            message: Some(e),
-        })?;
-    // Cache it so future switches/restarts are instant + offline-friendly.
-    let _ = save_org_dek(&org_id, &dek);
-    set_active_dek_override(Some(dek));
-    Ok("granted")
+    }
+    Ok("no_grant")
 }
 
 /// Clear the active-org DEK override — call when switching back to an org we

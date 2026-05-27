@@ -191,6 +191,9 @@ function RotateKeyDialog({ open, orgId, onClose }: { open: boolean; orgId: strin
     setBusy(true); setErr(null);
     try {
       await invoke('cloud_rotate_org_dek', { orgId, passphrase });
+      // Tell connected clients (other devices + members) the key rotated, AFTER
+      // the new grants were sealed — they re-open the fresh grant / re-unlock.
+      void invoke('cloud_relay_send_event', { payload: { kind: 'dek_rotated' } }).catch(() => {});
       onClose();
     } catch (e) {
       const m = e as { code?: string; message?: string };

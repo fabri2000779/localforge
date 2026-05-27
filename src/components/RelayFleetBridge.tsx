@@ -89,6 +89,32 @@ export function RelayFleetBridge() {
     listen<RelaySnapshotEvent>('cloud://relay-event', (event) => {
       const msg = event.payload;
       if (!msg) return;
+      // The org DEK was rotated (a member was removed). Our cached key is now
+      // stale, so re-acquire the current one for the active org.
+      if (msg.kind === 'dek_rotated') {
+        const auth = useAuthStore.getState();
+        const cur = auth.orgs.find((o) => o.id === auth.currentOrgId);
+        if (!cur) return;
+        if (!cur.isOwner) {
+          // Member: re-open the fresh grant (cloud_unlock_org_dek prefers the
+          // cloud grant, so it picks up the rotated DEK) + re-pull.
+          void invoke('cloud_unlock_org_dek', { orgId: cur.id })
+            .then(() => auth.syncPull())
+            .catch(() => {});
+        } else {
+          // Owner's OTHER device: our local DEK may be stale. Re-pull; if the
+          // new blobs don't decrypt, prompt a re-unlock. The device that
+          // rotated holds the new key (and is excluded from this broadcast).
+          void auth
+            .syncPull()
+            .then((remote) => {
+              const r = remote ?? [];
+              if (r.length > 0 && r.every((s) => !s.decrypted)) auth.openSyncKeyDialog();
+            })
+            .catch(() => {});
+        }
+        return;
+      }
       const { applySnapshot, applyStateChanged } = useFleetStore.getState();
       if (msg.kind === 'state_snapshot' && Array.isArray(msg.servers)) {
         const rid = typeof msg.request_id === 'string' ? msg.request_id : '';
