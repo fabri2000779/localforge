@@ -296,7 +296,10 @@ pub async fn cloud_sync_pull(
         code: "unauthenticated".into(),
         message: None,
     })?;
-    let key = vault::ensure_key().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
+    // Decrypt with the ACTIVE org's DEK: our own keychain DEK for our org, or
+    // the org DEK we opened from a sealed grant when viewing someone else's
+    // org as a sub-user. (Pushes still use our own DEK — see cloud_sync_now.)
+    let key = vault::active_dek().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
     let tagged = list_servers_for_sync(&state).await;
     let local_ids: std::collections::HashSet<String> =
         tagged.iter().map(|(s, _)| s.id.clone()).collect();

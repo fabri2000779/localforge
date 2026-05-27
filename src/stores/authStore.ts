@@ -297,8 +297,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logout: async () => {
     set({ loading: true });
     relayOrg = null;
-    // Clear the active-org pin so any stray call falls back to primary.
+    // Clear the active-org pin + any borrowed org DEK so nothing leaks across
+    // a sign-out/sign-in into a different account.
     void invoke('cloud_set_active_org', { orgId: null }).catch(() => {});
+    void invoke('cloud_clear_org_dek').catch(() => {});
     // Disconnect the relay first so we don't keep an authed WS dangling.
     try { await invoke<void>('cloud_relay_stop'); } catch { /* ignore */ }
     try { await invoke<void>('cloud_logout'); } catch { /* ignore */ }
@@ -455,6 +457,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // Now that we know the active org, make sure the relay is pointed at
       // it (rather than the primary-org fallback used at startup).
       get().ensureRelay();
+      // Owner side: seal the org DEK to any member who's published a key but
+      // isn't granted yet, so teammates can decrypt our org's servers. 403s
+      // (not owner) are swallowed inside the command.
+      for (const o of orgs) {
+        if (o.isOwner) void invoke('cloud_process_grants', { orgId: o.id }).catch(() => {});
+      }
     } catch (e) {
       set({ error: asErr(e) });
     }
@@ -465,9 +473,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!o) return;
     localStorage.setItem(CURRENT_ORG_KEY, orgId);
     set({ currentOrgId: orgId, currentRole: o.role });
-    // Set the active org for HTTP FIRST, then (re)connect the relay + pull,
-    // so the pull resolves against the right org's data.
-    void invoke('cloud_set_active_org', { orgId }).finally(() => {
+    // Set the active org for HTTP FIRST, then unlock the right decryption
+    // DEK (a sub-user opens the owner's sealed grant; an owner clears any
+    // override + seals any pending members), then (re)connect relay + pull.
+    void invoke('cloud_set_active_org', { orgId }).finally(async () => {
+      try {
+        if (!o.isOwner) {
+          await invoke('cloud_unlock_org_dek', { orgId });
+        } else {
+          await invoke('cloud_clear_org_dek');
+          void invoke('cloud_process_grants', { orgId }).catch(() => {});
+        }
+      } catch {
+        /* no grant yet / no keypair — pull just shows undecrypted rows */
+      }
       get().ensureRelay();
       void get().syncPull();
     });

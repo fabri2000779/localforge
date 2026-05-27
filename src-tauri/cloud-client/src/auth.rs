@@ -50,6 +50,12 @@ pub struct Me {
     /// users get this populated automatically at signup.
     #[serde(rename = "syncKey", default)]
     pub sync_key: Option<SyncKeyInfo>,
+    /// The user's X25519 secret, KEK-wrapped, for opening org-DEK grants
+    /// sealed to them. None until a keypair is published (the client mints +
+    /// publishes one on first unlock). Recovered on any device by unwrapping
+    /// with the passphrase-derived KEK, exactly like the DEK.
+    #[serde(rename = "wrappedX25519Sk", default)]
+    pub wrapped_x25519_sk: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

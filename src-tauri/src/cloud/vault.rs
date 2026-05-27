@@ -25,7 +25,35 @@ pub use crypto::{
 
 const SERVICE: &str = "LocalForge Cloud";
 const ACCOUNT: &str = "vault-key";
+/// Keychain slot for this user's X25519 SECRET (Team key sharing). Lets the
+/// member open org-DEK grants sealed to them. Same backend as the DEK.
+const ACCOUNT_X25519: &str = "x25519-sk";
 const KEY_LEN: usize = crypto::KEY_LEN;
+
+/// DEK to use for decrypting the ACTIVE org's blobs when it isn't ours. A
+/// sub-user viewing the owner's org sets this to the org DEK they opened from
+/// their sealed grant; cleared (back to our own keychain DEK) for our own org.
+/// `cloud_sync_pull` consults `active_dek()` so a member's pull decrypts the
+/// owner's data without ever overwriting the member's own cached DEK.
+static ACTIVE_DEK_OVERRIDE: std::sync::RwLock<Option<[u8; KEY_LEN]>> =
+    std::sync::RwLock::new(None);
+
+fn set_active_dek_override(dek: Option<[u8; KEY_LEN]>) {
+    if let Ok(mut g) = ACTIVE_DEK_OVERRIDE.write() {
+        *g = dek;
+    }
+}
+
+/// The DEK the sync/pull path should decrypt with: the active-org override if
+/// set (sub-user viewing another org), else our own keychain DEK.
+pub fn active_dek() -> Result<[u8; KEY_LEN], String> {
+    if let Ok(g) = ACTIVE_DEK_OVERRIDE.read() {
+        if let Some(dek) = *g {
+            return Ok(dek);
+        }
+    }
+    ensure_key()
+}
 
 // ---------------------------------------------------------------------------
 // OS-keychain-backed DEK storage. Desktop only — mobile uses a
@@ -73,6 +101,74 @@ pub fn save_key(key: &[u8; KEY_LEN]) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .set_password(&b64)
         .map_err(|e| e.to_string())
+}
+
+// --- X25519 secret (Team key sharing) -------------------------------------
+
+fn x25519_entry() -> Result<keyring_core::Entry, keyring_core::Error> {
+    keyring_core::Entry::new(SERVICE, ACCOUNT_X25519)
+}
+
+fn load_x25519_sk() -> Result<Option<[u8; KEY_LEN]>, String> {
+    let e = x25519_entry().map_err(|x| x.to_string())?;
+    match e.get_password() {
+        Ok(b64) => {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|x| format!("x25519 sk decode: {x}"))?;
+            if bytes.len() != KEY_LEN {
+                return Err(format!("x25519 sk wrong length: {}", bytes.len()));
+            }
+            let mut out = [0u8; KEY_LEN];
+            out.copy_from_slice(&bytes);
+            Ok(Some(out))
+        }
+        Err(keyring_core::Error::NoEntry) => Ok(None),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn save_x25519_sk(sk: &[u8; KEY_LEN]) -> Result<(), String> {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(sk);
+    x25519_entry()
+        .map_err(|e| e.to_string())?
+        .set_password(&b64)
+        .map_err(|e| e.to_string())
+}
+
+/// Make sure this device holds the user's X25519 secret, given the KEK
+/// (available at setup/unlock time). Recovery order:
+///   1. already cached locally → done.
+///   2. cloud has a KEK-wrapped secret (another device published it) →
+///      unwrap with the KEK + cache.
+///   3. neither → mint a fresh keypair, wrap the secret with the KEK,
+///      publish the public key + wrapped secret, cache locally.
+/// The public key is stable per user; owners seal the org DEK to it.
+async fn ensure_keypair(kek: &[u8; KEY_LEN], token: &str) -> Result<(), super::api::ApiError> {
+    use super::api;
+    if load_x25519_sk()
+        .map_err(|e| api::ApiError::Decode(format!("x25519: {e}")))?
+        .is_some()
+    {
+        return Ok(());
+    }
+    // Try to recover a secret another device already published.
+    let me = localforge_cloud_client::auth::fetch_me(token).await?;
+    if let Some(wrapped) = me.wrapped_x25519_sk {
+        if let Ok(sk) = crypto::unwrap_dek(kek, &wrapped) {
+            save_x25519_sk(&sk).map_err(|e| api::ApiError::Decode(format!("x25519: {e}")))?;
+            return Ok(());
+        }
+        // Wrapped present but unwrap failed — fall through to mint a fresh
+        // one (the KEK is correct here since the DEK unwrap succeeded; a
+        // mismatch means a legacy/corrupt blob, so replace it).
+    }
+    let (sk, pk) = crypto::generate_keypair();
+    let wrapped_sk = crypto::wrap_dek(kek, &sk).map_err(api::ApiError::Decode)?;
+    let pk_b64 = base64::engine::general_purpose::STANDARD.encode(pk);
+    localforge_cloud_client::keys::publish_pubkey(&pk_b64, &wrapped_sk, token).await?;
+    save_x25519_sk(&sk).map_err(|e| api::ApiError::Decode(format!("x25519: {e}")))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +265,10 @@ pub async fn cloud_sync_key_setup(
         force: force.unwrap_or(false),
     };
     let _: serde_json::Value = api::post("/v1/account/sync-key", &body, Some(&token)).await?;
+    // Also establish + publish the X25519 keypair so this user can be granted
+    // (and grant) access to org-shared data. Best-effort: a failure here
+    // doesn't undo the sync-key setup.
+    let _ = ensure_keypair(&kek, &token).await;
     Ok(())
 }
 
@@ -220,7 +320,94 @@ pub async fn cloud_sync_key_unlock(secret: String) -> Result<(), super::api::Api
         message: Some(e),
     })?;
     save_key(&dek).map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
+    // Recover (or mint + publish) the X25519 keypair on this device too.
+    let _ = ensure_keypair(&kek, &token).await;
     Ok(())
+}
+
+/// Unlock the DEK for an org we DON'T own (a sub-user viewing the owner's
+/// org): fetch our sealed grant, open it with our X25519 secret, and stash it
+/// as the active-org decryption DEK. `cloud_sync_pull` then decrypts the
+/// owner's blobs with it. Returns:
+///   - `granted`   — DEK unlocked, ready to decrypt.
+///   - `no_grant`  — the owner hasn't sealed us in yet (they're offline, or
+///                   we just joined). The UI shows "waiting for access".
+///   - `no_keypair`— we have no X25519 secret yet (set up sync first).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn cloud_unlock_org_dek(org_id: String) -> Result<&'static str, super::api::ApiError> {
+    use super::api;
+    let token = super::auth::current_token().ok_or_else(|| api::ApiError::Server {
+        status: 401,
+        code: "unauthenticated".into(),
+        message: None,
+    })?;
+    let Some(sk) = load_x25519_sk().map_err(|e| api::ApiError::Decode(format!("x25519: {e}")))?
+    else {
+        return Ok("no_keypair");
+    };
+    let Some(grant) = localforge_cloud_client::keys::my_grant(&org_id, &token).await? else {
+        return Ok("no_grant");
+    };
+    let dek = crypto::open_sealed(&sk, &grant.sealed_epk, &grant.sealed_dek)
+        .map_err(|e| api::ApiError::Server {
+            status: 400,
+            code: "grant_open_failed".into(),
+            message: Some(e),
+        })?;
+    set_active_dek_override(Some(dek));
+    Ok("granted")
+}
+
+/// Clear the active-org DEK override — call when switching back to an org we
+/// own, so sync/pull goes back to our own keychain DEK.
+#[tauri::command]
+pub async fn cloud_clear_org_dek() -> Result<(), String> {
+    set_active_dek_override(None);
+    Ok(())
+}
+
+/// Owner side: seal OUR org DEK to every member of `org_id` who has published
+/// a key but doesn't have a grant yet. Idempotent + safe to call often (on
+/// sign-in, when a member joins). No-op / 403 if we don't own the org.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn cloud_process_grants(org_id: String) -> Result<usize, super::api::ApiError> {
+    use super::api;
+    let token = super::auth::current_token().ok_or_else(|| api::ApiError::Server {
+        status: 401,
+        code: "unauthenticated".into(),
+        message: None,
+    })?;
+    let pending = match localforge_cloud_client::keys::pending_grants(&org_id, &token).await {
+        Ok(p) => p,
+        // Not the owner of this org → nothing for us to do.
+        Err(api::ApiError::Server { status: 403, .. }) => return Ok(0),
+        Err(e) => return Err(e),
+    };
+    if pending.is_empty() {
+        return Ok(0);
+    }
+    let dek = ensure_key().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
+    let mut granted = 0usize;
+    for m in pending {
+        let pk_bytes = match base64::engine::general_purpose::STANDARD.decode(&m.pubkey) {
+            Ok(b) if b.len() == crypto::X25519_PK_LEN => {
+                let mut arr = [0u8; crypto::X25519_PK_LEN];
+                arr.copy_from_slice(&b);
+                arr
+            }
+            _ => continue, // skip a malformed pubkey rather than abort the batch
+        };
+        let Ok((epk_b64, sealed)) = crypto::seal_to(&pk_bytes, &dek) else {
+            continue;
+        };
+        if localforge_cloud_client::keys::put_grant(&org_id, &m.user_id, &sealed, &epk_b64, &token)
+            .await
+            .is_ok()
+        {
+            granted += 1;
+        }
+    }
+    Ok(granted)
 }
 
 /// Three-state status the UI uses to decide which dialog to show.

@@ -79,6 +79,12 @@ export function RelayFleetBridge() {
     }).then((u) => unsubs.push(u));
     listen('cloud://relay-presence', () => {
       void useNodesStore.getState().fetchMachines();
+      // A member just (re)joined — if we own the active org, seal any newly
+      // pending members so they can decrypt right away. No-op (403) if we're
+      // not the owner.
+      if (currentOrgId) {
+        void invoke('cloud_process_grants', { orgId: currentOrgId }).catch(() => {});
+      }
     }).then((u) => unsubs.push(u));
     listen<RelaySnapshotEvent>('cloud://relay-event', (event) => {
       const msg = event.payload;
