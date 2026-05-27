@@ -55,6 +55,21 @@ pub struct OrgSummary {
 struct InviteBody<'a> {
     email: &'a str,
     role: &'a str,
+    /// Org DEK wrapped with the invite secret (which travels in the link
+    /// #fragment, never sent here). Omitted on a plain invite.
+    #[serde(rename = "wrappedDek", skip_serializing_if = "Option::is_none")]
+    wrapped_dek: Option<&'a str>,
+}
+
+/// Result of accepting an invite — the org joined + (when the invite carried
+/// the handoff) the DEK wrapped with the invite secret, for the client to
+/// unwrap with the fragment secret.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AcceptResult {
+    #[serde(rename = "organizationId")]
+    pub org_id: String,
+    #[serde(rename = "wrappedDek", default)]
+    pub wrapped_dek: Option<String>,
 }
 
 /// List every org the user belongs to. Powers the org switcher.
@@ -81,9 +96,27 @@ pub async fn invite(
     role: &str,
     token: &str,
 ) -> Result<serde_json::Value, ApiError> {
+    invite_with_dek(org_id, email, role, None, token).await
+}
+
+/// Send an invitation carrying an invite-secret-wrapped org DEK so the
+/// invitee can decrypt the moment they accept (handoff). `wrapped_dek` is the
+/// org DEK encrypted under the invite secret; the secret itself goes in the
+/// link #fragment, never here.
+pub async fn invite_with_dek(
+    org_id: &str,
+    email: &str,
+    role: &str,
+    wrapped_dek: Option<&str>,
+    token: &str,
+) -> Result<serde_json::Value, ApiError> {
     api::post(
         &format!("/v1/orgs/{org_id}/invitations"),
-        &InviteBody { email, role },
+        &InviteBody {
+            email,
+            role,
+            wrapped_dek,
+        },
         Some(token),
     )
     .await
@@ -157,16 +190,17 @@ pub async fn remove_member(
 /// deep link OR pasted by the user). Returns the org id they joined
 /// so the UI can switch to it.
 pub async fn accept_invite(invite_token: &str, bearer: &str) -> Result<String, ApiError> {
-    #[derive(Deserialize)]
-    struct Resp {
-        #[serde(rename = "organizationId")]
-        org_id: String,
-    }
-    let r: Resp = api::post(
+    Ok(accept_invite_full(invite_token, bearer).await?.org_id)
+}
+
+/// Accept an invite and also return the handoff `wrapped_dek` (if the invite
+/// carried one), so the client can unwrap the org DEK with the fragment
+/// secret and decrypt immediately.
+pub async fn accept_invite_full(invite_token: &str, bearer: &str) -> Result<AcceptResult, ApiError> {
+    api::post(
         &format!("/v1/orgs/invitations/{invite_token}/accept"),
         &serde_json::json!({}),
         Some(bearer),
     )
-    .await?;
-    Ok(r.org_id)
+    .await
 }

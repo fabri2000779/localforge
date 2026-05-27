@@ -170,9 +170,17 @@ function InviteDialog({ open, orgId, onClose }: { open: boolean; orgId: string; 
   const [role, setRole] = useState<'admin' | 'operator' | 'viewer'>('operator');
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // After a successful invite we show the secret-bearing link to SHARE: the
+  // emailed link works but carries no key, so only this link grants instant
+  // decryption. The `#k=` secret never touched the server.
+  const [link, setLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    if (!open) { setEmail(''); setRole('operator'); setErr(null); setSubmitting(false); }
+    if (!open) {
+      setEmail(''); setRole('operator'); setErr(null); setSubmitting(false);
+      setLink(null); setCopied(false);
+    }
   }, [open]);
 
   if (!open) return null;
@@ -181,8 +189,10 @@ function InviteDialog({ open, orgId, onClose }: { open: boolean; orgId: string; 
     e.preventDefault();
     setSubmitting(true); setErr(null);
     try {
-      await invoke('cloud_orgs_invite', { orgId, email: email.trim(), role });
-      onClose();
+      const res = await invoke<{ id: string; secret: string }>('cloud_orgs_invite', {
+        orgId, email: email.trim(), role,
+      });
+      setLink(`https://localforge.gg/auth/invite?token=${res.id}#k=${res.secret}`);
     } catch (e) {
       const msg = (e as { code?: string; message?: string });
       setErr(
@@ -193,33 +203,65 @@ function InviteDialog({ open, orgId, onClose }: { open: boolean; orgId: string; 
     } finally { setSubmitting(false); }
   }
 
+  async function copyLink() {
+    if (!link) return;
+    try { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+    catch { /* clipboard blocked — the field is selectable anyway */ }
+  }
+
   return createPortal(
     <div className="auth-overlay" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="auth-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+      <div className="auth-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
         <button className="auth-close" onClick={onClose}><X size={16} strokeWidth={2.2} /></button>
-        <div className="auth-header">
-          <h2>Invite teammate</h2>
-          <p>They'll get an email with a one-shot link valid for 7 days.</p>
-        </div>
-        <form className="auth-form" onSubmit={onSubmit}>
-          <label className="auth-field">
-            <span>Email</span>
-            <input type="email" required autoComplete="off" placeholder="teammate@example.com"
-                   value={email} onChange={(e) => setEmail(e.target.value)} />
-          </label>
-          <label className="auth-field">
-            <span>Role</span>
-            <select value={role} onChange={(e) => setRole(e.target.value as 'admin' | 'operator' | 'viewer')}>
-              <option value="viewer">Viewer — read-only dashboard + logs</option>
-              <option value="operator">Operator — start/stop/console/files</option>
-              <option value="admin">Admin — also manage members</option>
-            </select>
-          </label>
-          {err && <div className="auth-err">{err}</div>}
-          <button className="auth-submit" type="submit" disabled={submitting || !email.includes('@')}>
-            {submitting ? '…' : 'Send invitation'}
-          </button>
-        </form>
+        {link ? (
+          <>
+            <div className="auth-header">
+              <h2>Invitation created</h2>
+              <p>We emailed {email} a link. For instant access to your encrypted
+                 servers, share <strong>this</strong> link directly — it carries
+                 the decryption key (in the part after <code>#</code>, which never
+                 reaches our servers).</p>
+            </div>
+            <div
+              className="font-mono text-[12px] text-slate-200 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md px-3 py-2 break-all select-all"
+            >
+              {link}
+            </div>
+            <button className="auth-submit mt-3" type="button" onClick={copyLink}>
+              {copied ? 'Copied!' : 'Copy invite link'}
+            </button>
+            <p className="text-xs text-slate-500 mt-2">
+              If they use the emailed link instead, they'll still join — they just
+              won't see server details until you're next online to grant them.
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="auth-header">
+              <h2>Invite teammate</h2>
+              <p>They'll get an email with a one-shot link valid for 7 days.</p>
+            </div>
+            <form className="auth-form" onSubmit={onSubmit}>
+              <label className="auth-field">
+                <span>Email</span>
+                <input type="email" required autoComplete="off" placeholder="teammate@example.com"
+                       value={email} onChange={(e) => setEmail(e.target.value)} />
+              </label>
+              <label className="auth-field">
+                <span>Role</span>
+                <select value={role} onChange={(e) => setRole(e.target.value as 'admin' | 'operator' | 'viewer')}>
+                  <option value="viewer">Viewer — read-only dashboard + logs</option>
+                  <option value="operator">Operator — start/stop/console/files</option>
+                  <option value="admin">Admin — also manage members</option>
+                </select>
+              </label>
+              {err && <div className="auth-err">{err}</div>}
+              <button className="auth-submit" type="submit" disabled={submitting || !email.includes('@')}>
+                {submitting ? '…' : 'Send invitation'}
+              </button>
+            </form>
+          </>
+        )}
       </div>
     </div>,
     document.body,

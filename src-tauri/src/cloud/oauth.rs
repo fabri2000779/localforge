@@ -102,12 +102,29 @@ async fn handle_invite(app: AppHandle, url: String) {
         emit_error(&app, "no_invite_token", "the invite URL had no token");
         return;
     };
+    // Optional handoff secret. It rides in the link's #fragment (`#k=…`, which
+    // never reaches a server); a web bridge that turns the HTTPS link into the
+    // localforge:// deep link may instead pass it as a `&k=` query. Accept
+    // either. A plain invite has none → the member falls back to the owner's
+    // background grant.
+    let secret = shared::parse_query_param(&url, "k").or_else(|| parse_fragment_param(&url, "k"));
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.set_focus();
         let _ = w.unminimize();
     }
     let _ = app.emit(
         "cloud://invite-received",
-        serde_json::json!({ "token": token }),
+        serde_json::json!({ "token": token, "secret": secret }),
     );
+}
+
+/// Pull `key` out of a URL `#fragment` (`…#k=value&other=…`). Fragments are
+/// client-side only and never transmitted, which is exactly why the invite
+/// handoff secret travels there.
+fn parse_fragment_param(url: &str, key: &str) -> Option<String> {
+    let frag = url.split_once('#')?.1;
+    frag.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        (k == key).then(|| v.to_string())
+    })
 }

@@ -16,14 +16,18 @@ export function AcceptInviteToast() {
   const me = useAuthStore((s) => s.me);
   const refreshMe = useAuthStore((s) => s.refreshMe);
   const [token, setToken] = useState<string | null>(null);
+  // Handoff secret from the invite link #fragment — lets us decrypt the
+  // owner's org the instant we accept. Optional (plain invites have none).
+  const [secret, setSecret] = useState<string | null>(null);
   const [pendingLogin, setPendingLogin] = useState(false);
   const [accepting, setAccepting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
-    listen<{ token: string }>('cloud://invite-received', (event) => {
+    listen<{ token: string; secret?: string | null }>('cloud://invite-received', (event) => {
       setToken(event.payload.token);
+      setSecret(event.payload.secret ?? null);
       setErr(null);
     }).then((fn) => { unlisten = fn; });
     return () => { if (unlisten) unlisten(); };
@@ -43,9 +47,15 @@ export function AcceptInviteToast() {
     if (!token) return;
     setAccepting(true);
     try {
-      await invoke<string>('cloud_orgs_accept_invite', { token });
+      const orgId = await invoke<string>('cloud_orgs_accept_invite', { token, secret });
       setToken(null);
-      void refreshMe();
+      setSecret(null);
+      await refreshMe();
+      // Switch to the org we just joined so active-org scoping + the handoff
+      // DEK kick in and the owner's servers appear right away.
+      const auth = useAuthStore.getState();
+      await auth.fetchOrgs();
+      auth.setCurrentOrg(orgId);
     } catch (e) {
       const msg = e as { code?: string; message?: string };
       setErr(

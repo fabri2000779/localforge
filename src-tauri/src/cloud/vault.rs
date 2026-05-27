@@ -171,6 +171,45 @@ async fn ensure_keypair(kek: &[u8; KEY_LEN], token: &str) -> Result<(), super::a
     Ok(())
 }
 
+// --- Per-org DEK cache (a member's borrowed org key) ----------------------
+//
+// When a member obtains an org's DEK — via an invite handoff or by opening a
+// sealed grant — we cache it in the keychain keyed by org. That makes access
+// durable across restarts WITHOUT needing the grant re-opened (or even a
+// keypair, for the invite-handoff path) every time. Never the user's OWN org
+// (that's the plain `vault-key` DEK).
+
+fn org_dek_entry(org_id: &str) -> Result<keyring_core::Entry, keyring_core::Error> {
+    keyring_core::Entry::new(SERVICE, &format!("org-dek:{org_id}"))
+}
+
+fn load_org_dek(org_id: &str) -> Option<[u8; KEY_LEN]> {
+    let e = org_dek_entry(org_id).ok()?;
+    let b64 = e.get_password().ok()?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    if bytes.len() != KEY_LEN {
+        return None;
+    }
+    let mut out = [0u8; KEY_LEN];
+    out.copy_from_slice(&bytes);
+    Some(out)
+}
+
+fn save_org_dek(org_id: &str, dek: &[u8; KEY_LEN]) -> Result<(), String> {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(dek);
+    org_dek_entry(org_id)
+        .map_err(|e| e.to_string())?
+        .set_password(&b64)
+        .map_err(|e| e.to_string())
+}
+
+/// Adopt an org DEK we just obtained (invite handoff): cache it durably +
+/// make it the active decryption key. Used by the accept-invite command.
+pub fn adopt_org_dek(org_id: &str, dek: &[u8; KEY_LEN]) {
+    let _ = save_org_dek(org_id, dek);
+    set_active_dek_override(Some(*dek));
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
@@ -341,6 +380,12 @@ pub async fn cloud_unlock_org_dek(org_id: String) -> Result<&'static str, super:
         code: "unauthenticated".into(),
         message: None,
     })?;
+    // Fast + durable path: a DEK we already cached (invite handoff, or a grant
+    // opened earlier) survives restarts without re-opening.
+    if let Some(dek) = load_org_dek(&org_id) {
+        set_active_dek_override(Some(dek));
+        return Ok("granted");
+    }
     let Some(sk) = load_x25519_sk().map_err(|e| api::ApiError::Decode(format!("x25519: {e}")))?
     else {
         return Ok("no_keypair");
@@ -354,6 +399,8 @@ pub async fn cloud_unlock_org_dek(org_id: String) -> Result<&'static str, super:
             code: "grant_open_failed".into(),
             message: Some(e),
         })?;
+    // Cache it so future switches/restarts are instant + offline-friendly.
+    let _ = save_org_dek(&org_id, &dek);
     set_active_dek_override(Some(dek));
     Ok("granted")
 }
