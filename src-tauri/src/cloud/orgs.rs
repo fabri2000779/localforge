@@ -141,6 +141,13 @@ pub async fn cloud_orgs_accept_invite(
                 sk.copy_from_slice(&s);
                 if let Ok(dek) = super::vault::unwrap_dek(&sk, wrapped) {
                     super::vault::adopt_org_dek(&res.org_id, &dek);
+                    // Durable cross-device access without waiting for the owner:
+                    // seal the DEK to our own pubkey now. Best-effort — silently
+                    // skips if we have no keypair yet (sync not set up), in which
+                    // case the owner's background grant still covers us.
+                    if let Some(uid) = res.user_id.as_deref() {
+                        let _ = super::vault::self_seal_grant(&res.org_id, uid, &dek, &bearer).await;
+                    }
                 }
             }
         }

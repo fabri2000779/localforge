@@ -210,6 +210,33 @@ pub fn adopt_org_dek(org_id: &str, dek: &[u8; KEY_LEN]) {
     set_active_dek_override(Some(*dek));
 }
 
+/// Member side: seal the org DEK we just obtained (via invite handoff) to OUR
+/// OWN pubkey and upload it as a durable grant — so our *other* devices get
+/// access without waiting for the owner to seal one (matching how the
+/// invite-handoff device already has it via the local cache). Best-effort:
+///   - returns `Ok(false)` if we have no X25519 secret yet (sync not set up);
+///     the owner's background `process_grants` will cover us once we publish a
+///     key, so this is a pure optimization, never required for correctness.
+///   - the cloud's `POST /grants` permits a member to self-seal for their own
+///     user id (the `isSelf` branch), and it's idempotent (re-seal is fine).
+pub async fn self_seal_grant(
+    org_id: &str,
+    my_user_id: &str,
+    dek: &[u8; KEY_LEN],
+    token: &str,
+) -> Result<bool, super::api::ApiError> {
+    use super::api;
+    let Some(sk) =
+        load_x25519_sk().map_err(|e| api::ApiError::Decode(format!("x25519: {e}")))?
+    else {
+        return Ok(false); // no keypair on this device yet — nothing to seal to
+    };
+    let pk = crypto::public_from_secret(&sk);
+    let (epk_b64, sealed) = crypto::seal_to(&pk, dek).map_err(api::ApiError::Decode)?;
+    localforge_cloud_client::keys::put_grant(org_id, my_user_id, &sealed, &epk_b64, token).await?;
+    Ok(true)
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------

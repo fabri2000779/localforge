@@ -68,6 +68,10 @@ struct InviteBody<'a> {
 pub struct AcceptResult {
     #[serde(rename = "organizationId")]
     pub org_id: String,
+    /// The caller's own user id (echoed by the accept endpoint) — used to
+    /// self-seal a durable grant to our own pubkey right after accepting.
+    #[serde(rename = "userId", default)]
+    pub user_id: Option<String>,
     #[serde(rename = "wrappedDek", default)]
     pub wrapped_dek: Option<String>,
 }
