@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useServerStore } from '../stores/serverStore';
 import { useGamesStore } from '../stores/gamesStore';
+import { useNodesStore } from '../stores/nodesStore';
 import { useCanAct, useDisplayedServers } from '../utils/subUser';
 import { findGameConfig } from '../utils/gameTypes';
 import { invoke } from '@tauri-apps/api/core';
@@ -47,6 +48,9 @@ export function ServerDetail() {
   const canAdmin = useCanAct('server.delete');  // delete / reinstall / config
 
   const { games } = useGamesStore();
+  // The node this detail view is scoped to — so logs/stats/disk/attach hit the
+  // RIGHT machine when the active node is a remote agent (not always 'local').
+  const activeNodeId = useNodesStore((s) => s.activeNodeId);
 
   const [activeTab, setActiveTab] = useState<TabType>('console');
   const [command, setCommand] = useState('');
@@ -91,7 +95,7 @@ export function ServerDetail() {
     
     const fetchDiskUsage = async () => {
       try {
-        const size = await invoke<number>('get_server_disk_usage', { serverId: id });
+        const size = await invoke<number>('get_server_disk_usage', { serverId: id, nodeId: activeNodeId });
         setDiskUsage(size);
       } catch (e) {
         console.error('Failed to fetch disk usage:', e);
@@ -102,7 +106,7 @@ export function ServerDetail() {
     // Refresh disk usage every 30 seconds
     const interval = setInterval(fetchDiskUsage, 30000);
     return () => clearInterval(interval);
-  }, [id]);
+  }, [id, activeNodeId]);
 
   // Main initialization effect
   useEffect(() => {
@@ -112,13 +116,13 @@ export function ServerDetail() {
     
     const fetchInitialLogs = async () => {
       try {
-        const response = await invoke<{ logs: string[] }>('get_server_logs', { serverId: id, lines: 500 });
+        const response = await invoke<{ logs: string[] }>('get_server_logs', { serverId: id, lines: 500, nodeId: activeNodeId });
         setLogs(response.logs);
       } catch (e) {
         console.error('[ServerDetail] Failed to fetch logs:', e);
       }
     };
-    
+
     const setupStreaming = async () => {
       try {
         const unlisten = await listen<{ server_id: string; line: string }>('server-log', (event) => {
@@ -126,9 +130,9 @@ export function ServerDetail() {
             setLogs((prev) => [...prev, event.payload.line]);
           }
         });
-        
+
         unlistenRef.current = unlisten;
-        await invoke('attach_server', { serverId: id });
+        await invoke('attach_server', { serverId: id, nodeId: activeNodeId });
         setIsStreaming(true);
       } catch (e) {
         console.error('[ServerDetail] Streaming setup failed:', e);
@@ -144,10 +148,10 @@ export function ServerDetail() {
         unlistenRef.current();
         unlistenRef.current = null;
       }
-      invoke('detach_server', { serverId: id }).catch(() => {});
+      invoke('detach_server', { serverId: id, nodeId: activeNodeId }).catch(() => {});
       stopStatsPolling();
     };
-  }, [id, fetchServers, startStatsPolling, stopStatsPolling]);
+  }, [id, activeNodeId, fetchServers, startStatsPolling, stopStatsPolling]);
 
   // Initialize editing config when server loads
   useEffect(() => {
@@ -371,9 +375,9 @@ export function ServerDetail() {
 
   const handleRefresh = async () => {
     try {
-      const response = await invoke<{ logs: string[] }>('get_server_logs', { serverId: server.id, lines: 500 });
+      const response = await invoke<{ logs: string[] }>('get_server_logs', { serverId: server.id, lines: 500, nodeId: activeNodeId });
       setLogs(response.logs);
-      await invoke('attach_server', { serverId: server.id });
+      await invoke('attach_server', { serverId: server.id, nodeId: activeNodeId });
     } catch (e) {
       console.error('Refresh failed:', e);
     }

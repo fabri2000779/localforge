@@ -218,8 +218,15 @@ impl DockerManager {
             binds: Some(vec![data_mount, machine_id_mount]),
             memory: memory_limit,
             memory_swap: memory_limit, // Same as memory to disable swap
+            // Auto-restart on crash AND survive a host reboot — "set & forget"
+            // hosting. `unless-stopped` means Docker brings the container back
+            // if it exits unexpectedly or the machine restarts, but respects an
+            // explicit Stop from the panel (a manual `docker stop` is NOT
+            // auto-restarted). Docker's own exponential backoff guards against a
+            // crash-loop hammering the host. (Existing containers keep their old
+            // policy until recreated via reinstall/update.)
             restart_policy: Some(bollard::models::RestartPolicy {
-                name: Some(bollard::models::RestartPolicyNameEnum::NO),
+                name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
                 ..Default::default()
             }),
             ..Default::default()
