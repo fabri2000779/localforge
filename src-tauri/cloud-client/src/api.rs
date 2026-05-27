@@ -8,11 +8,35 @@
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 use crate::{api_origin, user_agent};
 
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// The org every subsequent request should act on. Sent as the
+/// `X-LocalForge-Org` header so a sub-user's calls (sync, machine listing)
+/// target the OWNER's org instead of the caller's primary one. `None` →
+/// header omitted → the server falls back to the caller's primary org
+/// (the historical single-org behaviour).
+static ACTIVE_ORG: OnceLock<RwLock<Option<String>>> = OnceLock::new();
+
+fn active_org_cell() -> &'static RwLock<Option<String>> {
+    ACTIVE_ORG.get_or_init(|| RwLock::new(None))
+}
+
+/// Point the API client at a specific org. The host app calls this when the
+/// user switches the active org (and clears it on sign-out). Empty strings
+/// are treated as `None`.
+pub fn set_active_org(org_id: Option<String>) {
+    if let Ok(mut g) = active_org_cell().write() {
+        *g = org_id.filter(|s| !s.trim().is_empty());
+    }
+}
+
+fn active_org() -> Option<String> {
+    active_org_cell().read().ok().and_then(|g| g.clone())
+}
 
 /// The shared reqwest client. Public so callers that need a custom
 /// HTTP method (PUT, DELETE) or response handling beyond what `get()`
@@ -165,6 +189,11 @@ async fn request<B: Serialize, R: DeserializeOwned>(
     let mut req = client().request(method, &url);
     if let Some(t) = bearer {
         req = req.bearer_auth(t);
+    }
+    // Act on the user's chosen active org (sub-user → the owner's org). The
+    // server verifies membership before honouring it; omitted → primary org.
+    if let Some(org) = active_org() {
+        req = req.header("x-localforge-org", org);
     }
     if let Some(b) = body {
         req = req.json(b);

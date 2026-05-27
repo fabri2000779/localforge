@@ -211,6 +211,7 @@ fn main() {
             cloud::relay::cloud_relay_send_cmd,
             cloud::relay::cloud_relay_send_event,
             cloud::orgs::cloud_orgs_list,
+            cloud::orgs::cloud_set_active_org,
             cloud::orgs::cloud_orgs_me,
             cloud::orgs::cloud_orgs_invite,
             cloud::orgs::cloud_orgs_list_invitations,

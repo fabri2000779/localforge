@@ -297,6 +297,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logout: async () => {
     set({ loading: true });
     relayOrg = null;
+    // Clear the active-org pin so any stray call falls back to primary.
+    void invoke('cloud_set_active_org', { orgId: null }).catch(() => {});
     // Disconnect the relay first so we don't keep an authed WS dangling.
     try { await invoke<void>('cloud_relay_stop'); } catch { /* ignore */ }
     try { await invoke<void>('cloud_logout'); } catch { /* ignore */ }
@@ -463,14 +465,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!o) return;
     localStorage.setItem(CURRENT_ORG_KEY, orgId);
     set({ currentOrgId: orgId, currentRole: o.role });
-    // Point the relay at the newly-active org so live status + control
-    // target the right machines, then pull fresh sync state for it.
-    get().ensureRelay();
-    void get().syncPull();
+    // Set the active org for HTTP FIRST, then (re)connect the relay + pull,
+    // so the pull resolves against the right org's data.
+    void invoke('cloud_set_active_org', { orgId }).finally(() => {
+      get().ensureRelay();
+      void get().syncPull();
+    });
   },
 
   ensureRelay: () => {
     const { me, orgs, currentOrgId } = get();
+    // Point the HTTP client (sync + machine listing) at the active org too,
+    // so a sub-user's calls resolve to the OWNER's org. Cleared on sign-out.
+    void invoke('cloud_set_active_org', { orgId: me ? currentOrgId : null }).catch(() => {});
     if (!me) {
       relayOrg = null;
       return;

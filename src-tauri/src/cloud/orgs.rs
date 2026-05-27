@@ -28,6 +28,16 @@ pub async fn cloud_orgs_list() -> Result<Vec<OrgSummary>, api::ApiError> {
     localforge_cloud_client::orgs::list(&token).await
 }
 
+/// Point every subsequent cloud call at a specific org (the active org in
+/// the switcher). A sub-user viewing the owner's org sets it here so sync +
+/// machine listing resolve to the OWNER's org (sent as `X-LocalForge-Org`,
+/// membership-verified server-side). Pass `None`/empty on sign-out to fall
+/// back to the primary org.
+#[tauri::command(rename_all = "camelCase")]
+pub fn cloud_set_active_org(org_id: Option<String>) {
+    localforge_cloud_client::api::set_active_org(org_id);
+}
+
 #[tauri::command]
 pub async fn cloud_orgs_me() -> Result<OrgInfo, api::ApiError> {
     let token = auth::current_token().ok_or_else(unauth)?;
