@@ -171,6 +171,106 @@ impl KekParams {
 }
 
 // ---------------------------------------------------------------------------
+// Asymmetric key sharing (X25519 sealed box) — Team org DEK distribution.
+//
+// For a Team org the per-org DEK is shared to each member by SEALING it to
+// that member's X25519 public key, so the cloud never sees the raw DEK. The
+// member's X25519 SECRET is itself wrapped by their KEK (same as the DEK) and
+// stored on the cloud, so any of their devices can recover it from the
+// passphrase — the public key is therefore stable per user.
+//
+// Construction (libsodium `crypto_box_seal` style): an ephemeral keypair does
+// ECDH with the recipient's public key; the shared secret is run through
+// SHA-256 (domain-separated, bound to both public keys) to derive a 32-byte
+// AES key; the DEK is sealed with the existing AES-256-GCM envelope. This is
+// confidentiality-only (anonymous sender) — exactly what we need: the owner
+// is the sole holder of the DEK and GCM gives integrity.
+// ---------------------------------------------------------------------------
+
+use sha2::{Digest, Sha256};
+use x25519_dalek::{PublicKey, StaticSecret};
+
+/// Length of an X25519 public key, in bytes.
+pub const X25519_PK_LEN: usize = 32;
+
+/// Generate a fresh X25519 keypair. Returns `(secret_bytes, public_bytes)`.
+/// The secret is stored locally + cloud-wrapped by the KEK (like the DEK);
+/// the public key is published so org owners can seal the DEK to it. We build
+/// the secret from our own OS-random bytes to avoid coupling to x25519-dalek's
+/// rand_core version.
+pub fn generate_keypair() -> ([u8; KEY_LEN], [u8; X25519_PK_LEN]) {
+    let sk_bytes = generate_key();
+    let pk = PublicKey::from(&StaticSecret::from(sk_bytes));
+    (sk_bytes, pk.to_bytes())
+}
+
+/// Recover the public key from a stored secret (e.g. to (re)publish it).
+pub fn public_from_secret(sk_bytes: &[u8; KEY_LEN]) -> [u8; X25519_PK_LEN] {
+    PublicKey::from(&StaticSecret::from(*sk_bytes)).to_bytes()
+}
+
+/// Domain-separated KDF binding the AES key to both public keys, so a sealed
+/// blob can't be replayed against a different recipient.
+fn seal_kdf(shared: &[u8], epk: &[u8], recipient_pk: &[u8]) -> [u8; KEY_LEN] {
+    let mut h = Sha256::new();
+    h.update(b"localforge-sealed-dek-v1");
+    h.update(shared);
+    h.update(epk);
+    h.update(recipient_pk);
+    let digest = h.finalize();
+    let mut key = [0u8; KEY_LEN];
+    key.copy_from_slice(&digest);
+    key
+}
+
+/// Seal `dek` to `recipient_pk`. Returns `(ephemeral_pubkey_b64, sealed)`
+/// where `sealed` is a standard v1 AES-GCM envelope. Store both on the cloud
+/// as the member's grant.
+pub fn seal_to(
+    recipient_pk: &[u8; X25519_PK_LEN],
+    dek: &[u8; KEY_LEN],
+) -> Result<(String, String), String> {
+    let eph = StaticSecret::from(generate_key());
+    let epk = PublicKey::from(&eph);
+    let shared = eph.diffie_hellman(&PublicKey::from(*recipient_pk));
+    let key = seal_kdf(shared.as_bytes(), &epk.to_bytes(), recipient_pk);
+    let sealed = encrypt(&key, dek)?;
+    Ok((
+        base64::engine::general_purpose::STANDARD.encode(epk.to_bytes()),
+        sealed,
+    ))
+}
+
+/// Open a sealed DEK with the recipient's secret + the ephemeral pubkey the
+/// owner stored alongside it. AES-GCM failure means a wrong key (not us, or a
+/// tampered blob).
+pub fn open_sealed(
+    my_sk: &[u8; KEY_LEN],
+    epk_b64: &str,
+    sealed: &str,
+) -> Result<[u8; KEY_LEN], String> {
+    let epk_bytes = base64::engine::general_purpose::STANDARD
+        .decode(epk_b64)
+        .map_err(|e| format!("epk decode: {e}"))?;
+    if epk_bytes.len() != X25519_PK_LEN {
+        return Err("epk wrong length".into());
+    }
+    let mut epk_arr = [0u8; X25519_PK_LEN];
+    epk_arr.copy_from_slice(&epk_bytes);
+    let sk = StaticSecret::from(*my_sk);
+    let my_pk = PublicKey::from(&sk);
+    let shared = sk.diffie_hellman(&PublicKey::from(epk_arr));
+    let key = seal_kdf(shared.as_bytes(), &epk_arr, &my_pk.to_bytes());
+    let plain = decrypt(&key, sealed)?;
+    if plain.len() != KEY_LEN {
+        return Err(format!("sealed DEK wrong length: {}", plain.len()));
+    }
+    let mut out = [0u8; KEY_LEN];
+    out.copy_from_slice(&plain);
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -222,6 +322,33 @@ mod tests {
         let dek = generate_key();
         let wrapped = wrap_dek(&kek_a, &dek).unwrap();
         assert!(unwrap_dek(&kek_b, &wrapped).is_err());
+    }
+
+    #[test]
+    fn sealed_dek_round_trip() {
+        // Owner holds the org DEK; a member has a keypair. Owner seals to the
+        // member's pubkey; member opens it with their secret.
+        let (member_sk, member_pk) = generate_keypair();
+        let dek = generate_key();
+        let (epk_b64, sealed) = seal_to(&member_pk, &dek).unwrap();
+        let opened = open_sealed(&member_sk, &epk_b64, &sealed).unwrap();
+        assert_eq!(opened, dek);
+    }
+
+    #[test]
+    fn sealed_dek_wrong_recipient_fails() {
+        let (_alice_sk, alice_pk) = generate_keypair();
+        let (mallory_sk, _mallory_pk) = generate_keypair();
+        let dek = generate_key();
+        // Sealed to Alice — Mallory must not be able to open it.
+        let (epk_b64, sealed) = seal_to(&alice_pk, &dek).unwrap();
+        assert!(open_sealed(&mallory_sk, &epk_b64, &sealed).is_err());
+    }
+
+    #[test]
+    fn public_from_secret_matches_generated() {
+        let (sk, pk) = generate_keypair();
+        assert_eq!(public_from_secret(&sk), pk);
     }
 
     #[test]

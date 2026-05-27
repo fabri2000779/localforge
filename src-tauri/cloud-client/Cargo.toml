@@ -43,3 +43,11 @@ aes-gcm = "0.10"
 scrypt = { version = "0.11", default-features = false }
 rand = "0.9"
 base64 = "0.22"
+
+# Asymmetric key sharing for Team orgs: the per-org DEK is sealed to each
+# member's X25519 public key (sealed-box style) so the cloud never sees it.
+# x25519-dalek + sha2 are pure-Rust and cross-compile to iOS/Android like the
+# rest. `static_secrets` exposes StaticSecret (we build keys from OS-random
+# bytes ourselves, so no rand_core version coupling).
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+sha2 = "0.10"
