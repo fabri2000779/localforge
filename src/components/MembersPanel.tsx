@@ -43,6 +43,7 @@ export function MembersPanel() {
   const [org, setOrg] = useState<OrgInfo | null>(null);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [rotateOpen, setRotateOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -79,6 +80,9 @@ export function MembersPanel() {
     try {
       await invoke('cloud_orgs_remove_member', { orgId: org!.id, userId });
       void refresh();
+      // Offer to rotate the encryption key so the removed member's cached key
+      // can't decrypt future changes (they're already cut off from the API).
+      setRotateOpen(true);
     } catch (e) { setError(String(e)); }
   }
 
@@ -156,7 +160,78 @@ export function MembersPanel() {
         orgId={org.id}
         onClose={() => { setInviteOpen(false); void refresh(); }}
       />
+
+      <RotateKeyDialog
+        open={rotateOpen}
+        orgId={org.id}
+        onClose={() => setRotateOpen(false)}
+      />
     </section>
+  );
+}
+
+/**
+ * Offered after removing a member: re-encrypt the org's servers under a fresh
+ * key so the ex-member's cached key can't read future changes. Optional — the
+ * member is already locked out of the API on removal; this is forward-secrecy
+ * hardening. Needs the sync passphrase (to re-wrap the new key).
+ */
+function RotateKeyDialog({ open, orgId, onClose }: { open: boolean; orgId: string; onClose: () => void }) {
+  const [passphrase, setPassphrase] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) { setPassphrase(''); setErr(null); setBusy(false); }
+  }, [open]);
+
+  if (!open) return null;
+
+  async function rotate() {
+    setBusy(true); setErr(null);
+    try {
+      await invoke('cloud_rotate_org_dek', { orgId, passphrase });
+      onClose();
+    } catch (e) {
+      const m = e as { code?: string; message?: string };
+      setErr(
+        m.code === 'wrong_secret' ? 'That passphrase doesn’t match your sync key.' :
+        m.code === 'sync_key_not_set' ? 'Set up cloud sync first.' :
+        m.code === 'undecryptable_blob' ? 'Some servers couldn’t be read on this device — rotate from the machine that owns them.' :
+        m.message ?? String(e),
+      );
+    } finally { setBusy(false); }
+  }
+
+  return createPortal(
+    <div className="auth-overlay" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="auth-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
+        <button className="auth-close" onClick={onClose}><X size={16} strokeWidth={2.2} /></button>
+        <div className="auth-header">
+          <h2>Rotate encryption key?</h2>
+          <p>The member already lost access. To also stop their cached key from
+             decrypting <em>future</em> changes, re-encrypt your servers under a
+             new key. Enter your sync passphrase.</p>
+        </div>
+        <label className="auth-field">
+          <span>Sync passphrase</span>
+          <input type="password" autoFocus value={passphrase}
+                 onChange={(e) => setPassphrase(e.target.value)}
+                 onKeyDown={(e) => { if (e.key === 'Enter' && passphrase) void rotate(); }} />
+        </label>
+        {err && <div className="auth-err">{err}</div>}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="auth-submit" type="button" style={{ flex: 1 }}
+                  onClick={rotate} disabled={busy || !passphrase}>
+            {busy ? 'Rotating…' : 'Rotate key'}
+          </button>
+          <button className="btn btn-secondary" type="button" onClick={onClose} disabled={busy}>
+            Skip
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

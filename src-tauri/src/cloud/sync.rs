@@ -8,6 +8,7 @@
 //! Triggered manually right now ("Sync now" button); Tier 2 wires the
 //! WS relay to auto-pull on `sync_changed`.
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use super::{api, auth, vault};
@@ -304,6 +305,128 @@ pub async fn cloud_sync_pull(
     let local_ids: std::collections::HashSet<String> =
         tagged.iter().map(|(s, _)| s.id.clone()).collect();
     pull(&token, &key, &local_ids).await
+}
+
+// ---------------------------------------------------------------------------
+// DEK rotation — forward secrecy after removing a member.
+// ---------------------------------------------------------------------------
+
+/// Rotate the org's DEK: re-encrypt every server blob under a FRESH key and
+/// re-seal it to the remaining members, so a removed member's cached key
+/// can't decrypt anything new. Owner-only (the cloud 403s others).
+///
+/// Requires the sync passphrase — the KEK that wraps the DEK isn't cached, so
+/// we re-derive it (and verify it matches before trusting it). The cloud
+/// applies the new wrapped_dek + every new blob + the grant wipe in ONE
+/// transaction (`POST /v1/sync/rotate`), so a failure leaves the OLD key and
+/// OLD blobs intact — the owner is never stranded mid-rotation. Returns how
+/// many members were re-granted.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn cloud_rotate_org_dek(
+    org_id: String,
+    passphrase: String,
+) -> Result<usize, api::ApiError> {
+    let token = auth::current_token().ok_or_else(|| api::ApiError::Server {
+        status: 401,
+        code: "unauthenticated".into(),
+        message: None,
+    })?;
+    let current_dek =
+        vault::ensure_key().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
+
+    // Re-derive the KEK from the passphrase + verify it really unwraps our
+    // current DEK (guards a typo from minting a wrap nobody can open).
+    let me = localforge_cloud_client::auth::fetch_me(&token).await?;
+    let sk = me.sync_key.ok_or_else(|| api::ApiError::Server {
+        status: 412,
+        code: "sync_key_not_set".into(),
+        message: None,
+    })?;
+    let salt = base64::engine::general_purpose::STANDARD
+        .decode(&sk.kek_salt)
+        .map_err(|e| api::ApiError::Decode(format!("bad salt: {e}")))?;
+    let kek = vault::derive_kek(&passphrase, &salt).map_err(api::ApiError::Decode)?;
+    let check = vault::unwrap_dek(&kek, &sk.wrapped_dek).map_err(|_| api::ApiError::Server {
+        status: 400,
+        code: "wrong_secret".into(),
+        message: Some("passphrase doesn't match".into()),
+    })?;
+    if check != current_dek {
+        return Err(api::ApiError::Server {
+            status: 400,
+            code: "wrong_secret".into(),
+            message: Some("passphrase doesn't match this device's key".into()),
+        });
+    }
+
+    // Pull + decrypt every blob with the current DEK.
+    let empty: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let remote = pull(&token, &current_dek, &empty).await?;
+
+    // Fresh DEK; re-encrypt each config, verifying the round-trip before we
+    // trust the new blob.
+    let new_dek = vault::generate_key();
+    let now = chrono::Utc::now().timestamp_millis();
+
+    #[derive(Serialize)]
+    struct RotateServer {
+        id: String,
+        #[serde(rename = "encryptedBlob")]
+        encrypted_blob: String,
+        #[serde(rename = "updatedAt")]
+        updated_at: i64,
+    }
+    let mut servers = Vec::with_capacity(remote.len());
+    for r in remote {
+        let Some(cfg) = r.decrypted else {
+            // A blob we can't read → abort rather than orphan it under the new key.
+            return Err(api::ApiError::Server {
+                status: 409,
+                code: "undecryptable_blob".into(),
+                message: Some(format!("can't rotate: server {} didn't decrypt", r.id)),
+            });
+        };
+        let plaintext = serde_json::to_vec(&cfg)
+            .map_err(|e| api::ApiError::Decode(format!("serialize: {e}")))?;
+        let blob = vault::encrypt(&new_dek, &plaintext).map_err(api::ApiError::Decode)?;
+        match vault::decrypt(&new_dek, &blob) {
+            Ok(back) if back == plaintext => {}
+            _ => {
+                return Err(api::ApiError::Decode(format!(
+                    "rotation self-check failed for {}",
+                    r.id
+                )));
+            }
+        }
+        servers.push(RotateServer {
+            id: r.id,
+            encrypted_blob: blob,
+            updated_at: now,
+        });
+    }
+
+    // KEK-wrap the new DEK + commit atomically on the cloud.
+    let new_wrapped = vault::wrap_dek(&kek, &new_dek).map_err(api::ApiError::Decode)?;
+    #[derive(Serialize)]
+    struct Body {
+        #[serde(rename = "wrappedDek")]
+        wrapped_dek: String,
+        servers: Vec<RotateServer>,
+    }
+    let _: serde_json::Value = api::post(
+        "/v1/sync/rotate",
+        &Body {
+            wrapped_dek: new_wrapped,
+            servers,
+        },
+        Some(&token),
+    )
+    .await?;
+
+    // Adopt the new DEK locally, then re-seal it to the remaining members.
+    vault::save_key(&new_dek).map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
+    let granted = vault::process_grants(&org_id, &token).await?;
+    Ok(granted)
 }
 
 // ===========================================================================

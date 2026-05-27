@@ -418,13 +418,21 @@ pub async fn cloud_clear_org_dek() -> Result<(), String> {
 /// sign-in, when a member joins). No-op / 403 if we don't own the org.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn cloud_process_grants(org_id: String) -> Result<usize, super::api::ApiError> {
-    use super::api;
-    let token = super::auth::current_token().ok_or_else(|| api::ApiError::Server {
+    let token = super::auth::current_token().ok_or_else(|| super::api::ApiError::Server {
         status: 401,
         code: "unauthenticated".into(),
         message: None,
     })?;
-    let pending = match localforge_cloud_client::keys::pending_grants(&org_id, &token).await {
+    process_grants(&org_id, &token).await
+}
+
+/// Seal OUR org DEK to every member of `org_id` who has a published key but no
+/// grant yet. Reused by the grant-on-presence flow AND by DEK rotation (after
+/// a rotation, all grants were wiped → everyone is "pending" → re-sealed with
+/// the new DEK). 403 (not the owner) → no-op.
+pub async fn process_grants(org_id: &str, token: &str) -> Result<usize, super::api::ApiError> {
+    use super::api;
+    let pending = match localforge_cloud_client::keys::pending_grants(org_id, token).await {
         Ok(p) => p,
         // Not the owner of this org → nothing for us to do.
         Err(api::ApiError::Server { status: 403, .. }) => return Ok(0),
@@ -447,7 +455,7 @@ pub async fn cloud_process_grants(org_id: String) -> Result<usize, super::api::A
         let Ok((epk_b64, sealed)) = crypto::seal_to(&pk_bytes, &dek) else {
             continue;
         };
-        if localforge_cloud_client::keys::put_grant(&org_id, &m.user_id, &sealed, &epk_b64, &token)
+        if localforge_cloud_client::keys::put_grant(org_id, &m.user_id, &sealed, &epk_b64, token)
             .await
             .is_ok()
         {

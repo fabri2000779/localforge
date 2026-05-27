@@ -208,6 +208,7 @@ fn main() {
             cloud::vault::cloud_process_grants,
             cloud::sync::cloud_sync_now,
             cloud::sync::cloud_sync_pull,
+            cloud::sync::cloud_rotate_org_dek,
             cloud::sync::cloud_sync_nodes_now,
             cloud::relay::cloud_relay_start,
             cloud::relay::cloud_relay_stop,
