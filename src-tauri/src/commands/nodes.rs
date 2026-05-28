@@ -51,6 +51,20 @@ pub async fn set_machine_name(
         .map_err(|e| e.to_string())
 }
 
+/// Mark the first-run "name this machine" prompt as handled (accepted or
+/// skipped). Writes a timestamp into `this_machine.toml` so the dialog is
+/// gated by app state, not WebView localStorage — survives reinstalls,
+/// dev/prod switching and any WebView profile reset.
+#[tauri::command]
+pub async fn set_machine_name_prompt_dismissed(
+    state: State<'_, NodeRegistry>,
+) -> Result<ThisMachine, String> {
+    state
+        .set_name_prompt_dismissed()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Try to reach a candidate agent — used by the "Test connection" button
 /// in the Add Node wizard. Returns the agent's Docker info so the UI can
 /// surface "you're connected to a 4-core Debian 12 host" feedback.

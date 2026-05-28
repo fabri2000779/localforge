@@ -47,6 +47,17 @@ pub struct RemoteNodeForSync {
 pub struct ThisMachine {
     pub id: String,
     pub name: String,
+    /// Unix-ms when the user accepted or skipped the "name this machine"
+    /// first-run prompt. Lives here (not in localStorage) because the dialog
+    /// gate must survive WebView profile resets, reinstalls and dev/prod
+    /// switching — anything `~/LocalForge/` survives, the browser store
+    /// doesn't. `None` means the user has never dismissed it.
+    ///
+    /// Optional with a serde default so older `this_machine.toml` files
+    /// (without this field) deserialise cleanly, and `skip_serializing_if`
+    /// keeps the toml clean when the prompt hasn't been dismissed yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_prompt_dismissed_at: Option<i64>,
 }
 
 /// Best-effort OS hostname for the default machine name. The user can
@@ -135,6 +146,7 @@ impl NodeRegistry {
         let machine = ThisMachine {
             id: uuid::Uuid::new_v4().to_string(),
             name: default_machine_name(),
+            name_prompt_dismissed_at: None,
         };
         if let Ok(body) = toml::to_string(&machine) {
             let _ = std::fs::write(&path, body);
@@ -185,6 +197,32 @@ impl NodeRegistry {
         }
         if let Some(rec) = state.records.get_mut(&NodeId::local()) {
             rec.label = name;
+        }
+        state.this_machine = Some(machine.clone());
+        Ok(machine)
+    }
+
+    /// Record that the user dismissed (accepted or skipped) the first-run
+    /// "name this machine" prompt. Persists a timestamp into
+    /// `this_machine.toml` so the dialog never fires again on this device,
+    /// no matter what the WebView's localStorage does. Idempotent — the
+    /// original timestamp wins if called multiple times.
+    pub async fn set_name_prompt_dismissed(&self) -> anyhow::Result<ThisMachine> {
+        let mut state = self.inner.write().await;
+        let mut machine = state
+            .this_machine
+            .clone()
+            .unwrap_or_else(Self::load_or_create_this_machine);
+        if machine.name_prompt_dismissed_at.is_none() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            machine.name_prompt_dismissed_at = Some(now);
+        }
+        if let Ok(body) = toml::to_string(&machine) {
+            std::fs::write(Self::this_machine_file(), body)
+                .map_err(|e| anyhow::anyhow!("failed to persist machine identity: {e}"))?;
         }
         state.this_machine = Some(machine.clone());
         Ok(machine)

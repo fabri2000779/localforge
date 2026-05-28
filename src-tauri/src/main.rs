@@ -181,6 +181,7 @@ fn main() {
             commands::nodes::list_nodes,
             commands::nodes::get_this_machine,
             commands::nodes::set_machine_name,
+            commands::nodes::set_machine_name_prompt_dismissed,
             commands::nodes::test_remote_node,
             commands::nodes::add_remote_node,
             commands::nodes::remove_node,

@@ -138,6 +138,11 @@ export interface NodeRecord {
 export interface ThisMachine {
   id: string;
   name: string;
+  /** Unix-ms when the user accepted/skipped the first-run "name this machine"
+   *  prompt. Persisted in `~/LocalForge/this_machine.toml` so the dialog never
+   *  fires twice on the same install — see MachineNameDialog. Undefined/null
+   *  on toml files written before this field existed. */
+  name_prompt_dismissed_at?: number | null;
 }
 
 /** A machine registered in the cloud org — a desktop OR an agent — as

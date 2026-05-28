@@ -7,26 +7,41 @@
  * enrolled agent — that label is how you tell them apart in the fleet
  * switcher + Servers grouping. A raw hostname like `DESKTOP-7F3K9Q2` is
  * useless there, so we ask once, pre-filled, and let the user confirm or
- * rename. Shown a single time (localStorage flag); never nags again — the
- * label is always editable later from the Nodes page.
+ * rename. Shown a single time per install; never nags again — the label
+ * is always editable later from the Nodes page.
+ *
+ * Gate lives in `this_machine.toml` (Rust side) — not localStorage —
+ * because the WebView's local storage gets wiped under several real
+ * scenarios (dev vs prod profile, WebView2 reset, reinstall), and
+ * `~/LocalForge/` survives them. The dialog reads
+ * `thisMachine.name_prompt_dismissed_at`; on accept/skip we call
+ * `dismissMachineNamePrompt` which persists the timestamp.
+ *
+ * Migration: anyone whose previous install set the old localStorage flag
+ * (`lf.onboard.machine.v1`) gets it mirrored into the toml on first launch
+ * of this version, so they don't get re-prompted.
  *
  * Waits for the local node to exist (Docker up → `thisMachine` populated)
  * before appearing, since there's nothing to name until then.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Server, Check } from 'lucide-react';
 import { useNodesStore } from '../stores/nodesStore';
 
-const SEEN_KEY = 'lf.onboard.machine.v1';
+const LEGACY_SEEN_KEY = 'lf.onboard.machine.v1';
 
 export function MachineNameDialog() {
   const thisMachine = useNodesStore((s) => s.thisMachine);
   const fetchThisMachine = useNodesStore((s) => s.fetchThisMachine);
   const renameMachine = useNodesStore((s) => s.renameMachine);
+  const dismissPrompt = useNodesStore((s) => s.dismissMachineNamePrompt);
 
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
+  // Guards the one-time legacy migration so it can't loop while the store
+  // refreshes `thisMachine`.
+  const migratedRef = useRef(false);
 
   // Make sure we have the identity loaded (the bridge also fetches it, but
   // this covers the signed-out local-only path).
@@ -34,22 +49,46 @@ export function MachineNameDialog() {
     if (!thisMachine) void fetchThisMachine();
   }, [thisMachine, fetchThisMachine]);
 
-  // Open once, when the identity is known and we've never asked before.
+  // One-time migration: if the previous (localStorage-gated) version
+  // already recorded a dismissal here, mirror it into the toml so this
+  // device is silenced going forward regardless of WebView state.
+  useEffect(() => {
+    if (migratedRef.current) return;
+    if (!thisMachine) return;
+    if (thisMachine.name_prompt_dismissed_at) {
+      migratedRef.current = true;
+      return;
+    }
+    if (typeof localStorage === 'undefined') return;
+    if (!localStorage.getItem(LEGACY_SEEN_KEY)) return;
+    migratedRef.current = true;
+    void dismissPrompt().catch(() => { /* best-effort — non-fatal */ });
+  }, [thisMachine, dismissPrompt]);
+
+  // Open once, when the identity is known and the prompt has never been
+  // dismissed on this install.
   useEffect(() => {
     if (open) return;
     if (!thisMachine) return;
-    if (typeof localStorage !== 'undefined' && localStorage.getItem(SEEN_KEY)) return;
+    if (thisMachine.name_prompt_dismissed_at) return;
+    // Wait one tick if we're about to migrate from legacy localStorage so
+    // we don't briefly flash the dialog before the toml catches up.
+    if (
+      typeof localStorage !== 'undefined' &&
+      localStorage.getItem(LEGACY_SEEN_KEY)
+    ) {
+      return;
+    }
     setName(thisMachine.name);
     setOpen(true);
   }, [thisMachine, open]);
 
   function dismiss() {
-    try {
-      localStorage.setItem(SEEN_KEY, '1');
-    } catch {
-      /* private mode — worst case we ask again next launch */
-    }
     setOpen(false);
+    // Authoritative: persist in the toml. Best-effort + non-blocking — if
+    // it fails (disk full, perms) the worst case is we ask again next
+    // launch, never any data loss.
+    void dismissPrompt().catch(() => {});
   }
 
   async function save() {

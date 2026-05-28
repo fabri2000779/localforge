@@ -61,6 +61,11 @@ interface NodesState {
    *  identity on the Rust side, then re-fetches so the label refreshes
    *  everywhere. The machine's stable id is never changed. */
   renameMachine: (name: string) => Promise<void>;
+  /** Record that the first-run "name this machine" prompt was handled
+   *  (accepted or skipped). Persisted in `this_machine.toml` so it
+   *  survives WebView resets / reinstalls / dev↔prod, unlike
+   *  localStorage. */
+  dismissMachineNamePrompt: () => Promise<void>;
   installCommand: (params: {
     domain?: string;
     label?: string;
@@ -182,6 +187,13 @@ export const useNodesStore = create<NodesState>((set, get) => ({
   renameMachine: async (name: string) => {
     await invoke('set_machine_name', { name });
     await get().fetchNodes();
+  },
+
+  dismissMachineNamePrompt: async () => {
+    // Returns the updated ThisMachine — fold it into the store directly so
+    // every subscriber sees the new timestamp without a separate refetch.
+    const thisMachine = await invoke<ThisMachine>('set_machine_name_prompt_dismissed');
+    set({ thisMachine });
   },
 
   installCommand: async ({ domain, label, version }) =>
