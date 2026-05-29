@@ -300,7 +300,7 @@ async fn handle_cmd(
         // ----- backups over relay (uses this node's provisioned target) ------
         // The S3 secret never travels the relay: the desktop provisioned it to
         // this agent over direct HTTPS, and we resolve it locally here.
-        "server.backups_list" => match crate::backup_target::load(&data_root) {
+        "server.backups_list" => match crate::backup_target::find(&data_root, args.get("targetId").and_then(|v| v.as_str())) {
             Some(t) => match backend.list_backups(&target, &t).await {
                 Ok(list) => {
                     let _ = out.send(
@@ -313,7 +313,7 @@ async fn handle_cmd(
             None => cmd_result(&out, &rid, &cmd, &target, false, Some(NO_TARGET.into())),
         },
 
-        "server.backup_now" => match crate::backup_target::load(&data_root) {
+        "server.backup_now" => match crate::backup_target::find(&data_root, args.get("targetId").and_then(|v| v.as_str())) {
             Some(t) => match backend.create_backup(&target, &t).await {
                 Ok(_key) => cmd_result(&out, &rid, &cmd, &target, true, None),
                 Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),
@@ -323,7 +323,7 @@ async fn handle_cmd(
 
         "server.restore_backup" => {
             let key = args.get("key").and_then(Value::as_str).unwrap_or("").to_string();
-            match crate::backup_target::load(&data_root) {
+            match crate::backup_target::find(&data_root, args.get("targetId").and_then(|v| v.as_str())) {
                 Some(t) => match backend.restore_backup(&target, &t, &key).await {
                     Ok(()) => cmd_result(&out, &rid, &cmd, &target, true, None),
                     Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),
@@ -334,7 +334,7 @@ async fn handle_cmd(
 
         "server.delete_backup" => {
             let key = args.get("key").and_then(Value::as_str).unwrap_or("").to_string();
-            match crate::backup_target::load(&data_root) {
+            match crate::backup_target::find(&data_root, args.get("targetId").and_then(|v| v.as_str())) {
                 Some(t) => match backend.delete_backup(&t, &key).await {
                     Ok(()) => cmd_result(&out, &rid, &cmd, &target, true, None),
                     Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),

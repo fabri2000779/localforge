@@ -187,6 +187,11 @@ fn main() {
             commands::nodes::get_this_machine,
             commands::nodes::set_machine_name,
             commands::nodes::set_machine_name_prompt_dismissed,
+            commands::backups::cloud_list_backup_targets,
+            commands::backups::cloud_add_backup_target,
+            commands::backups::cloud_remove_backup_target,
+            commands::backups::cloud_pull_backup_targets,
+            // legacy compat
             commands::backups::cloud_set_backup_target,
             commands::backups::cloud_get_backup_target,
             commands::backups::cloud_clear_backup_target,

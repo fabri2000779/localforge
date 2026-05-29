@@ -15,8 +15,8 @@ use axum::{middleware, Json, Router};
 use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use localforge_core::types::{
     BackupEntry, BackupTarget, ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo,
-    FileEntry, GameConfig, InstallEvent, MetricPoint, NodeStats, Player, PlayerAction, Schedule,
-    Server, ServerStatus,
+    FileEntry, GameConfig, InstallEvent, MetricPoint, NodeStats, OrgBackupTarget, Player,
+    PlayerAction, Schedule, Server, ServerStatus,
 };
 use localforge_core::NodeBackend;
 use serde::{Deserialize, Serialize};
@@ -65,9 +65,10 @@ pub fn router(state: AppState) -> Router {
         .route("/servers/{id}/backups/list", post(backups_list))
         .route("/servers/{id}/restore", post(restore_backup))
         .route("/servers/{id}/backups/delete", post(delete_backup))
-        // S3 target provisioning: the desktop pushes its credentials here over
-        // direct HTTPS so the agent can run relay-triggered backups itself.
-        .route("/backup-target", put(set_backup_target).delete(clear_backup_target))
+        // S3 target provisioning: the desktop pushes the full named list here
+        // over direct HTTPS so the agent can run relay-triggered backups itself.
+        // The PUT replaces the stored list atomically.
+        .route("/backup-targets", put(set_backup_targets))
         // scheduled actions
         .route("/servers/{id}/schedules", get(list_schedules).post(upsert_schedule))
         .route("/schedules/{sid}", delete(delete_schedule))
@@ -482,16 +483,11 @@ fn io_error(e: std::io::Error) -> ApiError {
     }
 }
 
-async fn set_backup_target(
+async fn set_backup_targets(
     State(s): State<AppState>,
-    Json(target): Json<BackupTarget>,
+    Json(targets): Json<Vec<OrgBackupTarget>>,
 ) -> Result<StatusCode, ApiError> {
-    crate::backup_target::save(&s.data_root, &target).map_err(io_error)?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn clear_backup_target(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
-    crate::backup_target::clear(&s.data_root).map_err(io_error)?;
+    crate::backup_target::save(&s.data_root, &targets).map_err(io_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

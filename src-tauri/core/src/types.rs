@@ -382,6 +382,39 @@ pub struct BackupTargetView {
     pub path_style: bool,
 }
 
+/// A named S3 backup destination belonging to an org. `id` is a stable
+/// client-generated UUID; `name` is the user's label ("Production S3", …).
+/// The org stores a list of these; any device in the org decrypts + caches
+/// them with the org DEK, and relay backup cmds reference one by `targetId`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgBackupTarget {
+    pub id: String,
+    pub name: String,
+    #[serde(flatten)]
+    pub credentials: BackupTarget,
+}
+
+impl OrgBackupTarget {
+    pub fn view(&self) -> OrgBackupTargetView {
+        OrgBackupTargetView {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            credentials: self.credentials.view(),
+        }
+    }
+}
+
+/// Non-secret projection of an [`OrgBackupTarget`] for display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgBackupTargetView {
+    pub id: String,
+    pub name: String,
+    #[serde(flatten)]
+    pub credentials: BackupTargetView,
+}
+
 // ---------------------------------------------------------------------------
 // Scheduled actions
 // ---------------------------------------------------------------------------

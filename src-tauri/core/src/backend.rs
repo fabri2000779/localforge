@@ -11,8 +11,8 @@
 
 use crate::types::{
     BackupEntry, BackupTarget, ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo,
-    FileEntry, GameConfig, InstallEvent, MetricPoint, NodeStats, Player, PlayerAction, Schedule,
-    Server, ServerStatus,
+    FileEntry, GameConfig, InstallEvent, MetricPoint, NodeStats, OrgBackupTarget, Player,
+    PlayerAction, Schedule, Server, ServerStatus,
 };
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
@@ -265,19 +265,14 @@ pub trait NodeBackend: Send + Sync {
         ))
     }
 
-    /// Provision the S3 backup target onto this node so it can run
+    /// Provision the full org backup-target list onto this node so it can run
     /// relay-triggered backups by itself (e.g. when the mobile app fires one
     /// and the owner's desktop is offline). Default is a no-op: the local
-    /// backend resolves credentials elsewhere (the desktop keychain, or the
-    /// agent's own provisioned store). Only the remote-agent client overrides
-    /// this — and it pushes over its direct HTTPS channel, never the relay.
-    async fn set_backup_target(&self, target: &BackupTarget) -> Result<()> {
-        let _ = target;
-        Ok(())
-    }
-
-    /// Forget a previously provisioned backup target (idempotent).
-    async fn clear_backup_target(&self) -> Result<()> {
+    /// backend resolves credentials from the keychain directly. Only the
+    /// remote-agent client overrides this — pushes over direct HTTPS, never
+    /// the relay, so the secret never transits Cloudflare.
+    async fn set_backup_targets(&self, targets: &[OrgBackupTarget]) -> Result<()> {
+        let _ = targets;
         Ok(())
     }
 

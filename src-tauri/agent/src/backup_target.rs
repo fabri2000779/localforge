@@ -1,45 +1,61 @@
-//! Persistent S3 backup target for relay-triggered backups.
+//! Persistent S3 backup-target list for relay-triggered backups.
 //!
-//! The desktop owns the S3 credentials (OS keychain) and PROVISIONS them to
-//! each linked agent over **direct HTTPS** (`PUT /backup-target`). That lets the
-//! agent run backups by itself when the mobile app triggers them over the relay
-//! — the secret never travels through Cloudflare/the relay, only over the
-//! desktop→agent TLS channel. Stored as JSON in the agent's `data_root` with
-//! 0600 perms (the same trust level as `agent.toml`, which already holds the
-//! node token).
+//! The desktop pushes the org's full named list over **direct HTTPS**
+//! (`PUT /backup-targets`) so the agent can execute relay-triggered backups
+//! (e.g. from the mobile app) even when the owner's desktop is offline.
+//! Stored as a JSON array in `<data_root>/backup-targets.json` with 0600 perms.
 
-use localforge_core::types::BackupTarget;
+use localforge_core::types::{BackupTarget, OrgBackupTarget};
 use std::path::{Path, PathBuf};
 
-fn target_path(data_root: &Path) -> PathBuf {
-    data_root.join("backup-target.json")
+fn path(data_root: &Path) -> PathBuf {
+    data_root.join("backup-targets.json")
 }
 
-/// The provisioned target, or `None` if the desktop hasn't pushed creds here.
-pub fn load(data_root: &Path) -> Option<BackupTarget> {
-    let s = std::fs::read_to_string(target_path(data_root)).ok()?;
-    serde_json::from_str(&s).ok()
+/// All provisioned targets, or empty when none have been pushed yet.
+pub fn load(data_root: &Path) -> Vec<OrgBackupTarget> {
+    match std::fs::read_to_string(path(data_root)) {
+        Ok(s) => {
+            // Try Vec (new format); fall back to single BackupTarget (old format migration).
+            if let Ok(v) = serde_json::from_str::<Vec<OrgBackupTarget>>(&s) {
+                return v;
+            }
+            if let Ok(t) = serde_json::from_str::<BackupTarget>(&s) {
+                return vec![OrgBackupTarget {
+                    id: "local-default".into(),
+                    name: "Default".into(),
+                    credentials: t,
+                }];
+            }
+            Vec::new()
+        }
+        Err(_) => Vec::new(),
+    }
 }
 
-/// Store (or replace) the provisioned target.
-pub fn save(data_root: &Path, target: &BackupTarget) -> std::io::Result<()> {
-    let path = target_path(data_root);
-    if let Some(parent) = path.parent() {
+/// Replace the stored list atomically (temp-file + rename so a crash can't
+/// corrupt the file).
+pub fn save(data_root: &Path, targets: &[OrgBackupTarget]) -> std::io::Result<()> {
+    let p = path(data_root);
+    if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(target)
+    let json = serde_json::to_string_pretty(targets)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(&path, json)?;
-    restrict_perms(&path);
-    Ok(())
+    let mut tmp = p.clone().into_os_string();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, &json)?;
+    restrict_perms(&tmp);
+    std::fs::rename(&tmp, &p)
 }
 
-/// Forget the provisioned target (idempotent — missing file is success).
-pub fn clear(data_root: &Path) -> std::io::Result<()> {
-    match std::fs::remove_file(target_path(data_root)) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
+/// Find by id; when `id` is None returns the first entry's credentials.
+pub fn find(data_root: &Path, id: Option<&str>) -> Option<BackupTarget> {
+    let list = load(data_root);
+    match id {
+        Some(id) => list.into_iter().find(|t| t.id == id).map(|t| t.credentials),
+        None => list.into_iter().next().map(|t| t.credentials),
     }
 }
 

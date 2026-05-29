@@ -15,7 +15,7 @@ use super::{api, auth, vault};
 use crate::backend::NodeRegistry;
 use crate::backend::registry::RemoteNodeForSync;
 use localforge_backend_remote::RemoteAgentConfig;
-use localforge_core::types::{BackupTarget, GameType, Server};
+use localforge_core::types::{BackupTarget, GameType, OrgBackupTarget, Server};
 
 /// What we actually serialise + encrypt per server. NOT the full Server
 /// — we drop container_id, data_path, install state, all of which are
@@ -456,67 +456,90 @@ pub async fn cloud_rotate_org_dek(
 // org gets 402 from the sync gate, which callers treat as "stays local".
 // ===========================================================================
 
-/// Push the org's S3 target to the cloud, encrypted with the active org DEK.
-pub async fn push_backup_target(target: &BackupTarget) -> Result<(), api::ApiError> {
-    let token = auth::current_token().ok_or_else(|| api::ApiError::Server {
+// ===========================================================================
+// Org backup targets (multi) — push/pull/delete individual named entries.
+// ===========================================================================
+
+fn require_token() -> Result<String, api::ApiError> {
+    auth::current_token().ok_or_else(|| api::ApiError::Server {
         status: 401,
         code: "unauthenticated".into(),
         message: None,
-    })?;
-    let dek = vault::active_dek().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
-    let plaintext =
-        serde_json::to_vec(target).map_err(|e| api::ApiError::Decode(format!("serialize: {e}")))?;
-    let blob = vault::encrypt(&dek, &plaintext)
-        .map_err(|e| api::ApiError::Decode(format!("encrypt: {e}")))?;
+    })
+}
+
+fn get_dek() -> Result<[u8; 32], api::ApiError> {
+    vault::active_dek().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))
+}
+
+/// Push one named target to the cloud, encrypting the credentials with the
+/// org DEK. Creates or updates (matched by id).
+pub async fn push_backup_target(t: &OrgBackupTarget) -> Result<(), api::ApiError> {
+    let token = require_token()?;
+    let dek = get_dek()?;
+    let plain = serde_json::to_vec(&t.credentials)
+        .map_err(|e| api::ApiError::Decode(format!("serialize: {e}")))?;
+    let blob =
+        vault::encrypt(&dek, &plain).map_err(|e| api::ApiError::Decode(format!("encrypt: {e}")))?;
     #[derive(Serialize)]
     struct Body<'a> {
+        id: &'a str,
+        name: &'a str,
         #[serde(rename = "encryptedBlob")]
         encrypted_blob: &'a str,
     }
-    let _: serde_json::Value = api::put(
-        "/v1/sync/backup-target",
-        &Body {
-            encrypted_blob: &blob,
-        },
+    let _: serde_json::Value = api::post(
+        "/v1/sync/backup-targets",
+        &Body { id: &t.id, name: &t.name, encrypted_blob: &blob },
         Some(&token),
     )
     .await?;
     Ok(())
 }
 
-/// Pull + decrypt the org's S3 target, if one is set. `None` when the org has
-/// no target (or this device lacks the DEK to read it).
-pub async fn pull_backup_target() -> Result<Option<BackupTarget>, api::ApiError> {
-    let token = auth::current_token().ok_or_else(|| api::ApiError::Server {
-        status: 401,
-        code: "unauthenticated".into(),
-        message: None,
-    })?;
+/// Pull + decrypt all org backup targets. Returns an empty vec when the org
+/// has none set, or when the DEK is unavailable.
+pub async fn pull_backup_targets() -> Result<Vec<OrgBackupTarget>, api::ApiError> {
+    let token = require_token()?;
+    let dek = get_dek()?;
+    #[derive(Deserialize)]
+    struct Row {
+        id: String,
+        name: String,
+        #[serde(rename = "encryptedBlob")]
+        encrypted_blob: String,
+    }
     #[derive(Deserialize)]
     struct Resp {
-        #[serde(rename = "encryptedBlob")]
-        encrypted_blob: Option<String>,
+        targets: Vec<Row>,
     }
-    let r: Resp = api::get("/v1/sync/backup-target", Some(&token)).await?;
-    let Some(blob) = r.encrypted_blob else {
-        return Ok(None);
-    };
-    let dek = vault::active_dek().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
-    let plaintext = vault::decrypt(&dek, &blob)
-        .map_err(|e| api::ApiError::Decode(format!("decrypt: {e}")))?;
-    let target: BackupTarget = serde_json::from_slice(&plaintext)
-        .map_err(|e| api::ApiError::Decode(format!("parse: {e}")))?;
-    Ok(Some(target))
+    let r: Resp = api::get("/v1/sync/backup-targets", Some(&token)).await?;
+    let mut out = Vec::with_capacity(r.targets.len());
+    for row in r.targets {
+        let plain = vault::decrypt(&dek, &row.encrypted_blob)
+            .map_err(|e| api::ApiError::Decode(format!("decrypt {}: {e}", row.id)))?;
+        let credentials: BackupTarget = serde_json::from_slice(&plain)
+            .map_err(|e| api::ApiError::Decode(format!("parse {}: {e}", row.id)))?;
+        out.push(OrgBackupTarget { id: row.id, name: row.name, credentials });
+    }
+    Ok(out)
 }
 
-/// Remove the org's S3 target from the cloud (owner/admin clearing it).
+/// Remove one org backup target from the cloud by id.
+pub async fn delete_backup_target_remote(id: &str) -> Result<(), api::ApiError> {
+    let token = require_token()?;
+    let _: serde_json::Value =
+        api::delete(&format!("/v1/sync/backup-targets/{}", id), Some(&token)).await?;
+    Ok(())
+}
+
+// Legacy compat (kept for callers that haven't migrated):
 pub async fn clear_backup_target_remote() -> Result<(), api::ApiError> {
-    let token = auth::current_token().ok_or_else(|| api::ApiError::Server {
-        status: 401,
-        code: "unauthenticated".into(),
-        message: None,
-    })?;
-    let _: serde_json::Value = api::delete("/v1/sync/backup-target", Some(&token)).await?;
+    // Delete all targets one by one (best-effort; free orgs get 402 which we ignore).
+    let targets = pull_backup_targets().await.unwrap_or_default();
+    for t in targets {
+        let _ = delete_backup_target_remote(&t.id).await;
+    }
     Ok(())
 }
 

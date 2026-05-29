@@ -19,8 +19,8 @@ use localforge_core::backend::{
 };
 use localforge_core::types::{
     BackupEntry, BackupTarget, ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo,
-    FileEntry, GameConfig, InstallEvent, MetricPoint, NodeStats, Player, PlayerAction, Schedule,
-    Server, ServerStatus,
+    FileEntry, GameConfig, InstallEvent, MetricPoint, NodeStats, OrgBackupTarget, Player,
+    PlayerAction, Schedule, Server, ServerStatus,
 };
 use rustls::ClientConfig;
 use serde::{Deserialize, Serialize};
@@ -442,27 +442,15 @@ impl NodeBackend for RemoteAgentBackend {
         ensure_ok(resp).await
     }
 
-    /// Provision the S3 target onto the agent so it can run relay-triggered
-    /// backups itself. Pushed over this direct HTTPS channel — never the relay.
-    async fn set_backup_target(&self, target: &BackupTarget) -> Result<()> {
-        let url = self.endpoint("/v1/backup-target")?;
+    /// Provision the full backup-target list onto the agent (replaces whatever
+    /// it had). Pushed over this direct HTTPS channel — never the relay.
+    async fn set_backup_targets(&self, targets: &[OrgBackupTarget]) -> Result<()> {
+        let url = self.endpoint("/v1/backup-targets")?;
         let resp = self
             .http
             .put(url)
             .bearer_auth(&self.token)
-            .json(target)
-            .send()
-            .await
-            .map_err(transport)?;
-        ensure_ok(resp).await
-    }
-
-    async fn clear_backup_target(&self) -> Result<()> {
-        let url = self.endpoint("/v1/backup-target")?;
-        let resp = self
-            .http
-            .delete(url)
-            .bearer_auth(&self.token)
+            .json(targets)
             .send()
             .await
             .map_err(transport)?;
