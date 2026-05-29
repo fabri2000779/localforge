@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, Play, Square, Trash2, RefreshCw, Send, Folder, 
   Cpu, HardDrive, Terminal, Settings, RotateCcw, Copy, 
-  Clock, Network, FolderOpen, Check, Save, Globe, Wifi, ExternalLink, Key
+  Clock, Network, FolderOpen, Check, Save, Globe, Wifi, ExternalLink, Key, Archive, Activity, Users
 } from 'lucide-react';
 import { useServerStore } from '../stores/serverStore';
 import { useGamesStore } from '../stores/gamesStore';
@@ -17,8 +17,15 @@ import { ConsoleOutput } from '../components/ConsoleOutput';
 import { DeleteConfirmDialog } from '../components/DeleteConfirmDialog';
 import { GameIcon } from '../components/GameIcon';
 import { FileManager } from '../components/FileManager';
+import { BackupsPanel } from '../components/BackupsPanel';
+import { SchedulesPanel } from '../components/SchedulesPanel';
+import { MetricsPanel } from '../components/MetricsPanel';
+import { PlayersPanel } from '../components/PlayersPanel';
 
-type TabType = 'console' | 'files' | 'network' | 'settings';
+type TabType = 'console' | 'files' | 'network' | 'players' | 'backups' | 'schedules' | 'metrics' | 'settings';
+
+/** Games whose live roster + moderation the backend currently adapts. */
+const PLAYER_ADMIN_GAMES = new Set(['minecraft-java']);
 
 export function ServerDetail() {
   const { id } = useParams<{ id: string }>();
@@ -788,6 +795,48 @@ export function ServerDetail() {
         >
           <Globe size={18} /> Network
         </button>
+        {PLAYER_ADMIN_GAMES.has(server.game_type) && (
+          <button
+            onClick={() => setActiveTab('players')}
+            className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
+              activeTab === 'players'
+                ? 'bg-zinc-800 text-white'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+            }`}
+          >
+            <Users size={18} /> Players
+          </button>
+        )}
+        <button
+          onClick={() => setActiveTab('backups')}
+          className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
+            activeTab === 'backups'
+              ? 'bg-zinc-800 text-white'
+              : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+          }`}
+        >
+          <Archive size={18} /> Backups
+        </button>
+        <button
+          onClick={() => setActiveTab('schedules')}
+          className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
+            activeTab === 'schedules'
+              ? 'bg-zinc-800 text-white'
+              : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+          }`}
+        >
+          <Clock size={18} /> Schedules
+        </button>
+        <button
+          onClick={() => setActiveTab('metrics')}
+          className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
+            activeTab === 'metrics'
+              ? 'bg-zinc-800 text-white'
+              : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+          }`}
+        >
+          <Activity size={18} /> Metrics
+        </button>
         <button
           onClick={() => setActiveTab('settings')}
           className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
@@ -969,6 +1018,22 @@ export function ServerDetail() {
             </div>
           </div>
         </div>
+      )}
+
+      {activeTab === 'backups' && (
+        <BackupsPanel serverId={id!} nodeId={activeNodeId} />
+      )}
+
+      {activeTab === 'schedules' && (
+        <SchedulesPanel serverId={id!} nodeId={activeNodeId} />
+      )}
+
+      {activeTab === 'metrics' && (
+        <MetricsPanel serverId={id!} nodeId={activeNodeId} />
+      )}
+
+      {activeTab === 'players' && (
+        <PlayersPanel serverId={id!} nodeId={activeNodeId} />
       )}
 
       {activeTab === 'settings' && (

@@ -15,8 +15,9 @@ use localforge_core::backend::{
     BackendError, ByteStream, InstallStream, LogLine, LogStream, NodeBackend, Result,
 };
 use localforge_core::types::{
-    ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
-    InstallEvent, NodeStats, Server, ServerStatus,
+    BackupEntry, BackupTarget, ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo,
+    FileEntry, GameConfig, InstallEvent, MetricPoint, NodeStats, Player, PlayerAction, Schedule,
+    Server, ServerStatus,
 };
 use localforge_core::{build_env_vars, detect_oauth_url, PortConfig as CorePortConfig};
 use std::collections::HashMap;
@@ -459,6 +460,12 @@ impl NodeBackend for LocalDockerBackend {
             std::fs::remove_dir_all(&server.data_path).map_err(BackendError::io)?;
         }
         persistence::delete_server_record(&self.data_root, id).map_err(BackendError::io)?;
+
+        // Clean up host-side artifacts so a deleted server leaves no dead space.
+        // (S3 backups are intentionally kept — they're the user's off-box safety
+        // net and shouldn't vanish just because the local server was removed.)
+        crate::metrics::remove_server(&self.data_root, id);
+        let _ = crate::schedules::delete_for_server(&self.data_root, id);
         Ok(())
     }
 
@@ -715,6 +722,125 @@ impl NodeBackend for LocalDockerBackend {
             modified,
             extension,
         })
+    }
+
+    // ----- backups (bring-your-own S3) -----------------------------------
+
+    async fn create_backup(&self, id: &str, target: &BackupTarget) -> Result<String> {
+        let server = self.require_server(id)?;
+        let data_path = persistence::server_data_path(&self.data_root, &server);
+        if !data_path.exists() {
+            return Err(BackendError::not_found("server data directory"));
+        }
+        // Minecraft Java: flush the world to disk and pause autosave before
+        // archiving a RUNNING server, so the backup isn't a half-written region
+        // file. Best-effort — if the console doesn't respond we still take the
+        // (live) backup. Autosave is re-enabled afterwards regardless of the
+        // upload's outcome. (Bedrock + other games use different/no console
+        // save commands; for those v1 just archives live — the UI suggests
+        // stopping the server for a fully consistent snapshot.)
+        let flush =
+            server.game_type.0 == "minecraft-java" && server.status == ServerStatus::Running;
+        let cid = server.container_id.clone();
+        if flush {
+            if let Some(cid) = &cid {
+                let _ = self.docker.send_stdin(cid, "save-off\n").await;
+                let _ = self.docker.send_stdin(cid, "save-all flush\n").await;
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+            }
+        }
+        let res = crate::backups::upload(target, id, &data_path).await;
+        if flush {
+            if let Some(cid) = &cid {
+                let _ = self.docker.send_stdin(cid, "save-on\n").await;
+            }
+        }
+        res
+    }
+
+    async fn list_backups(&self, id: &str, target: &BackupTarget) -> Result<Vec<BackupEntry>> {
+        // Cheap existence guard so we never list for an unknown id.
+        self.require_server(id)?;
+        crate::backups::list(target, id).await
+    }
+
+    async fn restore_backup(&self, id: &str, target: &BackupTarget, key: &str) -> Result<()> {
+        let mut server = self.require_server(id)?;
+        let data_path = persistence::server_data_path(&self.data_root, &server);
+        // Restoring over a live world corrupts it — stop the container first.
+        if let Some(cid) = server.container_id.clone() {
+            let _ = self.docker.stop_container(&cid).await;
+            if let Ok(status) = self.docker.get_container_status(&cid).await {
+                server.status = status;
+                let _ = persistence::save_server(&self.data_root, &server);
+            }
+        }
+        // Move the current data aside (never destroy it) before extracting, so a
+        // failed restore stays recoverable.
+        if data_path.exists() {
+            let aside =
+                data_path.with_extension(format!("bak-{}", chrono::Utc::now().timestamp()));
+            std::fs::rename(&data_path, &aside).map_err(BackendError::io)?;
+        }
+        create_server_data_dir(&data_path)?;
+        crate::backups::download_extract(target, key, &data_path).await
+    }
+
+    async fn delete_backup(&self, target: &BackupTarget, key: &str) -> Result<()> {
+        crate::backups::delete(target, key).await
+    }
+
+    // ----- scheduled actions ---------------------------------------------
+
+    async fn list_schedules(&self, server_id: &str) -> Result<Vec<Schedule>> {
+        Ok(crate::schedules::list_for(&self.data_root, server_id))
+    }
+
+    async fn upsert_schedule(&self, schedule: Schedule) -> Result<()> {
+        crate::schedules::upsert(&self.data_root, schedule).map_err(BackendError::io)
+    }
+
+    async fn delete_schedule(&self, id: &str) -> Result<()> {
+        crate::schedules::delete(&self.data_root, id).map_err(BackendError::io)
+    }
+
+    // ----- metrics history -----------------------------------------------
+
+    async fn query_metrics(&self, server_id: &str, since_ms: i64) -> Result<Vec<MetricPoint>> {
+        crate::metrics::query_range(&self.data_root, server_id, since_ms)
+            .await
+            .map_err(BackendError::other)
+    }
+
+    // ----- player administration -----------------------------------------
+
+    async fn list_players(&self, server_id: &str) -> Result<Vec<Player>> {
+        let server = self.require_server(server_id)?;
+        // Only meaningful while running, and only for games we adapt.
+        if server.status != ServerStatus::Running || !crate::players::supports(&server.game_type.0) {
+            return Ok(Vec::new());
+        }
+        let cid = server
+            .container_id
+            .ok_or_else(|| BackendError::invalid("server has no container"))?;
+        crate::players::list_players_mc(&self.docker, &cid)
+            .await
+            .map_err(BackendError::other)
+    }
+
+    async fn player_action(&self, server_id: &str, action: PlayerAction) -> Result<()> {
+        let server = self.require_server(server_id)?;
+        if !crate::players::supports(&server.game_type.0) {
+            return Err(BackendError::Other(
+                "player administration is not supported for this game".into(),
+            ));
+        }
+        let cid = server
+            .container_id
+            .ok_or_else(|| BackendError::invalid("server has no container"))?;
+        crate::players::player_action_mc(&self.docker, &cid, &action)
+            .await
+            .map_err(BackendError::other)
     }
 }
 

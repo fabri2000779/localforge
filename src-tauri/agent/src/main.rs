@@ -22,6 +22,7 @@ use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 mod auth;
+mod backup_target;
 mod config;
 mod relay;
 mod routes;
@@ -180,10 +181,15 @@ async fn serve(config_path: &std::path::Path) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("local backend unreachable: {}", e))?;
     let backend: Arc<dyn NodeBackend> = Arc::new(backend);
 
+    // Start the host scheduler so cron actions fire 24/7 (the agent runs
+    // headless as a service — this is the intended home for schedules).
+    localforge_backend_local::spawn_scheduler(backend.clone(), cfg.data_root.clone());
+
     let app_state = routes::AppState {
         backend,
         token: cfg.token.clone(),
         config_path: config_path.to_path_buf(),
+        data_root: cfg.data_root.clone(),
         relay_started: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
@@ -200,7 +206,7 @@ async fn serve(config_path: &std::path::Path) -> anyhow::Result<()> {
         app_state
             .relay_started
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        relay::spawn(app_state.backend.clone(), link);
+        relay::spawn(app_state.backend.clone(), link, app_state.data_root.clone());
     }
 
     let tls_config = tls::rustls_config(&cfg.tls_cert_pem, &cfg.tls_key_pem).await?;

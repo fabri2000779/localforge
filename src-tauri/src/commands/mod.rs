@@ -1,9 +1,13 @@
 // Commands module - Tauri command handlers
 
+pub mod backups;
 pub mod docker;
 pub mod files;
 pub mod games;
+pub mod metrics;
 pub mod nodes;
+pub mod players;
+pub mod schedules;
 pub mod server;
 
 use crate::backend::{DynBackend, NodeRegistry};

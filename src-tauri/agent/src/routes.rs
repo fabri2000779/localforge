@@ -10,12 +10,13 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{middleware, Json, Router};
 use futures_util::{SinkExt, StreamExt, TryStreamExt};
 use localforge_core::types::{
-    ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
-    InstallEvent, NodeStats, Server, ServerStatus,
+    BackupEntry, BackupTarget, ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo,
+    FileEntry, GameConfig, InstallEvent, MetricPoint, NodeStats, Player, PlayerAction, Schedule,
+    Server, ServerStatus,
 };
 use localforge_core::NodeBackend;
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,9 @@ pub struct AppState {
     pub token: String,
     /// Path to agent.toml — `POST /link` persists the cloud link here.
     pub config_path: std::path::PathBuf,
+    /// Data root — where the provisioned S3 backup target is stored so the
+    /// agent can run relay-triggered backups without the secret on the wire.
+    pub data_root: std::path::PathBuf,
     /// Set once the relay client is running, so `POST /link` doesn't spawn a
     /// second connection loop.
     pub relay_started: Arc<std::sync::atomic::AtomicBool>,
@@ -54,6 +58,24 @@ pub fn router(state: AppState) -> Router {
         .route("/servers/{id}/stream", get(stream_logs))
         .route("/servers/{id}/install/stream", get(install_stream))
         .route("/servers/{id}/reset-data", post(reset_server_data))
+        // backups (BYO S3) — the target (incl. secret) travels in the body over
+        // this already-TLS'd channel. POST for list/delete too, since they
+        // carry the target body.
+        .route("/servers/{id}/backup", post(backup_now))
+        .route("/servers/{id}/backups/list", post(backups_list))
+        .route("/servers/{id}/restore", post(restore_backup))
+        .route("/servers/{id}/backups/delete", post(delete_backup))
+        // S3 target provisioning: the desktop pushes its credentials here over
+        // direct HTTPS so the agent can run relay-triggered backups itself.
+        .route("/backup-target", put(set_backup_target).delete(clear_backup_target))
+        // scheduled actions
+        .route("/servers/{id}/schedules", get(list_schedules).post(upsert_schedule))
+        .route("/schedules/{sid}", delete(delete_schedule))
+        // metrics history (local on this host)
+        .route("/servers/{id}/metrics", get(server_metrics))
+        // player administration (live roster + moderation)
+        .route("/servers/{id}/players", get(server_players))
+        .route("/servers/{id}/players/action", post(player_action))
         // file ops on the agent host
         .route("/fs", get(fs_list).delete(fs_delete))
         .route("/fs/read", post(fs_read))
@@ -314,6 +336,162 @@ async fn send_command(
         .send_command(&id, &body.command)
         .await
         .map_err(map_err)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ----- backups -------------------------------------------------------------
+
+#[derive(Serialize)]
+struct KeyResponse {
+    key: String,
+}
+
+async fn backup_now(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(target): Json<BackupTarget>,
+) -> Result<Json<KeyResponse>, ApiError> {
+    let key = s.backend.create_backup(&id, &target).await.map_err(map_err)?;
+    Ok(Json(KeyResponse { key }))
+}
+
+async fn backups_list(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(target): Json<BackupTarget>,
+) -> Result<Json<Vec<BackupEntry>>, ApiError> {
+    s.backend
+        .list_backups(&id, &target)
+        .await
+        .map(Json)
+        .map_err(map_err)
+}
+
+#[derive(Deserialize)]
+struct RestoreBody {
+    target: BackupTarget,
+    key: String,
+}
+
+async fn restore_backup(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<RestoreBody>,
+) -> Result<StatusCode, ApiError> {
+    s.backend
+        .restore_backup(&id, &body.target, &body.key)
+        .await
+        .map_err(map_err)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct DeleteBackupBody {
+    target: BackupTarget,
+    key: String,
+}
+
+async fn delete_backup(
+    State(s): State<AppState>,
+    Path(_id): Path<String>,
+    Json(body): Json<DeleteBackupBody>,
+) -> Result<StatusCode, ApiError> {
+    s.backend
+        .delete_backup(&body.target, &body.key)
+        .await
+        .map_err(map_err)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ----- scheduled actions ---------------------------------------------------
+
+async fn list_schedules(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<Schedule>>, ApiError> {
+    s.backend
+        .list_schedules(&id)
+        .await
+        .map(Json)
+        .map_err(map_err)
+}
+
+async fn upsert_schedule(
+    State(s): State<AppState>,
+    Path(_id): Path<String>,
+    Json(schedule): Json<Schedule>,
+) -> Result<StatusCode, ApiError> {
+    s.backend.upsert_schedule(schedule).await.map_err(map_err)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_schedule(
+    State(s): State<AppState>,
+    Path(sid): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    s.backend.delete_schedule(&sid).await.map_err(map_err)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ----- metrics history -----------------------------------------------------
+
+#[derive(Deserialize)]
+struct MetricsQuery {
+    since: Option<i64>,
+}
+
+async fn server_metrics(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<MetricsQuery>,
+) -> Result<Json<Vec<MetricPoint>>, ApiError> {
+    s.backend
+        .query_metrics(&id, q.since.unwrap_or(0))
+        .await
+        .map(Json)
+        .map_err(map_err)
+}
+
+// ----- player administration -----------------------------------------------
+
+async fn server_players(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<Player>>, ApiError> {
+    s.backend.list_players(&id).await.map(Json).map_err(map_err)
+}
+
+async fn player_action(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(action): Json<PlayerAction>,
+) -> Result<StatusCode, ApiError> {
+    s.backend
+        .player_action(&id, action)
+        .await
+        .map_err(map_err)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ----- backup target provisioning (desktop → agent, direct HTTPS) ----------
+
+fn io_error(e: std::io::Error) -> ApiError {
+    ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: e.to_string(),
+    }
+}
+
+async fn set_backup_target(
+    State(s): State<AppState>,
+    Json(target): Json<BackupTarget>,
+) -> Result<StatusCode, ApiError> {
+    crate::backup_target::save(&s.data_root, &target).map_err(io_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn clear_backup_target(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
+    crate::backup_target::clear(&s.data_root).map_err(io_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

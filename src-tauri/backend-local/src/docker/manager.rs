@@ -413,11 +413,27 @@ impl DockerManager {
                 0.0
             };
 
+            // Cumulative network counters, summed across all interfaces.
+            let (net_rx_bytes, net_tx_bytes) = stats
+                .networks
+                .as_ref()
+                .map(|nets| {
+                    nets.values().fold((0u64, 0u64), |(rx, tx), n| {
+                        (
+                            rx + n.rx_bytes.unwrap_or(0),
+                            tx + n.tx_bytes.unwrap_or(0),
+                        )
+                    })
+                })
+                .unwrap_or((0, 0));
+
             return Ok(ContainerStats {
                 cpu_percent,
                 memory_usage_mb: memory_usage,
                 memory_limit_mb: memory_limit,
                 memory_percent,
+                net_rx_bytes,
+                net_tx_bytes,
             });
         }
 
@@ -426,6 +442,8 @@ impl DockerManager {
             memory_usage_mb: 0.0,
             memory_limit_mb: 0.0,
             memory_percent: 0.0,
+            net_rx_bytes: 0,
+            net_tx_bytes: 0,
         })
     }
 

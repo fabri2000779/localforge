@@ -8,10 +8,15 @@
 //! on agents) is provided to [`LocalDockerBackend::connect`] so the same
 //! code path works in both environments.
 
+pub mod backups;
 pub mod docker;
+pub mod metrics;
 pub mod persistence;
+pub mod players;
+pub mod schedules;
 
 mod backend;
 pub use backend::LocalDockerBackend;
+pub use schedules::spawn_scheduler;
 
 pub use docker::{DockerError, DockerManager};

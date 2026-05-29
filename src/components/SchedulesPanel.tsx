@@ -1,0 +1,228 @@
+/**
+ * Schedules tab — cron-scheduled actions for a server.
+ *
+ * The host's scheduler loop (desktop while open, agent 24/7) fires these. The
+ * cron expression is standard 5-field (`min hour dom month dow`) in the host's
+ * local time. Actions: restart, run a console command, or broadcast a message.
+ */
+import { useCallback, useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import {
+  Clock, Plus, Trash2, Loader2, Power, RotateCcw, Terminal, Megaphone, Check, X,
+} from 'lucide-react';
+
+type ScheduleAction =
+  | { kind: 'restart' }
+  | { kind: 'command'; command: string }
+  | { kind: 'broadcast'; message: string };
+
+interface Schedule {
+  id: string;
+  serverId: string;
+  cron: string;
+  action: ScheduleAction;
+  enabled: boolean;
+  lastRun?: number | null;
+}
+
+const CRON_PRESETS: Array<{ label: string; cron: string }> = [
+  { label: 'Daily · 5:00 AM', cron: '0 5 * * *' },
+  { label: 'Every 6 hours', cron: '0 */6 * * *' },
+  { label: 'Every 12 hours', cron: '0 */12 * * *' },
+  { label: 'Weekly · Sun 4 AM', cron: '0 4 * * 0' },
+];
+
+function actionLabel(a: ScheduleAction): string {
+  if (a.kind === 'restart') return 'Restart';
+  if (a.kind === 'command') return `Command: ${a.command}`;
+  return `Broadcast: ${a.message}`;
+}
+function ActionIcon({ kind }: { kind: ScheduleAction['kind'] }) {
+  if (kind === 'restart') return <RotateCcw size={15} className="text-amber-400" />;
+  if (kind === 'command') return <Terminal size={15} className="text-sky-400" />;
+  return <Megaphone size={15} className="text-violet-400" />;
+}
+
+export function SchedulesPanel({ serverId, nodeId }: { serverId: string; nodeId: string }) {
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true); setErr(null);
+    try {
+      setSchedules(await invoke<Schedule[]>('list_schedules', { serverId, nodeId }));
+    } catch (e) { setErr(String(e)); }
+    finally { setLoading(false); }
+  }, [serverId, nodeId]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  async function save(s: Schedule) {
+    setBusy(s.id); setErr(null);
+    try {
+      await invoke('upsert_schedule', { schedule: s, nodeId });
+      await refresh();
+      setAdding(false);
+    } catch (e) { setErr(String(e)); }
+    finally { setBusy(null); }
+  }
+
+  async function toggle(s: Schedule) {
+    await save({ ...s, enabled: !s.enabled });
+  }
+
+  async function remove(id: string) {
+    if (!confirm('Delete this schedule?')) return;
+    setBusy(id); setErr(null);
+    try {
+      await invoke('delete_schedule', { id, nodeId });
+      setSchedules((cur) => cur.filter((x) => x.id !== id));
+    } catch (e) { setErr(String(e)); }
+    finally { setBusy(null); }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="card">
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2 font-medium text-zinc-200">
+            <Clock size={16} className="text-emerald-400" /> Scheduled actions
+          </div>
+          {!adding && (
+            <button className="btn btn-secondary btn-sm" onClick={() => setAdding(true)}>
+              <Plus size={13} /> New schedule
+            </button>
+          )}
+        </div>
+        <p className="text-xs text-zinc-500">
+          Runs on the host (this desktop while open, or the agent 24/7). Times are the host's local time.
+        </p>
+      </div>
+
+      {err && <div className="text-sm text-red-300 px-1 break-all">{err}</div>}
+
+      {adding && (
+        <ScheduleForm
+          serverId={serverId}
+          onCancel={() => setAdding(false)}
+          onSave={save}
+          saving={busy === 'new'}
+        />
+      )}
+
+      <div className="card">
+        {loading ? (
+          <div className="flex items-center gap-2 text-zinc-400 py-3"><Loader2 size={16} className="animate-spin" /> Loading…</div>
+        ) : schedules.length === 0 ? (
+          <p className="text-sm text-zinc-500 py-3">No schedules yet. Add one — e.g. a nightly restart.</p>
+        ) : (
+          <div className="divide-y divide-zinc-800">
+            {schedules.map((s) => (
+              <div key={s.id} className="flex items-center gap-3 py-2.5">
+                <ActionIcon kind={s.action.kind} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] text-zinc-200 truncate">{actionLabel(s.action)}</div>
+                  <div className="text-xs text-zinc-500 font-mono">{s.cron}{s.lastRun ? ` · last ${new Date(s.lastRun).toLocaleString()}` : ''}</div>
+                </div>
+                <button
+                  className={`icon-btn ${s.enabled ? 'text-emerald-400' : 'text-zinc-600'}`}
+                  title={s.enabled ? 'Enabled — click to pause' : 'Paused — click to enable'}
+                  onClick={() => toggle(s)}
+                  disabled={busy === s.id}
+                >
+                  {busy === s.id ? <Loader2 size={14} className="animate-spin" /> : <Power size={15} />}
+                </button>
+                <button className="icon-btn text-zinc-400 hover:text-red-400" title="Delete" onClick={() => remove(s.id)} disabled={busy === s.id}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ScheduleForm({
+  serverId, onSave, onCancel, saving,
+}: {
+  serverId: string;
+  onSave: (s: Schedule) => void;
+  onCancel: () => void;
+  saving: boolean;
+}) {
+  const [kind, setKind] = useState<ScheduleAction['kind']>('restart');
+  const [arg, setArg] = useState('');
+  const [cron, setCron] = useState('0 5 * * *');
+
+  function submit() {
+    let action: ScheduleAction;
+    if (kind === 'command') action = { kind: 'command', command: arg.trim() };
+    else if (kind === 'broadcast') action = { kind: 'broadcast', message: arg.trim() };
+    else action = { kind: 'restart' };
+    onSave({
+      id: crypto.randomUUID(),
+      serverId,
+      cron: cron.trim(),
+      action,
+      enabled: true,
+    });
+  }
+
+  const needsArg = kind !== 'restart';
+  const valid = cron.trim().split(/\s+/).length === 5 && (!needsArg || arg.trim().length > 0);
+
+  return (
+    <div className="card space-y-3">
+      <div className="font-medium text-zinc-200">New schedule</div>
+      <div>
+        <span className="text-[11px] uppercase tracking-wider font-semibold text-zinc-500">Action</span>
+        <div className="flex gap-1 mt-1">
+          {(['restart', 'command', 'broadcast'] as const).map((k) => (
+            <button
+              key={k}
+              type="button"
+              className={`px-3 py-1.5 rounded-lg text-sm capitalize ${kind === k ? 'bg-zinc-700 text-white' : 'bg-zinc-800/60 text-zinc-400 hover:text-white'}`}
+              onClick={() => setKind(k)}
+            >
+              {k}
+            </button>
+          ))}
+        </div>
+      </div>
+      {needsArg && (
+        <label className="block">
+          <span className="text-[11px] uppercase tracking-wider font-semibold text-zinc-500">
+            {kind === 'command' ? 'Console command' : 'Message'}
+          </span>
+          <input className="input w-full mt-1" value={arg} onChange={(e) => setArg(e.target.value)}
+            placeholder={kind === 'command' ? 'say Server restarting soon' : 'Restarting in 5 minutes'} />
+        </label>
+      )}
+      <div>
+        <span className="text-[11px] uppercase tracking-wider font-semibold text-zinc-500">When (cron)</span>
+        <div className="flex flex-wrap gap-1 mt-1 mb-2">
+          {CRON_PRESETS.map((p) => (
+            <button key={p.cron} type="button"
+              className={`px-2.5 py-1 rounded-md text-xs ${cron === p.cron ? 'bg-emerald-500/20 text-emerald-300' : 'bg-zinc-800/60 text-zinc-400 hover:text-white'}`}
+              onClick={() => setCron(p.cron)}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <input className="input w-full font-mono" value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 5 * * *" />
+        <p className="text-[11px] text-zinc-500 mt-1">5-field cron: minute hour day-of-month month day-of-week (host local time).</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <button className="btn btn-primary" onClick={submit} disabled={!valid || saving}>
+          {saving ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Add schedule
+        </button>
+        <button className="btn btn-secondary" onClick={onCancel} disabled={saving}><X size={15} /> Cancel</button>
+      </div>
+    </div>
+  );
+}

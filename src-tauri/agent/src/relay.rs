@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use localforge_core::types::ServerStatus;
+use localforge_core::types::{Schedule, ServerStatus};
 use localforge_core::{BackendError, NodeBackend};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -51,12 +51,13 @@ struct RelayFrame {
 }
 
 /// Spawn the relay client. Returns immediately; the loop runs for the life of
-/// the process, reconnecting with backoff (250ms → 30s).
-pub fn spawn(backend: Arc<dyn NodeBackend>, link: CloudLink) {
-    tokio::spawn(async move { run(backend, link).await });
+/// the process, reconnecting with backoff (250ms → 30s). `data_root` is where
+/// the provisioned S3 backup target lives (for relay-triggered backups).
+pub fn spawn(backend: Arc<dyn NodeBackend>, link: CloudLink, data_root: std::path::PathBuf) {
+    tokio::spawn(async move { run(backend, link, data_root).await });
 }
 
-async fn run(backend: Arc<dyn NodeBackend>, link: CloudLink) {
+async fn run(backend: Arc<dyn NodeBackend>, link: CloudLink, data_root: std::path::PathBuf) {
     let connector = relay_tls_connector();
     let host = link
         .api_origin
@@ -77,7 +78,7 @@ async fn run(backend: Arc<dyn NodeBackend>, link: CloudLink) {
             Ok(ws) => {
                 tracing::info!("[relay] connected as node {}", link.node_id);
                 backoff_ms = 250;
-                serve_connection(ws, backend.clone()).await;
+                serve_connection(ws, backend.clone(), data_root.clone()).await;
                 tracing::info!("[relay] disconnected; reconnecting");
             }
             Err(e) => tracing::warn!("[relay] connect failed: {}", e),
@@ -116,7 +117,7 @@ async fn connect(
     Ok(ws)
 }
 
-async fn serve_connection(mut ws: Ws, backend: Arc<dyn NodeBackend>) {
+async fn serve_connection(mut ws: Ws, backend: Arc<dyn NodeBackend>, data_root: std::path::PathBuf) {
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
     let attach: AttachMap = Arc::new(Mutex::new(HashMap::new()));
     let mut ping = tokio::time::interval(PING_INTERVAL);
@@ -139,7 +140,7 @@ async fn serve_connection(mut ws: Ws, backend: Arc<dyn NodeBackend>) {
                 Some(Ok(Message::Text(txt))) => {
                     if let Ok(f) = serde_json::from_str::<RelayFrame>(&txt) {
                         if f.ty == "cmd" {
-                            tokio::spawn(handle_cmd(f, backend.clone(), out_tx.clone(), attach.clone()));
+                            tokio::spawn(handle_cmd(f, backend.clone(), out_tx.clone(), attach.clone(), data_root.clone()));
                         }
                         // hello / presence / pong / our own echoed events: ignore
                     }
@@ -159,7 +160,13 @@ async fn serve_connection(mut ws: Ws, backend: Arc<dyn NodeBackend>) {
     }
 }
 
-async fn handle_cmd(f: RelayFrame, backend: Arc<dyn NodeBackend>, out: Outbound, attach: AttachMap) {
+async fn handle_cmd(
+    f: RelayFrame,
+    backend: Arc<dyn NodeBackend>,
+    out: Outbound,
+    attach: AttachMap,
+    data_root: std::path::PathBuf,
+) {
     let cmd = f.cmd.unwrap_or_default();
     let target = f.target.unwrap_or_default();
     let rid = f.request_id;
@@ -290,9 +297,90 @@ async fn handle_cmd(f: RelayFrame, backend: Arc<dyn NodeBackend>, out: Outbound,
             cmd_result(&out, &rid, &cmd, &target, true, None);
         }
 
+        // ----- backups over relay (uses this node's provisioned target) ------
+        // The S3 secret never travels the relay: the desktop provisioned it to
+        // this agent over direct HTTPS, and we resolve it locally here.
+        "server.backups_list" => match crate::backup_target::load(&data_root) {
+            Some(t) => match backend.list_backups(&target, &t).await {
+                Ok(list) => {
+                    let _ = out.send(
+                        json!({ "type": "event", "kind": "backups_snapshot", "request_id": rid, "target": target, "backups": list })
+                            .to_string(),
+                    );
+                }
+                Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),
+            },
+            None => cmd_result(&out, &rid, &cmd, &target, false, Some(NO_TARGET.into())),
+        },
+
+        "server.backup_now" => match crate::backup_target::load(&data_root) {
+            Some(t) => match backend.create_backup(&target, &t).await {
+                Ok(_key) => cmd_result(&out, &rid, &cmd, &target, true, None),
+                Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),
+            },
+            None => cmd_result(&out, &rid, &cmd, &target, false, Some(NO_TARGET.into())),
+        },
+
+        "server.restore_backup" => {
+            let key = args.get("key").and_then(Value::as_str).unwrap_or("").to_string();
+            match crate::backup_target::load(&data_root) {
+                Some(t) => match backend.restore_backup(&target, &t, &key).await {
+                    Ok(()) => cmd_result(&out, &rid, &cmd, &target, true, None),
+                    Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),
+                },
+                None => cmd_result(&out, &rid, &cmd, &target, false, Some(NO_TARGET.into())),
+            }
+        }
+
+        "server.delete_backup" => {
+            let key = args.get("key").and_then(Value::as_str).unwrap_or("").to_string();
+            match crate::backup_target::load(&data_root) {
+                Some(t) => match backend.delete_backup(&t, &key).await {
+                    Ok(()) => cmd_result(&out, &rid, &cmd, &target, true, None),
+                    Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),
+                },
+                None => cmd_result(&out, &rid, &cmd, &target, false, Some(NO_TARGET.into())),
+            }
+        }
+
+        // ----- schedules over relay (no secret; stored host-side) ------------
+        "server.schedules_list" => match backend.list_schedules(&target).await {
+            Ok(list) => {
+                let _ = out.send(
+                    json!({ "type": "event", "kind": "schedules_snapshot", "request_id": rid, "target": target, "schedules": list })
+                        .to_string(),
+                );
+            }
+            Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),
+        },
+
+        "server.upsert_schedule" => {
+            match args
+                .get("schedule")
+                .and_then(|v| serde_json::from_value::<Schedule>(v.clone()).ok())
+            {
+                Some(s) => match backend.upsert_schedule(s).await {
+                    Ok(()) => cmd_result(&out, &rid, &cmd, &target, true, None),
+                    Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),
+                },
+                None => cmd_result(&out, &rid, &cmd, &target, false, Some("invalid schedule".into())),
+            }
+        }
+
+        "server.delete_schedule" => {
+            let sid = args.get("schedule_id").and_then(Value::as_str).unwrap_or("");
+            match backend.delete_schedule(sid).await {
+                Ok(()) => cmd_result(&out, &rid, &cmd, &target, true, None),
+                Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),
+            }
+        }
+
         other => cmd_result(&out, &rid, &cmd, &target, false, Some(format!("unknown_cmd:{other}"))),
     }
 }
+
+/// Shared error when a backup cmd hits a node the desktop hasn't provisioned.
+const NO_TARGET: &str = "backup target not configured on this node";
 
 /// start/stop/restart shared tail: ack + broadcast the new status.
 fn lifecycle(

@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend;
+mod backups;
 mod cloud;
 mod commands;
 mod games;
@@ -95,7 +96,11 @@ fn main() {
                 let state: tauri::State<NodeRegistry> = handle.state();
                 match backend::LocalDockerBackend::connect(data_root).await {
                     Ok(b) => {
-                        state.install_local(Arc::new(b)).await;
+                        let arc = Arc::new(b);
+                        state.install_local(arc.clone()).await;
+                        // Start the host scheduler (idempotent) so cron actions
+                        // fire while the app is open.
+                        localforge_backend_local::spawn_scheduler(arc, paths::home_root());
                         tracing::info!("Local Docker backend connected");
                     }
                     Err(e) => {
@@ -182,6 +187,20 @@ fn main() {
             commands::nodes::get_this_machine,
             commands::nodes::set_machine_name,
             commands::nodes::set_machine_name_prompt_dismissed,
+            commands::backups::cloud_set_backup_target,
+            commands::backups::cloud_get_backup_target,
+            commands::backups::cloud_clear_backup_target,
+            commands::backups::cloud_pull_backup_target,
+            commands::backups::cloud_backup_now,
+            commands::backups::cloud_list_backups,
+            commands::backups::cloud_restore_backup,
+            commands::backups::cloud_delete_backup,
+            commands::schedules::list_schedules,
+            commands::schedules::upsert_schedule,
+            commands::schedules::delete_schedule,
+            commands::metrics::query_metrics,
+            commands::players::list_players,
+            commands::players::player_action,
             commands::nodes::test_remote_node,
             commands::nodes::add_remote_node,
             commands::nodes::remove_node,

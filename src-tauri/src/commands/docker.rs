@@ -47,7 +47,8 @@ pub async fn check_docker_status(
                 let arc: Arc<dyn localforge_core::NodeBackend> = Arc::new(backend);
                 match arc.ping().await {
                     Ok(_) => {
-                        state.install_local(arc).await;
+                        state.install_local(arc.clone()).await;
+                        localforge_backend_local::spawn_scheduler(arc, paths::home_root());
                         Ok(DockerStatus {
                             available: true,
                             running: true,

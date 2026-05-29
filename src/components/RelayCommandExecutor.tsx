@@ -38,7 +38,6 @@ interface RelayCmd {
 const CMD_MAP: Record<string, { tauri: string; minRole: OrgRole; argTransform?: (cmd: RelayCmd) => Record<string, unknown> }> = {
   'server.start':         { tauri: 'start_server',  minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
   'server.stop':          { tauri: 'stop_server',   minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
-  'server.restart':       { tauri: 'stop_server',   minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
   'server.send_command':  { tauri: 'send_command',  minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local', command: c.args?.command }) },
   // attach / detach drive the log-stream lifecycle on the owner's
   // machine. A sub-user opening ServerDetail sends attach so the
@@ -50,6 +49,14 @@ const CMD_MAP: Record<string, { tauri: string; minRole: OrgRole; argTransform?: 
   'server.update_config': { tauri: 'update_server_config', minRole: 'admin', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local', config: c.args?.config }) },
   'server.delete':        { tauri: 'delete_server', minRole: 'admin',    argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local', deleteData: c.args?.deleteData ?? false }) },
   'server.reinstall':     { tauri: 'reinstall_server', minRole: 'admin', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
+  // Backups: the desktop resolves its own S3 creds from the keychain (the
+  // secret never crosses the relay — the cmd carries only ids/keys).
+  'server.backup_now':     { tauri: 'cloud_backup_now',     minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
+  'server.restore_backup': { tauri: 'cloud_restore_backup', minRole: 'admin',    argTransform: (c) => ({ serverId: c.target, key: c.args?.key, nodeId: c.args?.nodeId ?? 'local' }) },
+  'server.delete_backup':  { tauri: 'cloud_delete_backup',  minRole: 'admin',    argTransform: (c) => ({ key: c.args?.key, nodeId: c.args?.nodeId ?? 'local' }) },
+  // Schedules (no secret).
+  'server.upsert_schedule':{ tauri: 'upsert_schedule',      minRole: 'operator', argTransform: (c) => ({ schedule: c.args?.schedule, nodeId: c.args?.nodeId ?? 'local' }) },
+  'server.delete_schedule':{ tauri: 'delete_schedule',      minRole: 'operator', argTransform: (c) => ({ id: c.args?.schedule_id, nodeId: c.args?.nodeId ?? 'local' }) },
 };
 
 /**
@@ -156,6 +163,60 @@ export function RelayCommandExecutor() {
           });
         } catch (e) {
           console.error('[relay] server.stats reply failed', e);
+        }
+        return;
+      }
+      // ---------------------------------------------------------------------
+      // server.backups_list / server.schedules_list — read-only lists the
+      // mobile renders. Like server.logs, they reply with their own event
+      // kind carrying the data inline (not a cmd_result). On failure we send a
+      // cmd_result error so the mobile's spinner resolves instead of hanging.
+      // ---------------------------------------------------------------------
+      if (msg.cmd === 'server.backups_list') {
+        try {
+          const backups = await invoke('cloud_list_backups', {
+            serverId: msg.target,
+            nodeId: (msg.args?.nodeId as string | undefined) ?? 'local',
+          });
+          await invoke('cloud_relay_send_event', {
+            payload: { kind: 'backups_snapshot', request_id: msg.request_id, target: msg.target, backups },
+          });
+        } catch (e) {
+          respond(msg, { success: false, error: String(e) });
+        }
+        return;
+      }
+      if (msg.cmd === 'server.schedules_list') {
+        try {
+          const schedules = await invoke('list_schedules', {
+            serverId: msg.target,
+            nodeId: (msg.args?.nodeId as string | undefined) ?? 'local',
+          });
+          await invoke('cloud_relay_send_event', {
+            payload: { kind: 'schedules_snapshot', request_id: msg.request_id, target: msg.target, schedules },
+          });
+        } catch (e) {
+          respond(msg, { success: false, error: String(e) });
+        }
+        return;
+      }
+      // ---------------------------------------------------------------------
+      // server.restart — a REAL restart (stop then start). There is no single
+      // `restart_server` Tauri command, and mapping restart→stop_server (as we
+      // used to) silently left the server stopped. Sequence the two existing
+      // commands so a mobile/sub-user "Restart" actually brings it back up.
+      // ---------------------------------------------------------------------
+      if (msg.cmd === 'server.restart') {
+        if (!roleAtLeast(msg.by?.role ?? null, 'operator')) {
+          return respond(msg, { success: false, error: 'forbidden' });
+        }
+        const nodeId = (msg.args?.nodeId as string | undefined) ?? 'local';
+        try {
+          await invoke('stop_server', { serverId: msg.target, nodeId });
+          await invoke('start_server', { serverId: msg.target, nodeId });
+          respond(msg, { success: true });
+        } catch (e) {
+          respond(msg, { success: false, error: String(e) });
         }
         return;
       }

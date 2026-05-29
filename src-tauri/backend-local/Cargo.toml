@@ -21,3 +21,17 @@ base64 = "0.22"
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["io"] }
 sysinfo = "0.39"
+# Backups: archive the server data dir → upload to a bring-your-own
+# S3-compatible bucket. rustls (NOT native-tls) so we keep the workspace's
+# single TLS stack and pull no OpenSSL. flate2 defaults to the pure-Rust
+# miniz_oxide backend → no C toolchain dependency.
+rust-s3 = { version = "0.35", default-features = false, features = ["tokio-rustls-tls"] }
+tar = "0.4"
+flate2 = "1"
+# Scheduled actions: parse standard 5-field cron expressions + compute the next
+# fire time. Evaluated in the host's local time.
+croner = "2"
+# Local metrics history is stored as plain append-only JSONL (serde_json, below)
+# — Docker keeps no history, so the host persists samples itself. Host-side only,
+# never synced to the cloud. No DB engine: the data is tiny at one line/min and
+# keeping it pure-Rust matches the rest of the crate (no native deps).

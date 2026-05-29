@@ -10,8 +10,9 @@
 //! lands on every backend, methods get added here.
 
 use crate::types::{
-    ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
-    InstallEvent, NodeStats, Server, ServerStatus,
+    BackupEntry, BackupTarget, ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo,
+    FileEntry, GameConfig, InstallEvent, MetricPoint, NodeStats, Player, PlayerAction, Schedule,
+    Server, ServerStatus,
 };
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
@@ -219,4 +220,123 @@ pub trait NodeBackend: Send + Sync {
     /// Stream a file's contents into `path`, replacing it if it exists.
     /// Counterpart to [`download_file`].
     async fn upload_file(&self, path: &str, body: ByteStream) -> Result<()>;
+
+    // ----- backups (bring-your-own S3) -----------------------------------
+    //
+    // A backup archives the server's data dir and uploads it to the
+    // user-supplied S3-compatible bucket; restore pulls it back. These run ON
+    // THE HOST (local Docker or the agent) — the cloud never touches S3.
+    //
+    // Default impls return "unsupported" so a backend that hasn't wired this
+    // yet (the remote client until the agent route lands) degrades gracefully
+    // instead of failing to compile.
+
+    /// Archive the server's data dir (tar + gzip) and upload it to `target`.
+    /// Returns the object key written.
+    async fn create_backup(&self, id: &str, target: &BackupTarget) -> Result<String> {
+        let _ = (id, target);
+        Err(BackendError::Other(
+            "backups are not supported on this backend".into(),
+        ))
+    }
+
+    /// List the server's backup objects in the bucket, newest first.
+    async fn list_backups(&self, id: &str, target: &BackupTarget) -> Result<Vec<BackupEntry>> {
+        let _ = (id, target);
+        Err(BackendError::Other(
+            "backups are not supported on this backend".into(),
+        ))
+    }
+
+    /// Download `key` and restore it over the server's data dir. The server is
+    /// stopped first and the previous data is moved aside before extraction.
+    async fn restore_backup(&self, id: &str, target: &BackupTarget, key: &str) -> Result<()> {
+        let _ = (id, target, key);
+        Err(BackendError::Other(
+            "backups are not supported on this backend".into(),
+        ))
+    }
+
+    /// Delete a backup object from the bucket.
+    async fn delete_backup(&self, target: &BackupTarget, key: &str) -> Result<()> {
+        let _ = (target, key);
+        Err(BackendError::Other(
+            "backups are not supported on this backend".into(),
+        ))
+    }
+
+    /// Provision the S3 backup target onto this node so it can run
+    /// relay-triggered backups by itself (e.g. when the mobile app fires one
+    /// and the owner's desktop is offline). Default is a no-op: the local
+    /// backend resolves credentials elsewhere (the desktop keychain, or the
+    /// agent's own provisioned store). Only the remote-agent client overrides
+    /// this — and it pushes over its direct HTTPS channel, never the relay.
+    async fn set_backup_target(&self, target: &BackupTarget) -> Result<()> {
+        let _ = target;
+        Ok(())
+    }
+
+    /// Forget a previously provisioned backup target (idempotent).
+    async fn clear_backup_target(&self) -> Result<()> {
+        Ok(())
+    }
+
+    // ----- scheduled actions ---------------------------------------------
+    //
+    // Schedules are stored host-side and fired by the host's scheduler loop.
+    // These CRUD the persisted defs; execution is automatic. Default impls keep
+    // a backend that hasn't wired this (the remote client until its route
+    // lands) compiling.
+
+    /// All schedules for a server.
+    async fn list_schedules(&self, server_id: &str) -> Result<Vec<Schedule>> {
+        let _ = server_id;
+        Ok(Vec::new())
+    }
+
+    /// Create or replace a schedule (matched by `schedule.id`).
+    async fn upsert_schedule(&self, schedule: Schedule) -> Result<()> {
+        let _ = schedule;
+        Err(BackendError::Other(
+            "schedules are not supported on this backend".into(),
+        ))
+    }
+
+    /// Delete a schedule by id.
+    async fn delete_schedule(&self, id: &str) -> Result<()> {
+        let _ = id;
+        Err(BackendError::Other(
+            "schedules are not supported on this backend".into(),
+        ))
+    }
+
+    // ----- metrics history -----------------------------------------------
+
+    /// Sampled metrics for a server since `since_ms` (unix ms), oldest first.
+    /// Read from the host's local store; the cloud never sees this.
+    async fn query_metrics(&self, server_id: &str, since_ms: i64) -> Result<Vec<MetricPoint>> {
+        let _ = (server_id, since_ms);
+        Ok(Vec::new())
+    }
+
+    // ----- player administration -----------------------------------------
+    //
+    // Live player list + moderation (kick/ban/op). Per-game: only servers whose
+    // game exposes a console/RCON/REST admin surface support this; everything
+    // else falls through to the defaults (empty list / unsupported action). The
+    // host talks to the running container directly — the cloud is never involved.
+
+    /// Players currently online. Empty if the game/server can't report them.
+    async fn list_players(&self, server_id: &str) -> Result<Vec<Player>> {
+        let _ = server_id;
+        Ok(Vec::new())
+    }
+
+    /// Apply a moderation action (kick/ban/op/…) to a player.
+    async fn player_action(&self, server_id: &str, action: PlayerAction) -> Result<()> {
+        let _ = (server_id, action);
+        Err(BackendError::Other(
+            "player administration is not supported on this backend".into(),
+        ))
+    }
 }

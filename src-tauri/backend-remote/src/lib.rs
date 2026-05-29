@@ -18,8 +18,9 @@ use localforge_core::backend::{
     BackendError, ByteStream, InstallStream, LogLine, LogStream, NodeBackend, Result,
 };
 use localforge_core::types::{
-    ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo, FileEntry, GameConfig,
-    InstallEvent, NodeStats, Server, ServerStatus,
+    BackupEntry, BackupTarget, ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo,
+    FileEntry, GameConfig, InstallEvent, MetricPoint, NodeStats, Player, PlayerAction, Schedule,
+    Server, ServerStatus,
 };
 use rustls::ClientConfig;
 use serde::{Deserialize, Serialize};
@@ -257,6 +258,17 @@ struct DiskResponse {
 }
 
 #[derive(Deserialize)]
+struct KeyResp {
+    key: String,
+}
+
+#[derive(Serialize)]
+struct RestoreReq<'a> {
+    target: &'a BackupTarget,
+    key: &'a str,
+}
+
+#[derive(Deserialize)]
 struct LogsResponseBody {
     logs: Vec<String>,
 }
@@ -382,6 +394,128 @@ impl NodeBackend for RemoteAgentBackend {
             .post(url)
             .bearer_auth(&self.token)
             .json(&CommandBody { command })
+            .send()
+            .await
+            .map_err(transport)?;
+        ensure_ok(resp).await
+    }
+
+    // ----- backups -------------------------------------------------------
+
+    async fn create_backup(&self, id: &str, target: &BackupTarget) -> Result<String> {
+        let r: KeyResp = self
+            .post_json(&format!("/v1/servers/{}/backup", id), target)
+            .await?;
+        Ok(r.key)
+    }
+
+    async fn list_backups(&self, id: &str, target: &BackupTarget) -> Result<Vec<BackupEntry>> {
+        self.post_json(&format!("/v1/servers/{}/backups/list", id), target)
+            .await
+    }
+
+    async fn restore_backup(&self, id: &str, target: &BackupTarget, key: &str) -> Result<()> {
+        let url = self.endpoint(&format!("/v1/servers/{}/restore", id))?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .json(&RestoreReq { target, key })
+            .send()
+            .await
+            .map_err(transport)?;
+        ensure_ok(resp).await
+    }
+
+    async fn delete_backup(&self, target: &BackupTarget, key: &str) -> Result<()> {
+        // The agent route is server-scoped; delete doesn't need a real id, so a
+        // placeholder satisfies the path (the handler ignores it).
+        let url = self.endpoint("/v1/servers/_/backups/delete")?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .json(&RestoreReq { target, key })
+            .send()
+            .await
+            .map_err(transport)?;
+        ensure_ok(resp).await
+    }
+
+    /// Provision the S3 target onto the agent so it can run relay-triggered
+    /// backups itself. Pushed over this direct HTTPS channel — never the relay.
+    async fn set_backup_target(&self, target: &BackupTarget) -> Result<()> {
+        let url = self.endpoint("/v1/backup-target")?;
+        let resp = self
+            .http
+            .put(url)
+            .bearer_auth(&self.token)
+            .json(target)
+            .send()
+            .await
+            .map_err(transport)?;
+        ensure_ok(resp).await
+    }
+
+    async fn clear_backup_target(&self) -> Result<()> {
+        let url = self.endpoint("/v1/backup-target")?;
+        let resp = self
+            .http
+            .delete(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(transport)?;
+        ensure_ok(resp).await
+    }
+
+    // ----- scheduled actions ---------------------------------------------
+
+    async fn list_schedules(&self, server_id: &str) -> Result<Vec<Schedule>> {
+        self.get(&format!("/v1/servers/{}/schedules", server_id)).await
+    }
+
+    async fn upsert_schedule(&self, schedule: Schedule) -> Result<()> {
+        let url = self.endpoint(&format!("/v1/servers/{}/schedules", schedule.server_id))?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .json(&schedule)
+            .send()
+            .await
+            .map_err(transport)?;
+        ensure_ok(resp).await
+    }
+
+    async fn delete_schedule(&self, id: &str) -> Result<()> {
+        let url = self.endpoint(&format!("/v1/schedules/{}", id))?;
+        let resp = self
+            .http
+            .delete(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(transport)?;
+        ensure_ok(resp).await
+    }
+
+    async fn query_metrics(&self, server_id: &str, since_ms: i64) -> Result<Vec<MetricPoint>> {
+        self.get(&format!("/v1/servers/{}/metrics?since={}", server_id, since_ms))
+            .await
+    }
+
+    async fn list_players(&self, server_id: &str) -> Result<Vec<Player>> {
+        self.get(&format!("/v1/servers/{}/players", server_id)).await
+    }
+
+    async fn player_action(&self, server_id: &str, action: PlayerAction) -> Result<()> {
+        let url = self.endpoint(&format!("/v1/servers/{}/players/action", server_id))?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .json(&action)
             .send()
             .await
             .map_err(transport)?;

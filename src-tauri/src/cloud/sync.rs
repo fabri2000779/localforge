@@ -15,7 +15,7 @@ use super::{api, auth, vault};
 use crate::backend::NodeRegistry;
 use crate::backend::registry::RemoteNodeForSync;
 use localforge_backend_remote::RemoteAgentConfig;
-use localforge_core::types::{GameType, Server};
+use localforge_core::types::{BackupTarget, GameType, Server};
 
 /// What we actually serialise + encrypt per server. NOT the full Server
 /// — we drop container_id, data_path, install state, all of which are
@@ -378,7 +378,6 @@ pub async fn cloud_rotate_org_dek(
     // Fresh DEK; re-encrypt each config, verifying the round-trip before we
     // trust the new blob.
     let new_dek = vault::generate_key();
-    let now = chrono::Utc::now().timestamp_millis();
 
     #[derive(Serialize)]
     struct RotateServer {
@@ -413,7 +412,11 @@ pub async fn cloud_rotate_org_dek(
         servers.push(RotateServer {
             id: r.id,
             encrypted_blob: blob,
-            updated_at: now,
+            // Send the version we PULLED, not a fresh timestamp: the cloud
+            // guards each re-encrypt on it and aborts the whole rotation (409)
+            // if any server was edited since the pull, so no edit is clobbered
+            // and no blob is left sealed under the discarded old key.
+            updated_at: r.updated_at,
         });
     }
 
@@ -439,6 +442,82 @@ pub async fn cloud_rotate_org_dek(
     vault::save_key(&new_dek).map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
     let granted = vault::process_grants(&org_id, &token).await?;
     Ok(granted)
+}
+
+// ===========================================================================
+// Org backup target — one BYO S3 destination per org, synced E2E.
+//
+// The owner/admin sets the S3 credentials once; we encrypt them with the org
+// DEK (the cloud only ever stores ciphertext) and PUT them to D1. Every host in
+// the org then resolves them: the owner's other devices PULL + decrypt (they
+// hold the DEK) and cache locally; agents are provisioned over direct HTTPS from
+// whichever device has them. So backups work for every server + every member
+// without re-entering credentials per device or per server. Paid-only — a free
+// org gets 402 from the sync gate, which callers treat as "stays local".
+// ===========================================================================
+
+/// Push the org's S3 target to the cloud, encrypted with the active org DEK.
+pub async fn push_backup_target(target: &BackupTarget) -> Result<(), api::ApiError> {
+    let token = auth::current_token().ok_or_else(|| api::ApiError::Server {
+        status: 401,
+        code: "unauthenticated".into(),
+        message: None,
+    })?;
+    let dek = vault::active_dek().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
+    let plaintext =
+        serde_json::to_vec(target).map_err(|e| api::ApiError::Decode(format!("serialize: {e}")))?;
+    let blob = vault::encrypt(&dek, &plaintext)
+        .map_err(|e| api::ApiError::Decode(format!("encrypt: {e}")))?;
+    #[derive(Serialize)]
+    struct Body<'a> {
+        #[serde(rename = "encryptedBlob")]
+        encrypted_blob: &'a str,
+    }
+    let _: serde_json::Value = api::put(
+        "/v1/sync/backup-target",
+        &Body {
+            encrypted_blob: &blob,
+        },
+        Some(&token),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Pull + decrypt the org's S3 target, if one is set. `None` when the org has
+/// no target (or this device lacks the DEK to read it).
+pub async fn pull_backup_target() -> Result<Option<BackupTarget>, api::ApiError> {
+    let token = auth::current_token().ok_or_else(|| api::ApiError::Server {
+        status: 401,
+        code: "unauthenticated".into(),
+        message: None,
+    })?;
+    #[derive(Deserialize)]
+    struct Resp {
+        #[serde(rename = "encryptedBlob")]
+        encrypted_blob: Option<String>,
+    }
+    let r: Resp = api::get("/v1/sync/backup-target", Some(&token)).await?;
+    let Some(blob) = r.encrypted_blob else {
+        return Ok(None);
+    };
+    let dek = vault::active_dek().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
+    let plaintext = vault::decrypt(&dek, &blob)
+        .map_err(|e| api::ApiError::Decode(format!("decrypt: {e}")))?;
+    let target: BackupTarget = serde_json::from_slice(&plaintext)
+        .map_err(|e| api::ApiError::Decode(format!("parse: {e}")))?;
+    Ok(Some(target))
+}
+
+/// Remove the org's S3 target from the cloud (owner/admin clearing it).
+pub async fn clear_backup_target_remote() -> Result<(), api::ApiError> {
+    let token = auth::current_token().ok_or_else(|| api::ApiError::Server {
+        status: 401,
+        code: "unauthenticated".into(),
+        message: None,
+    })?;
+    let _: serde_json::Value = api::delete("/v1/sync/backup-target", Some(&token)).await?;
+    Ok(())
 }
 
 // ===========================================================================
