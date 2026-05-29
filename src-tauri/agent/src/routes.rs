@@ -189,7 +189,7 @@ async fn link_node(
     // first link spawns a loop. (A re-link with a new token applies on next
     // restart — fine, re-linking is rare.)
     if !s.relay_started.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        crate::relay::spawn(s.backend.clone(), link);
+        crate::relay::spawn(s.backend.clone(), link, s.data_root.clone());
     }
     Ok(StatusCode::NO_CONTENT)
 }

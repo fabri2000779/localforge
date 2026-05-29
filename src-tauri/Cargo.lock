@@ -3414,7 +3414,7 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "localforge"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3452,7 +3452,7 @@ dependencies = [
 
 [[package]]
 name = "localforge-agent"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "anyhow",
  "axum",
@@ -3479,7 +3479,7 @@ dependencies = [
 
 [[package]]
 name = "localforge-backend-local"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3503,7 +3503,7 @@ dependencies = [
 
 [[package]]
 name = "localforge-backend-remote"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -3522,7 +3522,7 @@ dependencies = [
 
 [[package]]
 name = "localforge-cloud-client"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -3540,7 +3540,7 @@ dependencies = [
 
 [[package]]
 name = "localforge-core"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "async-trait",
  "bytes",
