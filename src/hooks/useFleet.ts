@@ -62,7 +62,17 @@ export function useOwnerFleet(enabled: boolean): {
         }
       }),
     );
-    if (myReq === reqIdRef.current) setLoading(false);
+    if (myReq === reqIdRef.current) {
+      // Drop cached entries for nodes that no longer exist (a remote was
+      // unpaired) so byNode can't grow unbounded across the app's lifetime.
+      const liveIds = new Set(nodes.map((n) => n.id));
+      setByNode((prev) => {
+        const next: Record<string, Server[]> = {};
+        for (const k of Object.keys(prev)) if (liveIds.has(k)) next[k] = prev[k]!;
+        return next;
+      });
+      setLoading(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodesKey]);
 

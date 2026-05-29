@@ -39,15 +39,28 @@ static ACTIVE_DEK_OVERRIDE: std::sync::RwLock<Option<[u8; KEY_LEN]>> =
     std::sync::RwLock::new(None);
 
 fn set_active_dek_override(dek: Option<[u8; KEY_LEN]>) {
-    if let Ok(mut g) = ACTIVE_DEK_OVERRIDE.write() {
-        *g = dek;
-    }
+    // Recover from a poisoned lock instead of silently dropping the write:
+    // this state decides which org's data we decrypt, so a no-op'd update is a
+    // correctness/security hazard (we'd keep the previous org's DEK installed).
+    let mut g = ACTIVE_DEK_OVERRIDE.write().unwrap_or_else(|e| e.into_inner());
+    *g = dek;
+}
+
+/// True when a borrowed-org DEK override is installed (we're viewing an org we
+/// don't own). The push path consults this to avoid writing our own local
+/// servers into someone else's org under the wrong key.
+pub fn has_active_override() -> bool {
+    ACTIVE_DEK_OVERRIDE
+        .read()
+        .map(|g| g.is_some())
+        .unwrap_or_else(|e| e.into_inner().is_some())
 }
 
 /// The DEK the sync/pull path should decrypt with: the active-org override if
 /// set (sub-user viewing another org), else our own keychain DEK.
 pub fn active_dek() -> Result<[u8; KEY_LEN], String> {
-    if let Ok(g) = ACTIVE_DEK_OVERRIDE.read() {
+    {
+        let g = ACTIVE_DEK_OVERRIDE.read().unwrap_or_else(|e| e.into_inner());
         if let Some(dek) = *g {
             return Ok(dek);
         }
@@ -493,11 +506,19 @@ pub async fn process_grants(org_id: &str, token: &str) -> Result<usize, super::a
         let Ok((epk_b64, sealed)) = crypto::seal_to(&pk_bytes, &dek) else {
             continue;
         };
-        if localforge_cloud_client::keys::put_grant(org_id, &m.user_id, &sealed, &epk_b64, token)
+        // Surface per-member failures (don't silently undercount) — a failed
+        // re-seal after rotation leaves that member unable to decrypt new data,
+        // which is exactly when a silent skip is most dangerous.
+        match localforge_cloud_client::keys::put_grant(org_id, &m.user_id, &sealed, &epk_b64, token)
             .await
-            .is_ok()
         {
-            granted += 1;
+            Ok(_) => granted += 1,
+            Err(e) => tracing::warn!(
+                "[grants] failed to seal org {} grant for member {}: {:?}",
+                org_id,
+                m.user_id,
+                e
+            ),
         }
     }
     Ok(granted)

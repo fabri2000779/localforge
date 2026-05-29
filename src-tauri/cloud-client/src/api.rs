@@ -29,13 +29,18 @@ fn active_org_cell() -> &'static RwLock<Option<String>> {
 /// user switches the active org (and clears it on sign-out). Empty strings
 /// are treated as `None`.
 pub fn set_active_org(org_id: Option<String>) {
-    if let Ok(mut g) = active_org_cell().write() {
-        *g = org_id.filter(|s| !s.trim().is_empty());
-    }
+    // Recover from a poisoned lock instead of silently dropping the write: this
+    // value decides which org every subsequent request targets, so a no-op'd
+    // update would leave calls pointed at the previous (wrong) org.
+    let mut g = active_org_cell().write().unwrap_or_else(|e| e.into_inner());
+    *g = org_id.filter(|s| !s.trim().is_empty());
 }
 
 fn active_org() -> Option<String> {
-    active_org_cell().read().ok().and_then(|g| g.clone())
+    active_org_cell()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 /// The shared reqwest client. Public so callers that need a custom

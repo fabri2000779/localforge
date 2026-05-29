@@ -59,7 +59,12 @@ export function RelayLogBridge() {
     // forward — our local server-logs belong to a different (our own)
     // workspace and have nothing to do with whoever owns the active
     // org we're currently visiting.
-    listen<ServerLog>('server-log', async (event) => {
+    listen<ServerLog & { relayed?: boolean }>('server-log', async (event) => {
+      // Don't re-forward a line that we ourselves re-emitted FROM the relay
+      // (see the receive side below). Without this, two owner devices in the
+      // same org bounce each other's lines in an ever-amplifying loop: A
+      // forwards → B receives + re-emits → B forwards → A receives → …
+      if (event.payload?.relayed) return;
       const auth = useAuthStore.getState();
       const cur = auth.orgs.find((o) => o.id === auth.currentOrgId);
       if (!cur?.isOwner) return;
@@ -89,6 +94,9 @@ export function RelayLogBridge() {
         server_id: event.payload.target,
         line: event.payload.line,
         ts: event.payload.ts,
+        // Mark as relay-sourced so the owner-forward listener above skips it
+        // (prevents the multi-owner-device echo loop).
+        relayed: true,
       });
     }).then((fn) => { unlistenRelay = fn; });
 

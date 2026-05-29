@@ -169,6 +169,34 @@ const CURRENT_ORG_KEY = 'localforge_current_org';
  *  (re)connects fresh (catches plan upgrades mid-session). */
 let relayOrg: string | null = null;
 
+/** True while an org switch is mid-pivot (Rust active-org header + decryption
+ *  DEK are being swapped). Sync pulls are skipped during this window so a
+ *  relay `sync-changed` can't run a pull against a half-applied org+DEK pair
+ *  and overwrite the visible server list with the wrong org's data. The switch
+ *  runs its own pull once the pivot completes, so nothing is missed. */
+let orgSwitchInFlight = false;
+
+/** Pivot the Rust-side active org and the decryption DEK together so the HTTP
+ *  active-org header can never disagree with the key the pull/push uses.
+ *  DEK FIRST: `cloud_unlock_org_dek` doesn't depend on the header, and
+ *  installing the borrowed-org override before the header means the push path
+ *  (which skips while an override is active) can't fire with the wrong key in
+ *  the gap. Then the header. Errors are non-fatal (a member with no grant yet
+ *  just sees undecrypted rows until the owner seals one). */
+async function applyOrgScope(orgId: string, isOwner: boolean): Promise<void> {
+  try {
+    if (isOwner) await invoke('cloud_clear_org_dek');
+    else await invoke('cloud_unlock_org_dek', { orgId });
+  } catch {
+    /* no grant / no keypair yet — pull shows undecrypted rows */
+  }
+  try {
+    await invoke('cloud_set_active_org', { orgId });
+  } catch {
+    /* server falls back to the caller's primary org */
+  }
+}
+
 function asErr(e: unknown): AuthError {
   if (e && typeof e === 'object') {
     const o = e as Record<string, unknown>;
@@ -387,6 +415,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   syncPull: async () => {
+    // Skip while an org switch is mid-pivot — a pull here would run against a
+    // half-applied org+DEK pair. setCurrentOrg pulls once the pivot completes.
+    if (orgSwitchInFlight) return null;
     try {
       const r = await invoke<RemoteServer[]>('cloud_sync_pull');
       // Patch the cached SyncResult so the UI's "remote servers" list
@@ -452,8 +483,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         current = orgs[0]?.id ?? null;
         if (current) localStorage.setItem(CURRENT_ORG_KEY, current);
       }
-      const role = orgs.find((o) => o.id === current)?.role ?? null;
+      const cur = orgs.find((o) => o.id === current);
+      const role = cur?.role ?? null;
       set({ orgs, currentOrgId: current, currentRole: role });
+      // Pin the Rust active-org header + unlock the right DEK for the active
+      // org BEFORE the relay / any pull, so a borrowed org decrypts on restart
+      // (previously you had to manually re-switch to re-unlock its DEK).
+      if (current) await applyOrgScope(current, cur?.isOwner ?? false);
       // Now that we know the active org, make sure the relay is pointed at
       // it (rather than the primary-org fallback used at startup).
       get().ensureRelay();
@@ -471,32 +507,30 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   setCurrentOrg: (orgId) => {
     const o = get().orgs.find((x) => x.id === orgId);
     if (!o) return;
+    // Optimistic UI flip so the switcher highlights the new org immediately.
     localStorage.setItem(CURRENT_ORG_KEY, orgId);
     set({ currentOrgId: orgId, currentRole: o.role });
-    // Set the active org for HTTP FIRST, then unlock the right decryption
-    // DEK (a sub-user opens the owner's sealed grant; an owner clears any
-    // override + seals any pending members), then (re)connect relay + pull.
-    void invoke('cloud_set_active_org', { orgId }).finally(async () => {
-      try {
-        if (!o.isOwner) {
-          await invoke('cloud_unlock_org_dek', { orgId });
-        } else {
-          await invoke('cloud_clear_org_dek');
-          void invoke('cloud_process_grants', { orgId }).catch(() => {});
-        }
-      } catch {
-        /* no grant yet / no keypair — pull just shows undecrypted rows */
-      }
+    // Gate sync until the Rust active-org header + decryption DEK have actually
+    // pivoted (applyOrgScope does DEK-then-header), so a pull/push can't run
+    // against a half-applied org+key pair. The switch then pulls once itself.
+    orgSwitchInFlight = true;
+    void (async () => {
+      await applyOrgScope(orgId, o.isOwner);
+      orgSwitchInFlight = false;
+      // Owner: seal the org DEK to any members still waiting (best-effort).
+      if (o.isOwner) void invoke('cloud_process_grants', { orgId }).catch(() => {});
       get().ensureRelay();
       void get().syncPull();
-    });
+    })();
   },
 
   ensureRelay: () => {
     const { me, orgs, currentOrgId } = get();
-    // Point the HTTP client (sync + machine listing) at the active org too,
-    // so a sub-user's calls resolve to the OWNER's org. Cleared on sign-out.
-    void invoke('cloud_set_active_org', { orgId: me ? currentOrgId : null }).catch(() => {});
+    // NB: the active-org HTTP header is set by `applyOrgScope` (in
+    // fetchOrgs / setCurrentOrg) and cleared in logout() — NOT here. ensureRelay
+    // used to also call cloud_set_active_org, which raced the explicit call and
+    // could briefly point the header at a stale org. It now only manages the
+    // relay socket.
     if (!me) {
       relayOrg = null;
       return;

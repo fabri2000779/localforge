@@ -8,7 +8,7 @@ import {
 import { useServerStore } from '../stores/serverStore';
 import { useGamesStore } from '../stores/gamesStore';
 import { useNodesStore } from '../stores/nodesStore';
-import { useCanAct, useDisplayedServers } from '../utils/subUser';
+import { useCanAct, useDisplayedServers, useIsSubUser } from '../utils/subUser';
 import { findGameConfig } from '../utils/gameTypes';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -51,6 +51,11 @@ export function ServerDetail() {
   // The node this detail view is scoped to — so logs/stats/disk/attach hit the
   // RIGHT machine when the active node is a remote agent (not always 'local').
   const activeNodeId = useNodesStore((s) => s.activeNodeId);
+  // Sub-user mode: this server lives on the OWNER's machine, reachable only
+  // over the relay. The raw local attach_server / get_server_logs calls would
+  // hit OUR Docker (the wrong machine) and silently show no console — route
+  // through the relay instead, mirroring serverStore.attachToServer.
+  const isSubUser = useIsSubUser();
 
   const [activeTab, setActiveTab] = useState<TabType>('console');
   const [command, setCommand] = useState('');
@@ -115,6 +120,10 @@ export function ServerDetail() {
     fetchServers();
     
     const fetchInitialLogs = async () => {
+      // Sub-user: no historical-logs-over-relay endpoint; the live tail arrives
+      // via RelayLogBridge re-emitting the owner's lines. Calling the local
+      // get_server_logs here would just hit our own (wrong) Docker and error.
+      if (isSubUser) return;
       try {
         const response = await invoke<{ logs: string[] }>('get_server_logs', { serverId: id, lines: 500, nodeId: activeNodeId });
         setLogs(response.logs);
@@ -132,13 +141,27 @@ export function ServerDetail() {
         });
 
         unlistenRef.current = unlisten;
-        await invoke('attach_server', { serverId: id, nodeId: activeNodeId });
+        if (isSubUser) {
+          // Ask the owner's machine (over the relay) to start streaming; their
+          // RelayLogBridge forwards each line back as a local `server-log`
+          // event, which the listener above already consumes.
+          await invoke('cloud_relay_send_cmd', {
+            payload: {
+              type: 'cmd',
+              cmd: 'server.attach',
+              target: id,
+              request_id: `attach.${id}.${Date.now()}`,
+            },
+          });
+        } else {
+          await invoke('attach_server', { serverId: id, nodeId: activeNodeId });
+        }
         setIsStreaming(true);
       } catch (e) {
         console.error('[ServerDetail] Streaming setup failed:', e);
       }
     };
-    
+
     fetchInitialLogs();
     setupStreaming();
     startStatsPolling(id);
@@ -148,10 +171,16 @@ export function ServerDetail() {
         unlistenRef.current();
         unlistenRef.current = null;
       }
-      invoke('detach_server', { serverId: id, nodeId: activeNodeId }).catch(() => {});
+      if (isSubUser) {
+        invoke('cloud_relay_send_cmd', {
+          payload: { type: 'cmd', cmd: 'server.detach', target: id, request_id: `detach.${id}.${Date.now()}` },
+        }).catch(() => {});
+      } else {
+        invoke('detach_server', { serverId: id, nodeId: activeNodeId }).catch(() => {});
+      }
       stopStatsPolling();
     };
-  }, [id, activeNodeId, fetchServers, startStatsPolling, stopStatsPolling]);
+  }, [id, activeNodeId, isSubUser, fetchServers, startStatsPolling, stopStatsPolling]);
 
   // Initialize editing config when server loads
   useEffect(() => {

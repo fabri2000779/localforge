@@ -199,7 +199,14 @@ pub async fn cloud_relay_start(
                 url.push_str(&urlencoded(did));
             }
 
-            tracing::debug!("[relay] connecting to {}", url);
+            // NB: never log `url` — it carries `?token=<jwt>`. Log only the
+            // host + org so a debug-level log / crash report can't leak the
+            // session token.
+            tracing::debug!(
+                "[relay] connecting to wss://{}/v1/relay/{}",
+                localforge_cloud_client::relay::ws_host(&super::api_origin()),
+                org_id,
+            );
             match tokio_tungstenite::connect_async(&url).await {
                 Ok((mut ws, _)) => {
                     backoff.reset();
@@ -252,10 +259,17 @@ pub async fn cloud_relay_start(
                 }
             }
 
-            // Backoff with jitter. If we've exceeded the loud-threshold
-            // we surface a disconnect; the UI then shows the warning.
+            // Backoff with jitter. Make the wait itself cancellable so a
+            // `stop` (or a `start` that replaced our cancel handle) is honored
+            // promptly instead of after a full reconnect attempt — otherwise a
+            // quick stop→start during backoff could leave this loop dialing the
+            // old org/token for up to the backoff window.
             let delay = backoff.next();
-            tokio::time::sleep(delay).await;
+            tokio::select! {
+                biased;
+                _ = &mut cancel_rx => return,
+                _ = tokio::time::sleep(delay) => {}
+            }
         }
     });
 

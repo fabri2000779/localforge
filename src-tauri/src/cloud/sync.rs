@@ -270,13 +270,25 @@ pub async fn cloud_sync_now(
         code: "unauthenticated".into(),
         message: None,
     })?;
-    let key = vault::ensure_key().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
-
     let tagged = list_servers_for_sync(&state).await;
     let local_ids: std::collections::HashSet<String> =
         tagged.iter().map(|(s, _)| s.id.clone()).collect();
 
-    let (pushed, conflicts) = push(&token, &key, &tagged).await?;
+    // Push ONLY to our own org, with our own DEK. When a borrowed-org override
+    // is active (we're a sub-user viewing someone else's org), skip the push
+    // entirely: writing our local servers into their org — encrypted with OUR
+    // key — would leave undecryptable blobs in their vault and brick their key
+    // rotation. Our servers re-sync to our own org the next time it's active.
+    let (pushed, conflicts) = if vault::has_active_override() {
+        (0, vec![])
+    } else {
+        let own = vault::ensure_key().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
+        push(&token, &own, &tagged).await?
+    };
+
+    // Pull/decrypt with the ACTIVE org's DEK (the borrowed override if set,
+    // else our own) so a sub-user sees the owner's servers, not garbage.
+    let key = vault::active_dek().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
     let remote = pull(&token, &key, &local_ids).await?;
 
     Ok(SyncResult {

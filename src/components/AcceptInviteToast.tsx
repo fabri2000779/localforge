@@ -52,9 +52,15 @@ export function AcceptInviteToast() {
       setSecret(null);
       await refreshMe();
       // Switch to the org we just joined so active-org scoping + the handoff
-      // DEK kick in and the owner's servers appear right away.
+      // DEK kick in and the owner's servers appear right away. The new
+      // membership can lag a beat, and setCurrentOrg silently no-ops if the org
+      // isn't in the list yet — so poll fetchOrgs until it shows up, then switch.
       const auth = useAuthStore.getState();
-      await auth.fetchOrgs();
+      for (let i = 0; i < 5; i++) {
+        await auth.fetchOrgs();
+        if (useAuthStore.getState().orgs.some((o) => o.id === orgId)) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
       auth.setCurrentOrg(orgId);
     } catch (e) {
       const msg = e as { code?: string; message?: string };

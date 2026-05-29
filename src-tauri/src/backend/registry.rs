@@ -185,20 +185,28 @@ impl NodeRegistry {
         if name.is_empty() {
             anyhow::bail!("machine name cannot be empty");
         }
-        let mut state = self.inner.write().await;
-        let mut machine = state
-            .this_machine
-            .clone()
-            .unwrap_or_else(Self::load_or_create_this_machine);
-        machine.name = name.clone();
-        if let Ok(body) = toml::to_string(&machine) {
+        // Update in-memory state under the lock, capture the bytes to persist,
+        // then DROP the guard before the blocking fs write — holding an async
+        // RwLock across disk IO stalls every other registry consumer (relay,
+        // sync) for the write's duration.
+        let (machine, body) = {
+            let mut state = self.inner.write().await;
+            let mut machine = state
+                .this_machine
+                .clone()
+                .unwrap_or_else(Self::load_or_create_this_machine);
+            machine.name = name.clone();
+            if let Some(rec) = state.records.get_mut(&NodeId::local()) {
+                rec.label = name;
+            }
+            state.this_machine = Some(machine.clone());
+            let body = toml::to_string(&machine).ok();
+            (machine, body)
+        };
+        if let Some(body) = body {
             std::fs::write(Self::this_machine_file(), body)
                 .map_err(|e| anyhow::anyhow!("failed to persist machine name: {e}"))?;
         }
-        if let Some(rec) = state.records.get_mut(&NodeId::local()) {
-            rec.label = name;
-        }
-        state.this_machine = Some(machine.clone());
         Ok(machine)
     }
 
@@ -208,23 +216,29 @@ impl NodeRegistry {
     /// no matter what the WebView's localStorage does. Idempotent — the
     /// original timestamp wins if called multiple times.
     pub async fn set_name_prompt_dismissed(&self) -> anyhow::Result<ThisMachine> {
-        let mut state = self.inner.write().await;
-        let mut machine = state
-            .this_machine
-            .clone()
-            .unwrap_or_else(Self::load_or_create_this_machine);
-        if machine.name_prompt_dismissed_at.is_none() {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            machine.name_prompt_dismissed_at = Some(now);
-        }
-        if let Ok(body) = toml::to_string(&machine) {
+        // Same lock-then-write discipline as set_machine_name: never hold the
+        // async RwLock across the blocking fs write.
+        let (machine, body) = {
+            let mut state = self.inner.write().await;
+            let mut machine = state
+                .this_machine
+                .clone()
+                .unwrap_or_else(Self::load_or_create_this_machine);
+            if machine.name_prompt_dismissed_at.is_none() {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                machine.name_prompt_dismissed_at = Some(now);
+            }
+            state.this_machine = Some(machine.clone());
+            let body = toml::to_string(&machine).ok();
+            (machine, body)
+        };
+        if let Some(body) = body {
             std::fs::write(Self::this_machine_file(), body)
                 .map_err(|e| anyhow::anyhow!("failed to persist machine identity: {e}"))?;
         }
-        state.this_machine = Some(machine.clone());
         Ok(machine)
     }
 
