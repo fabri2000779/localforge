@@ -91,9 +91,9 @@ export function UpdateChecker() {
         style={{
           background:
             'linear-gradient(180deg, rgba(20, 26, 38, 0.95) 0%, rgba(14, 19, 28, 0.95) 100%)',
-          border: '1px solid rgba(59, 130, 246, 0.28)',
+          border: '1px solid rgba(249, 115, 22, 0.28)',
           boxShadow:
-            '0 0 0 1px rgba(59, 130, 246, 0.05), 0 24px 50px -20px rgba(0, 0, 0, 0.7)',
+            '0 0 0 1px rgba(249, 115, 22, 0.05), 0 24px 50px -20px rgba(0, 0, 0, 0.7)',
         }}
       >
         <div className="flex items-start gap-3 mb-3">
@@ -101,11 +101,11 @@ export function UpdateChecker() {
             className="w-9 h-9 rounded-lg shrink-0 flex items-center justify-center"
             style={{
               background:
-                'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(139,92,246,0.18))',
-              boxShadow: '0 0 0 1px rgba(99, 102, 241, 0.18)',
+                'linear-gradient(135deg, rgba(249,115,22,0.18), rgba(56,189,248,0.18))',
+              boxShadow: '0 0 0 1px rgba(249, 115, 22, 0.18)',
             }}
           >
-            <Download size={15} className="text-blue-300" />
+            <Download size={15} className="text-orange-300" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="font-semibold text-[13px] text-slate-100 tracking-tight">
@@ -155,12 +155,12 @@ export function UpdateChecker() {
         {phase === 'downloading' && (
           <div>
             <div className="flex items-center gap-2 text-xs text-slate-300 mb-2">
-              <Loader2 size={14} className="animate-spin text-blue-400" />
+              <Loader2 size={14} className="animate-spin text-orange-400" />
               Downloading…
             </div>
             <div className="h-1.5 bg-slate-800 rounded overflow-hidden">
               <div
-                className={`h-full bg-blue-500 transition-all ${
+                className={`h-full bg-orange-500 transition-all ${
                   pct === null ? 'animate-pulse' : ''
                 }`}
                 style={{ width: pct !== null ? `${pct}%` : '100%' }}
@@ -175,7 +175,7 @@ export function UpdateChecker() {
 
         {phase === 'installing' && (
           <div className="flex items-center gap-2 text-xs text-slate-300">
-            <Loader2 size={14} className="animate-spin text-blue-400" />
+            <Loader2 size={14} className="animate-spin text-orange-400" />
             Installing the new version…
           </div>
         )}

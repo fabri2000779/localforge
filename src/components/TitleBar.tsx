@@ -180,47 +180,49 @@ function AccountChip() {
 }
 
 function BrandGlyph() {
+  // LocalForge "Crucible" mark — a hexagonal crucible with a molten ember
+  // ingot + steel-forged edge, and two nodes: a filled ember stud (local) +
+  // a hollow steel ring (remote). Local vs remote reads by SHAPE as well as
+  // colour. Matches favicon.svg + the mobile/landing brand.
   return (
-    <div
-      className="relative w-5 h-5 rounded-md flex items-center justify-center pointer-events-none overflow-hidden"
-      style={{
-        background:
-          'linear-gradient(135deg, #101827 0%, #07090f 55%, #0b1020 100%)',
-        boxShadow:
-          '0 0 0 1px rgba(99, 102, 241, 0.30), 0 2px 6px -1px rgba(99, 102, 241, 0.40)',
-      }}
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 120 120"
+      fill="none"
+      className="pointer-events-none"
+      aria-label="LocalForge"
     >
-      {/* LocalForge mark — hex container + LF monogram + 2 endpoint dots.
-       * Simplified variant of localforge-cloud/brand/logo-mark.svg
-       * tuned for ~20px chrome. Matches favicon.svg. */}
-      <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
-        {/* Hex container */}
-        <path
-          d="M16 4 L26 9.5 V22.5 L16 28 L6 22.5 V9.5 Z"
-          stroke="#60a5fa"
-          strokeWidth="1.6"
-          strokeLinejoin="round"
-        />
-        {/* L stroke */}
-        <path
-          d="M11.5 10 v8 a2 2 0 0 0 2 2 h3.5"
-          stroke="#60a5fa"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        {/* F stroke */}
-        <path
-          d="M17.5 21 V11.5 h5 M17.5 16 h3.8"
-          stroke="#a78bfa"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        {/* Endpoint dots: local (cyan) + remote (violet) */}
-        <circle cx="9" cy="22" r="1.4" fill="#38bdf8" />
-        <circle cx="23" cy="11" r="1.4" fill="#a78bfa" />
-      </svg>
-    </div>
+      <defs>
+        <linearGradient id="tb-steel" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#7dd3fc" />
+          <stop offset="1" stopColor="#38bdf8" />
+        </linearGradient>
+        <linearGradient id="tb-ingot" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#fdba74" />
+          <stop offset="0.45" stopColor="#f97316" />
+          <stop offset="1" stopColor="#c2410c" />
+        </linearGradient>
+        <radialGradient id="tb-stud" cx="0.36" cy="0.32" r="0.8">
+          <stop offset="0" stopColor="#fdba74" />
+          <stop offset="0.55" stopColor="#f97316" />
+          <stop offset="1" stopColor="#c2410c" />
+        </radialGradient>
+        <radialGradient id="tb-glow" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stopColor="#f97316" stopOpacity="0.6" />
+          <stop offset="0.6" stopColor="#f97316" stopOpacity="0.12" />
+          <stop offset="1" stopColor="#f97316" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      <rect x="2" y="2" width="116" height="116" rx="30" fill="#0d1422" stroke="rgba(148,163,184,0.16)" strokeWidth="1.5" />
+      <g transform="translate(28 28) scale(0.64)">
+        <polygon points="50,8 86.4,29 86.4,71 50,92 13.6,71 13.6,29" fill="#0d1422" stroke="url(#tb-steel)" strokeWidth="6" strokeLinejoin="round" />
+        <ellipse cx="50" cy="58" rx="30" ry="24" fill="url(#tb-glow)" />
+        <polygon points="13.6,55 86.4,55 86.4,71 50,92 13.6,71" fill="url(#tb-ingot)" />
+        <rect x="15" y="53.4" width="70" height="3.4" rx="1.7" fill="#fdba74" opacity="0.8" />
+        <circle cx="13.6" cy="50" r="9.5" fill="url(#tb-stud)" stroke="#0a0d14" strokeWidth="3" />
+        <circle cx="86.4" cy="50" r="9.5" fill="#0a0d14" stroke="url(#tb-steel)" strokeWidth="5.5" />
+      </g>
+    </svg>
   );
 }

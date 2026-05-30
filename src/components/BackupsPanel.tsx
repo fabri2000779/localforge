@@ -61,18 +61,20 @@ export function BackupsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
     try {
       const list = await invoke<OrgBackupTargetView[]>('cloud_pull_backup_targets');
       setTargets(list);
-      if (!selectedId && list.length > 0) setSelectedId(list[0]!.id);
+      // Functional update: only set default selection if nothing is selected
+      // yet — avoids re-triggering this callback on every selection change.
+      setSelectedId((prev) => prev ?? list[0]?.id ?? null);
     } catch (e) {
       // Fall back to locally cached list on cloud error.
       try {
         const list = await invoke<OrgBackupTargetView[]>('cloud_list_backup_targets');
         setTargets(list);
-        if (!selectedId && list.length > 0) setSelectedId(list[0]!.id);
+        setSelectedId((prev) => prev ?? list[0]?.id ?? null);
       } catch {
         setTargets([]);
       }
     }
-  }, [selectedId]);
+  }, []); // no selectedId dep — functional setSelectedId handles the default
 
   useEffect(() => { void loadTargets(); }, [loadTargets]);
 
@@ -100,7 +102,7 @@ export function BackupsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
   async function backupNow() {
     setBusy('backup'); setErr(null); setNote(null);
     try {
-      await invoke<string>('cloud_backup_now', { serverId, nodeId, targetId: selectedId });
+      await invoke('cloud_backup_now', { serverId, nodeId, targetId: selectedId });
       setNote('Backup uploaded successfully.');
       await refreshList();
     } catch (e) { setErr(String(e)); }

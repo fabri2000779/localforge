@@ -397,10 +397,12 @@ export function ServerDetail() {
 
   const handleRestart = async () => {
     setLogs(['Restarting server...']);
-    await stopServer(server.id);
-    setTimeout(async () => {
+    try {
+      await stopServer(server.id);
       await startServer(server.id);
-    }, 2000);
+    } catch (e) {
+      console.error('[restart] failed:', e);
+    }
   };
 
   const handleDelete = async (deleteData: boolean) => {
@@ -410,6 +412,8 @@ export function ServerDetail() {
   };
 
   const handleRefresh = async () => {
+    // Route through relay for sub-users (they can't hit the local Docker).
+    if (isSubUser) return;
     try {
       const response = await invoke<{ logs: string[] }>('get_server_logs', { serverId: server.id, lines: 500, nodeId: activeNodeId });
       setLogs(response.logs);
@@ -479,7 +483,7 @@ export function ServerDetail() {
     running: { bg: 'bg-green-500/10', border: 'border-green-500/30', text: 'text-green-500', dot: 'bg-green-500' },
     stopped: { bg: 'bg-zinc-500/10', border: 'border-zinc-500/30', text: 'text-zinc-400', dot: 'bg-zinc-500' },
     starting: { bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', text: 'text-yellow-500', dot: 'bg-yellow-500' },
-    installing: { bg: 'bg-blue-500/10', border: 'border-blue-500/30', text: 'text-blue-500', dot: 'bg-blue-500' },
+    installing: { bg: 'bg-orange-500/10', border: 'border-orange-500/30', text: 'text-orange-500', dot: 'bg-orange-500' },
     stopping: { bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', text: 'text-yellow-500', dot: 'bg-yellow-500' },
     error: { bg: 'bg-red-500/10', border: 'border-red-500/30', text: 'text-red-500', dot: 'bg-red-500' },
   };
@@ -578,8 +582,8 @@ export function ServerDetail() {
             <div className="flex items-center gap-8">
               {/* CPU */}
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-indigo-500/20 flex items-center justify-center">
-                  <Cpu size={20} className="text-indigo-400" />
+                <div className="w-10 h-10 rounded-lg bg-sky-500/20 flex items-center justify-center">
+                  <Cpu size={20} className="text-sky-400" />
                 </div>
                 <div>
                   <div className="text-xs text-zinc-500 uppercase tracking-wide">CPU</div>
@@ -626,8 +630,8 @@ export function ServerDetail() {
               {/* Uptime */}
               {uptime && (
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
-                    <Clock size={20} className="text-purple-400" />
+                  <div className="w-10 h-10 rounded-lg bg-sky-500/20 flex items-center justify-center">
+                    <Clock size={20} className="text-sky-400" />
                   </div>
                   <div>
                     <div className="text-xs text-zinc-500 uppercase tracking-wide">Uptime</div>
@@ -707,10 +711,10 @@ export function ServerDetail() {
       {oauthUrl && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => { setOauthUrl(null); setOauthDismissed(true); }} />
-          <div className="relative bg-zinc-900 border border-indigo-500/50 rounded-xl shadow-2xl max-w-md w-full mx-4 p-6 animate-fade-in">
+          <div className="relative bg-zinc-900 border border-sky-500/50 rounded-xl shadow-2xl max-w-md w-full mx-4 p-6 animate-fade-in">
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-12 h-12 rounded-lg bg-indigo-500/20 flex items-center justify-center">
-                <Key size={24} className="text-indigo-400" />
+              <div className="w-12 h-12 rounded-lg bg-sky-500/20 flex items-center justify-center">
+                <Key size={24} className="text-sky-400" />
               </div>
               <div>
                 <h3 className="text-lg font-semibold">Authentication Required</h3>
@@ -877,7 +881,7 @@ export function ServerDetail() {
                   setAutoScroll(true);
                   consoleEndRef.current?.scrollIntoView({ behavior: 'instant' });
                 }}
-                className="console-toolbar-btn text-indigo-400"
+                className="console-toolbar-btn text-sky-400"
               >
                 ↓ Bottom
               </button>
@@ -987,7 +991,7 @@ export function ServerDetail() {
                     <span className="text-sm text-zinc-400">Your Public Address</span>
                     <button 
                       onClick={() => copyToClipboard(publicAddress, 'public')}
-                      className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                      className="text-xs text-sky-400 hover:text-sky-300 flex items-center gap-1"
                     >
                       {copied === 'public' ? <Check size={12} /> : <Copy size={12} />}
                       Copy
@@ -1074,7 +1078,7 @@ export function ServerDetail() {
             )}
             
             {isEditingConfig && (
-              <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg text-sm text-blue-400">
+              <div className="mb-4 p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg text-sm text-orange-400">
                 💡 Changes will be applied on next server restart
               </div>
             )}

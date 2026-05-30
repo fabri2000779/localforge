@@ -80,7 +80,7 @@ export function AcceptInviteToast() {
     return (
       <>
         <div className="invite-toast">
-          <Mail size={16} className="shrink-0 text-violet-300" />
+          <Mail size={16} className="shrink-0 text-sky-300" />
           <div className="flex-1">
             <strong>Team invitation</strong>
             <p>Sign in with the same email you were invited under to accept.</p>
@@ -97,7 +97,7 @@ export function AcceptInviteToast() {
 
   return (
     <div className="invite-toast">
-      <Mail size={16} className="shrink-0 text-violet-300" />
+      <Mail size={16} className="shrink-0 text-sky-300" />
       <div className="flex-1">
         <strong>You've been invited to a workspace</strong>
         <p>{err ?? "Click 'Accept' to join."}</p>

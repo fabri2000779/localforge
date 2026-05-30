@@ -134,7 +134,13 @@ pub fn spawn_scheduler(backend: Arc<dyn NodeBackend>, data_root: PathBuf) {
                 }
                 let baseline = s.last_run.and_then(ms_to_local).unwrap_or(start);
                 let Some(next) = next_fire(&s.cron, &baseline) else {
-                    continue; // bad cron expression — skip
+                    // A schedule with an unparseable cron expression will never
+                    // fire. Log a warning so the operator can spot-fix it.
+                    tracing::warn!(
+                        "[scheduler] schedule {} has unparseable cron {:?} — skipping",
+                        s.id, s.cron,
+                    );
+                    continue;
                 };
                 if next <= now {
                     tracing::info!(

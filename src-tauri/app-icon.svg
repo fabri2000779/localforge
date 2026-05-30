@@ -1,0 +1,39 @@
+<!-- LocalForge app-icon source (full-bleed square) for `tauri icon`.
+     The "Crucible" mark: hexagonal crucible, steel-forged edge, molten ember
+     ingot, local (filled ember) + remote (hollow steel) nodes. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="1024" height="1024" role="img" aria-label="LocalForge">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#12161f"></stop>
+      <stop offset="1" stop-color="#0a0d14"></stop>
+    </linearGradient>
+    <linearGradient id="steel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7dd3fc"></stop>
+      <stop offset="1" stop-color="#38bdf8"></stop>
+    </linearGradient>
+    <linearGradient id="ingot" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fdba74"></stop>
+      <stop offset="0.45" stop-color="#f97316"></stop>
+      <stop offset="1" stop-color="#c2410c"></stop>
+    </linearGradient>
+    <radialGradient id="stud" cx="0.36" cy="0.32" r="0.8">
+      <stop offset="0" stop-color="#fdba74"></stop>
+      <stop offset="0.55" stop-color="#f97316"></stop>
+      <stop offset="1" stop-color="#c2410c"></stop>
+    </radialGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f97316" stop-opacity="0.6"></stop>
+      <stop offset="0.6" stop-color="#f97316" stop-opacity="0.12"></stop>
+      <stop offset="1" stop-color="#f97316" stop-opacity="0"></stop>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="120" height="120" fill="url(#bg)"></rect>
+  <g transform="translate(20 20) scale(0.8)">
+    <polygon points="50,8 86.4,29 86.4,71 50,92 13.6,71 13.6,29" fill="#0d1422" stroke="url(#steel)" stroke-width="6" stroke-linejoin="round"></polygon>
+    <ellipse cx="50" cy="58" rx="30" ry="24" fill="url(#glow)"></ellipse>
+    <polygon points="13.6,55 86.4,55 86.4,71 50,92 13.6,71" fill="url(#ingot)"></polygon>
+    <rect x="15" y="53.4" width="70" height="3.4" rx="1.7" fill="#fdba74" opacity="0.8"></rect>
+    <circle cx="13.6" cy="50" r="9.5" fill="url(#stud)" stroke="#0a0d14" stroke-width="3"></circle>
+    <circle cx="86.4" cy="50" r="9.5" fill="#0a0d14" stroke="url(#steel)" stroke-width="5.5"></circle>
+  </g>
+</svg>

@@ -9,8 +9,8 @@ const ANSI_COLORS: Record<number, string> = {
   31: 'text-red-500',
   32: 'text-green-500',
   33: 'text-yellow-500',
-  34: 'text-blue-500',
-  35: 'text-purple-500',
+  34: 'text-orange-500',
+  35: 'text-sky-500',
   36: 'text-cyan-500',
   37: 'text-zinc-300',
   
@@ -19,8 +19,8 @@ const ANSI_COLORS: Record<number, string> = {
   91: 'text-red-400',
   92: 'text-green-400',
   93: 'text-yellow-300',
-  94: 'text-blue-400',
-  95: 'text-purple-400',
+  94: 'text-orange-400',
+  95: 'text-sky-400',
   96: 'text-cyan-400',
   97: 'text-white',
   
@@ -29,8 +29,8 @@ const ANSI_COLORS: Record<number, string> = {
   41: 'bg-red-900',
   42: 'bg-green-900',
   43: 'bg-yellow-900',
-  44: 'bg-blue-900',
-  45: 'bg-purple-900',
+  44: 'bg-orange-900',
+  45: 'bg-sky-900',
   46: 'bg-cyan-900',
   47: 'bg-zinc-700',
 };
@@ -153,7 +153,7 @@ export function ConsoleLine({ line, index }: ConsoleLineProps) {
   // Check if this is a user command echo
   const isCommand = line.startsWith('> ');
   if (isCommand) {
-    lineClass = 'bg-indigo-950/20 border-l-indigo-500';
+    lineClass = 'bg-sky-950/20 border-l-sky-500';
   }
   
   return (

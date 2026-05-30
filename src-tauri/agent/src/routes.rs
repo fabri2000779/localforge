@@ -67,8 +67,11 @@ pub fn router(state: AppState) -> Router {
         .route("/servers/{id}/backups/delete", post(delete_backup))
         // S3 target provisioning: the desktop pushes the full named list here
         // over direct HTTPS so the agent can run relay-triggered backups itself.
-        // The PUT replaces the stored list atomically.
+        // The PUT replaces the stored list atomically. 64 KiB is generous for
+        // an org's entire target list; explicit limit avoids relying on axum's
+        // implicit 2 MiB default.
         .route("/backup-targets", put(set_backup_targets))
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
         // scheduled actions
         .route("/servers/{id}/schedules", get(list_schedules).post(upsert_schedule))
         .route("/schedules/{sid}", delete(delete_schedule))

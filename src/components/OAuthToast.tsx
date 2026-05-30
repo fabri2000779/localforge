@@ -49,9 +49,9 @@ export function OAuthToast() {
           style={{
             background:
               'linear-gradient(180deg, rgba(20, 26, 38, 0.95) 0%, rgba(14, 19, 28, 0.95) 100%)',
-            border: '1px solid rgba(139, 92, 246, 0.32)',
+            border: '1px solid rgba(56, 189, 248, 0.32)',
             boxShadow:
-              '0 0 0 1px rgba(139, 92, 246, 0.05), 0 24px 50px -20px rgba(0, 0, 0, 0.7)',
+              '0 0 0 1px rgba(56, 189, 248, 0.05), 0 24px 50px -20px rgba(0, 0, 0, 0.7)',
           }}
         >
           <div className="flex items-start gap-3">
@@ -59,11 +59,11 @@ export function OAuthToast() {
               className="w-9 h-9 rounded-lg shrink-0 flex items-center justify-center"
               style={{
                 background:
-                  'linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.2))',
-                boxShadow: '0 0 0 1px rgba(139, 92, 246, 0.18)',
+                  'linear-gradient(135deg, rgba(249, 115, 22, 0.2), rgba(56, 189, 248, 0.2))',
+                boxShadow: '0 0 0 1px rgba(56, 189, 248, 0.18)',
               }}
             >
-              <ExternalLink size={15} className="text-indigo-300" />
+              <ExternalLink size={15} className="text-sky-300" />
             </div>
             <div className="flex-1 min-w-0">
               <div className="font-semibold text-[13px] text-slate-100 tracking-tight mb-0.5">

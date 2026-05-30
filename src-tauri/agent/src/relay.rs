@@ -172,6 +172,17 @@ async fn handle_cmd(
     let rid = f.request_id;
     let args = f.args.unwrap_or(Value::Null);
 
+    // Validate the server id (relay `target`) before passing it to the backend.
+    // The backend constructs filesystem paths from this value, so reject anything
+    // that could escape the data directory. Valid ids are UUIDs (hex + dashes);
+    // we allow underscores for forward-compat but nothing else.
+    if !target.is_empty()
+        && !target.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        cmd_result(&out, &rid, &cmd, &target, false, Some("invalid_server_id".into()));
+        return;
+    }
+
     match cmd.as_str() {
         "state.snapshot" => match backend.list_servers().await {
             Ok(servers) => {

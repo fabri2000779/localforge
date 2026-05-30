@@ -42,7 +42,7 @@ export function Home() {
       <header className="hero">
         <div className="hero-text">
           <div className="eyebrow mb-2.5 flex items-center gap-1.5">
-            <Sparkles size={11} className="text-blue-400" />
+            <Sparkles size={11} className="text-orange-400" />
             Dashboard
           </div>
           <h1 className="hero-title">Welcome to LocalForge</h1>
@@ -65,7 +65,7 @@ export function Home() {
       <section className="mb-10">
         <div className="section-header">
           <div className="section-title">
-            <Activity size={14} className="text-blue-400" />
+            <Activity size={14} className="text-orange-400" />
             Overview
           </div>
           <span className="text-[11px] text-slate-500 font-medium">
@@ -76,7 +76,7 @@ export function Home() {
           <StatCard
             label="Total servers"
             value={servers.length}
-            icon={<Server size={20} className="text-blue-300" />}
+            icon={<Server size={20} className="text-orange-300" />}
             accent="blue"
           />
           <StatCard
@@ -99,7 +99,7 @@ export function Home() {
         <section className="card card-elevated mb-10">
           <div className="section-header !mb-5">
             <div className="section-title">
-              <Cloud size={15} className="text-purple-400" />
+              <Cloud size={15} className="text-sky-400" />
               Across all nodes
             </div>
             <button
@@ -124,7 +124,7 @@ export function Home() {
             <ClusterStat
               label="Containers total"
               value={clusterSummary.containers_total.toString()}
-              icon={<Server size={13} className="text-blue-400" />}
+              icon={<Server size={13} className="text-orange-400" />}
             />
             <ClusterStat
               label="Images"
@@ -169,12 +169,12 @@ export function Home() {
               className="w-14 h-14 rounded-2xl flex items-center justify-center mb-5"
               style={{
                 background:
-                  'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(139,92,246,0.18))',
+                  'linear-gradient(135deg, rgba(249,115,22,0.18), rgba(56,189,248,0.18))',
                 boxShadow:
-                  '0 0 0 1px rgba(99, 102, 241, 0.18), 0 14px 30px -10px rgba(59,130,246,0.35)',
+                  '0 0 0 1px rgba(249, 115, 22, 0.18), 0 14px 30px -10px rgba(249,115,22,0.35)',
               }}
             >
-              <Server size={24} className="text-blue-200" />
+              <Server size={24} className="text-orange-200" />
             </div>
             <h2 className="text-lg font-semibold text-slate-100 mb-1.5">
               No servers yet

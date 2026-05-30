@@ -212,7 +212,7 @@ export function NodesPage() {
       {cloudMachines.length > 0 && (
         <section className="card mt-5">
           <div className="section-title mb-1">
-            <Cloud size={15} className="text-purple-400" />
+            <Cloud size={15} className="text-sky-400" />
             Machines in this organization
           </div>
           <p className="text-xs text-slate-500 mb-3">
@@ -227,13 +227,13 @@ export function NodesPage() {
               >
                 <div
                   className={`shrink-0 w-7 h-7 rounded-md flex items-center justify-center ${
-                    m.kind === 'desktop' ? 'bg-blue-500/15' : 'bg-purple-500/15'
+                    m.kind === 'desktop' ? 'bg-orange-500/15' : 'bg-sky-500/15'
                   }`}
                 >
                   {m.kind === 'desktop' ? (
-                    <Server size={13} className="text-blue-400" />
+                    <Server size={13} className="text-orange-400" />
                   ) : (
-                    <Cloud size={13} className="text-purple-400" />
+                    <Cloud size={13} className="text-sky-400" />
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -397,9 +397,9 @@ function NodeCard({
         <div className="flex items-start gap-4 flex-1 min-w-0">
           <div className="p-3 rounded-lg bg-slate-800">
             {isLocal ? (
-              <Server className="text-blue-400" size={22} />
+              <Server className="text-orange-400" size={22} />
             ) : (
-              <Cloud className="text-purple-400" size={22} />
+              <Cloud className="text-sky-400" size={22} />
             )}
           </div>
           <div className="flex-1 min-w-0">
@@ -416,7 +416,7 @@ function NodeCard({
                     }}
                     disabled={savingName}
                     maxLength={40}
-                    className="bg-slate-800 border border-slate-600 rounded px-2 py-0.5 text-sm font-semibold text-slate-100 outline-none focus:border-blue-500 w-44 min-w-0"
+                    className="bg-slate-800 border border-slate-600 rounded px-2 py-0.5 text-sm font-semibold text-slate-100 outline-none focus:border-orange-500 w-44 min-w-0"
                     aria-label="Machine name"
                   />
                   <button
@@ -538,11 +538,11 @@ function NodeCard({
       {stats && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4 pt-4 border-t border-slate-800">
           <StatBar
-            icon={<Cpu size={14} className="text-blue-400" />}
+            icon={<Cpu size={14} className="text-orange-400" />}
             label={`CPU · ${stats.cpu_count} cores`}
             value={stats.cpu_percent}
             display={`${stats.cpu_percent.toFixed(1)}%`}
-            colorClass="bg-blue-500"
+            colorClass="bg-orange-500"
           />
           <StatBar
             icon={<MemoryStick size={14} className="text-emerald-400" />}
@@ -556,7 +556,7 @@ function NodeCard({
             colorClass={memPctClass(memPct)}
           />
           <StatBar
-            icon={<HardDrive size={14} className="text-purple-400" />}
+            icon={<HardDrive size={14} className="text-sky-400" />}
             label="Disk (data root)"
             value={diskPct ?? 0}
             display={`${humanBytes(stats.disk_used_bytes)} / ${humanBytes(stats.disk_total_bytes)}`}

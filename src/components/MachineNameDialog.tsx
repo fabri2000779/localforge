@@ -111,10 +111,10 @@ export function MachineNameDialog() {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={dismiss} />
-      <div className="relative bg-zinc-900 border border-blue-500/40 rounded-xl shadow-2xl max-w-md w-full mx-4 p-6 animate-fade-in">
+      <div className="relative bg-zinc-900 border border-orange-500/40 rounded-xl shadow-2xl max-w-md w-full mx-4 p-6 animate-fade-in">
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-12 h-12 rounded-lg bg-blue-500/15 flex items-center justify-center shrink-0">
-            <Server size={24} className="text-blue-400" />
+          <div className="w-12 h-12 rounded-lg bg-orange-500/15 flex items-center justify-center shrink-0">
+            <Server size={24} className="text-orange-400" />
           </div>
           <div>
             <h3 className="text-lg font-semibold text-slate-100">Name this machine</h3>

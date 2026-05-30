@@ -4,27 +4,33 @@
  * Design tokens
  * ------------------------------------------------------------------------- */
 :root {
-  /* Surfaces */
-  --color-bg: #07090f;
-  --color-surface: #0e131c;
-  --color-surface-hover: #141a26;
+  /* Surfaces — "night" backdrop with layered glass cards (Crucible brand). */
+  --color-bg: #0a0d14;
+  --color-surface: #12161f;
+  --color-surface-hover: #161d2b;
   --color-border: rgba(148, 163, 184, 0.10);
-  --color-border-strong: rgba(148, 163, 184, 0.18);
+  --color-border-strong: rgba(148, 163, 184, 0.16);
 
   /* Text */
-  --color-text: #e2e8f0;
+  --color-text: #f1f5f9;
   --color-text-muted: #94a3b8;
   --color-text-dim: #64748b;
 
-  /* Accents */
-  --color-accent: #3b82f6;
-  --color-accent-soft: rgba(59, 130, 246, 0.12);
-  --color-accent-glow: rgba(59, 130, 246, 0.35);
+  /* Accents — ember (forge) is the PRIMARY accent; steel (cool blue) is the
+     secondary, used for remote/agent + informational surfaces. */
+  --color-accent: #f97316;
+  --color-accent-light: #fdba74;
+  --color-accent-deep: #ea580c;
+  --color-accent-soft: rgba(249, 115, 22, 0.12);
+  --color-accent-glow: rgba(249, 115, 22, 0.35);
+  --color-steel: #38bdf8;
+  --color-steel-light: #7dd3fc;
+  --color-steel-soft: rgba(56, 189, 248, 0.14);
 
   /* Semantic */
-  --color-success: #22c55e;
-  --color-warning: #eab308;
-  --color-error: #ef4444;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-error: #f87171;
 }
 
 /* Universal reset — MUST be inside @layer base so Tailwind utilities
@@ -49,9 +55,8 @@ html, body, #root {
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   color: var(--color-text);
-  font-feature-settings: 'cv11', 'ss01', 'cv02';
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -147,8 +152,8 @@ html {
   color: #f1f5f9;
 }
 .sidebar-item.active {
-  background: rgba(59, 130, 246, 0.12);
-  color: #93c5fd;
+  background: rgba(249, 115, 22, 0.12);
+  color: #fdba74;
 }
 .sidebar-item.active::before {
   content: '';
@@ -174,12 +179,12 @@ html {
   color: #cbd5e1;
 }
 .sidebar-badge-accent {
-  background: rgba(59, 130, 246, 0.15);
-  color: #93c5fd;
+  background: rgba(249, 115, 22, 0.15);
+  color: #fdba74;
 }
 .sidebar-badge-purple {
-  background: rgba(168, 85, 247, 0.15);
-  color: #d8b4fe;
+  background: rgba(56, 189, 248, 0.15);
+  color: #7dd3fc;
 }
 
 .sidebar-section-label {
@@ -207,8 +212,8 @@ html {
   flex: 1;
   overflow-y: auto;
   background:
-    radial-gradient(ellipse 90% 55% at 50% -12%, rgba(59, 130, 246, 0.10) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 35% at 92% 4%, rgba(139, 92, 246, 0.06) 0%, transparent 65%),
+    radial-gradient(ellipse 90% 55% at 50% -12%, rgba(249, 115, 22, 0.10) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 35% at 92% 4%, rgba(56, 189, 248, 0.06) 0%, transparent 65%),
     var(--color-bg);
 }
 
@@ -339,7 +344,7 @@ html {
   box-shadow: 0 10px 24px -16px rgba(0, 0, 0, 0.55);
 }
 
-.stat-card-blue    { --stat-accent: #3b82f6; }
+.stat-card-blue    { --stat-accent: #f97316; }
 .stat-card-emerald { --stat-accent: #22c55e; }
 .stat-card-slate   { --stat-accent: #64748b; }
 
@@ -434,19 +439,21 @@ html {
 }
 
 .btn-primary {
-  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
-  color: white;
+  /* Forged-ember primary: dark text on a hot-metal gradient — the brand's
+     signature CTA, shared with mobile + landing. */
+  background: linear-gradient(180deg, #fb923c 0%, #f97316 100%);
+  color: #1c0f03;
   box-shadow:
-    0 0 0 1px rgba(59, 130, 246, 0.4),
-    0 6px 16px -6px rgba(59, 130, 246, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    0 0 0 1px rgba(249, 115, 22, 0.4),
+    0 6px 16px -6px rgba(249, 115, 22, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 .btn-primary:hover {
-  background: linear-gradient(180deg, #4f8fff 0%, #2f6fea 100%);
+  background: linear-gradient(180deg, #fca35a 0%, #fb8a2e 100%);
   box-shadow:
-    0 0 0 1px rgba(96, 165, 250, 0.5),
-    0 8px 20px -6px rgba(59, 130, 246, 0.6),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    0 0 0 1px rgba(251, 146, 60, 0.5),
+    0 8px 22px -6px rgba(249, 115, 22, 0.65),
+    inset 0 1px 0 rgba(255, 255, 255, 0.32);
 }
 
 .btn-secondary {
@@ -538,8 +545,8 @@ html {
 }
 .server-card:focus-visible {
   outline: none;
-  border-color: rgba(59, 130, 246, 0.5);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+  border-color: rgba(249, 115, 22, 0.5);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.18);
 }
 .server-card-actions {
   display: flex;
@@ -582,12 +589,12 @@ html {
   opacity: 0;
   transition: opacity 200ms;
   background:
-    radial-gradient(circle at 50% 0%, rgba(59, 130, 246, 0.10) 0%, transparent 70%);
+    radial-gradient(circle at 50% 0%, rgba(249, 115, 22, 0.10) 0%, transparent 70%);
 }
 .game-tile:hover {
-  border-color: rgba(59, 130, 246, 0.4);
+  border-color: rgba(249, 115, 22, 0.4);
   transform: translateY(-1px);
-  box-shadow: 0 8px 24px -12px rgba(59, 130, 246, 0.25);
+  box-shadow: 0 8px 24px -12px rgba(249, 115, 22, 0.25);
 }
 .game-tile:hover::after {
   opacity: 1;
@@ -610,7 +617,7 @@ html {
 .game-tile:hover .game-tile-cta {
   opacity: 1;
   transform: translateY(0);
-  color: #93c5fd;
+  color: #fdba74;
 }
 
 /* ---------------------------------------------------------------------------
@@ -674,9 +681,9 @@ html {
 }
 .input:focus {
   outline: none;
-  border-color: rgba(59, 130, 246, 0.6);
+  border-color: rgba(249, 115, 22, 0.6);
   background: rgba(14, 19, 28, 1);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
 }
 
 .input-label {
@@ -696,7 +703,7 @@ html {
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--color-text-dim);
+  color: var(--color-accent);
 }
 
 /* ---------------------------------------------------------------------------
@@ -746,7 +753,7 @@ html {
 }
 .console-line:hover {
   background: rgba(30, 41, 59, 0.4);
-  border-left-color: rgba(59, 130, 246, 0.5);
+  border-left-color: rgba(249, 115, 22, 0.5);
 }
 .console-line:nth-child(odd) {
   background: rgba(15, 23, 42, 0.4);
@@ -860,7 +867,7 @@ html {
   width: 18px;
   height: 18px;
   border-radius: 5px;
-  background: linear-gradient(135deg, #38bdf8 0%, #a78bfa 100%);
+  background: linear-gradient(135deg, #38bdf8 0%, #7dd3fc 100%);
   color: #0b1020;
   font-size: 9.5px;
   font-weight: 700;
@@ -886,8 +893,8 @@ html {
   line-height: 1.4;
 }
 .plan-free  { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; }
-.plan-hobby { background: rgba(59, 130, 246, 0.22);  color: #93c5fd; }
-.plan-team  { background: rgba(167, 139, 250, 0.22); color: #c4b5fd; }
+.plan-hobby { background: rgba(249, 115, 22, 0.22);  color: #fdba74; }
+.plan-team  { background: rgba(56, 189, 248, 0.22); color: #7dd3fc; }
 
 /* ── Modal ─────────────────────────────────────────────────────────── */
 .auth-overlay {
@@ -998,8 +1005,8 @@ html {
   transition: border-color 120ms, box-shadow 120ms;
 }
 .auth-field > input:focus {
-  border-color: rgba(59, 130, 246, 0.55);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+  border-color: rgba(249, 115, 22, 0.55);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.16);
 }
 .auth-field > input::placeholder { color: #475569; }
 
@@ -1023,15 +1030,15 @@ html {
   margin-top: 6px;
   padding: 10px 14px;
   border-radius: 9px;
-  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
-  color: white;
-  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: linear-gradient(180deg, #fb923c 0%, #f97316 100%);
+  color: #1c0f03;
+  border: 1px solid rgba(249, 115, 22, 0.45);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 6px 14px -6px rgba(59, 130, 246, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  box-shadow: 0 6px 14px -6px rgba(249, 115, 22, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
-.auth-submit:hover { background: linear-gradient(180deg, #4f8fff 0%, #2f6fea 100%); }
+.auth-submit:hover { background: linear-gradient(180deg, #fca35a 0%, #fb8a2e 100%); }
 .auth-submit:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .auth-meta {
@@ -1045,7 +1052,7 @@ html {
   background: none;
   border: none;
   font: inherit;
-  color: #93c5fd;
+  color: #fdba74;
   cursor: pointer;
   padding: 0;
 }
@@ -1125,8 +1132,8 @@ html {
   padding: 14px 14px 12px;
 }
 .tier-card-featured {
-  border-color: rgba(59, 130, 246, 0.40);
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.16);
+  border-color: rgba(249, 115, 22, 0.40);
+  box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.16);
 }
 .tier-price {
   font-size: 22px;
@@ -1188,8 +1195,8 @@ html {
   outline: none;
 }
 .vault-key-block textarea:focus {
-  border-color: rgba(59, 130, 246, 0.55);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+  border-color: rgba(249, 115, 22, 0.55);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.16);
 }
 .vault-key-block .btn-secondary {
   align-self: flex-start;
@@ -1257,7 +1264,7 @@ html {
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #38bdf8 0%, #a78bfa 100%);
+  background: linear-gradient(135deg, #38bdf8 0%, #7dd3fc 100%);
   color: #0b1020;
   font-size: 11px;
   font-weight: 700;
@@ -1282,8 +1289,8 @@ html {
   font-size: 9.5px;
   padding: 1px 5px;
   border-radius: 5px;
-  background: rgba(59, 130, 246, 0.18);
-  color: #93c5fd;
+  background: rgba(249, 115, 22, 0.18);
+  color: #fdba74;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1300,9 +1307,9 @@ html {
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-.role-owner   { background: rgba(245, 158, 11, 0.20); color: #fcd34d; }
-.role-admin   { background: rgba(167, 139, 250, 0.22); color: #c4b5fd; }
-.role-operator{ background: rgba(59, 130, 246, 0.22);  color: #93c5fd; }
+.role-owner   { background: rgba(249, 115, 22, 0.20); color: #fdba74; }
+.role-admin   { background: rgba(56, 189, 248, 0.22); color: #7dd3fc; }
+.role-operator{ background: rgba(52, 211, 153, 0.18); color: #6ee7b7; }
 .role-viewer  { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; }
 .member-remove {
   background: transparent;
@@ -1334,7 +1341,7 @@ html {
   padding: 14px 16px;
   max-width: 380px;
   background: linear-gradient(180deg, rgba(20, 26, 38, 0.96) 0%, rgba(14, 19, 28, 0.96) 100%);
-  border: 1px solid rgba(167, 139, 250, 0.32);
+  border: 1px solid rgba(56, 189, 248, 0.32);
   border-radius: 12px;
   box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.6);
   color: #e2e8f0;
@@ -1367,8 +1374,8 @@ html {
   outline: none;
 }
 .auth-field > select:focus {
-  border-color: rgba(59, 130, 246, 0.55);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+  border-color: rgba(249, 115, 22, 0.55);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.16);
 }
 
 /* Retention banner — same shape as cloud-warn but red since it's urgent. */
@@ -1388,7 +1395,7 @@ html {
   gap: 4px;
   background: transparent;
   border: 1px solid rgba(148, 163, 184, 0.14);
-  color: #93c5fd;
+  color: #fdba74;
   font-size: 11px;
   font-family: inherit;
   padding: 3px 9px;
@@ -1397,8 +1404,8 @@ html {
   transition: background 120ms, border-color 120ms;
 }
 .cloud-foot-link:hover {
-  background: rgba(59, 130, 246, 0.10);
-  border-color: rgba(59, 130, 246, 0.30);
+  background: rgba(249, 115, 22, 0.10);
+  border-color: rgba(249, 115, 22, 0.30);
   color: white;
 }
 .cloud-foot-link:disabled { opacity: 0.6; cursor: not-allowed; }
@@ -1468,8 +1475,8 @@ html {
   text-align: left;
   transition: background 120ms;
 }
-.title-bar-org-menu-item:hover { background: rgba(59, 130, 246, 0.10); color: white; }
-.title-bar-org-menu-item.active { background: rgba(59, 130, 246, 0.12); color: white; }
+.title-bar-org-menu-item:hover { background: rgba(249, 115, 22, 0.10); color: white; }
+.title-bar-org-menu-item.active { background: rgba(249, 115, 22, 0.12); color: white; }
 .title-bar-org-menu-info { display: flex; flex-direction: column; }
 .title-bar-org-menu-name { font-size: 12.5px; font-weight: 500; }
 .title-bar-org-menu-meta {
@@ -1486,10 +1493,10 @@ html {
   gap: 8px;
   padding: 9px 12px;
   margin-bottom: 14px;
-  background: rgba(167, 139, 250, 0.10);
-  border: 1px solid rgba(167, 139, 250, 0.28);
+  background: rgba(56, 189, 248, 0.10);
+  border: 1px solid rgba(56, 189, 248, 0.28);
   border-radius: 9px;
-  color: #c4b5fd;
+  color: #7dd3fc;
   font-size: 12px;
 }
 .sub-user-banner strong { color: white; }

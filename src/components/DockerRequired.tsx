@@ -22,23 +22,23 @@ export function DockerRequired({ status, onRetry }: Props) {
           className="w-16 h-16 rounded-2xl mx-auto mb-6 flex items-center justify-center"
           style={{
             background: isRemote
-              ? 'linear-gradient(135deg, rgba(168,85,247,0.18), rgba(99,102,241,0.18))'
-              : 'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(99,102,241,0.18))',
+              ? 'linear-gradient(135deg, rgba(56,189,248,0.18), rgba(249,115,22,0.18))'
+              : 'linear-gradient(135deg, rgba(249,115,22,0.18), rgba(249,115,22,0.18))',
             boxShadow:
-              '0 0 0 1px rgba(99, 102, 241, 0.22), 0 18px 40px -16px rgba(59,130,246,0.45)',
+              '0 0 0 1px rgba(249, 115, 22, 0.22), 0 18px 40px -16px rgba(249,115,22,0.45)',
           }}
         >
           {isRemote ? (
-            <Cloud size={34} className="text-purple-300" />
+            <Cloud size={34} className="text-sky-300" />
           ) : (
             <svg viewBox="0 0 24 24" fill="none" className="w-9 h-9">
               <path
                 d="M5 12.5h2v2H5v-2zm0-3h2v2H5v-2zm3 3h2v2H8v-2zm0-3h2v2H8v-2zm3 3h2v2h-2v-2zm0-3h2v2h-2v-2zm3 3h2v2h-2v-2zm-3-6h2v2h-2v-2z"
-                fill="#93c5fd"
+                fill="#fdba74"
               />
               <path
                 d="M21.5 13c-.4-.3-1.3-.4-2-.3-.1-.6-.5-1.2-1-1.6l-.4-.3-.3.4c-.6.8-.8 2.1-.2 2.9-.2.1-.7.4-1.6.4H2.6c-.3 1.5-.1 4.6 2.1 6.2 1.6 1.2 4 1.7 6.7 1.4 5.9-.7 9.4-4.6 10.3-9.6-.1 0-.1 0-.2-.1l.1.1z"
-                fill="#60a5fa"
+                fill="#fdba74"
               />
             </svg>
           )}

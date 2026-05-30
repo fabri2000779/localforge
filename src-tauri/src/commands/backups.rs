@@ -20,6 +20,11 @@ use tauri::State;
 async fn provision_all_nodes(state: &State<'_, NodeRegistry>) {
     let targets = crate::backups::load_targets();
     for rec in state.list_records().await {
+        // The local backend resolves credentials from the keychain directly;
+        // set_backup_targets is a no-op there, so skip it (saves an await + log).
+        if rec.id.is_local() {
+            continue;
+        }
         let Some(backend) = state.backend(&rec.id).await else {
             continue;
         };

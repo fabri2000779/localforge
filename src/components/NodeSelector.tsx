@@ -57,13 +57,13 @@ export function NodeSelector() {
       >
         <div
           className={`shrink-0 w-7 h-7 rounded-md flex items-center justify-center ${
-            active?.kind.kind === 'local' ? 'bg-blue-500/15' : 'bg-purple-500/15'
+            active?.kind.kind === 'local' ? 'bg-orange-500/15' : 'bg-sky-500/15'
           }`}
         >
           {active?.kind.kind === 'local' ? (
-            <Server size={14} className="text-blue-400" />
+            <Server size={14} className="text-orange-400" />
           ) : (
-            <Cloud size={14} className="text-purple-400" />
+            <Cloud size={14} className="text-sky-400" />
           )}
         </div>
         <div className="flex-1 min-w-0">
@@ -101,9 +101,9 @@ export function NodeSelector() {
                 }`}
               >
                 {isLocal ? (
-                  <Server size={14} className="text-blue-400 shrink-0" />
+                  <Server size={14} className="text-orange-400 shrink-0" />
                 ) : (
-                  <Cloud size={14} className="text-purple-400 shrink-0" />
+                  <Cloud size={14} className="text-sky-400 shrink-0" />
                 )}
                 <div className="flex-1 min-w-0">
                   <div className="font-medium truncate">{node.label}</div>

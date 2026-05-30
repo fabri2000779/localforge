@@ -30,10 +30,18 @@ pub async fn list_players_mc(docker: &DockerManager, cid: &str) -> Result<Vec<Pl
         .send_stdin(cid, "list\n")
         .await
         .map_err(|e| e.to_string())?;
-    // Give the server thread a moment to handle the command and flush the line.
-    tokio::time::sleep(Duration::from_millis(700)).await;
-    let lines = docker.get_logs(cid, 40).await.map_err(|e| e.to_string())?;
-    Ok(parse_list_output(&lines))
+    // Poll for the `list` response instead of one fixed wait: a busy server
+    // (GC pause, heavy tick) can take well over 700ms to print it, which used
+    // to return an empty roster. Return as soon as the marker appears (usually
+    // <300ms); give up after ~2s and report empty.
+    for _ in 0..8 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let lines = docker.get_logs(cid, 60).await.map_err(|e| e.to_string())?;
+        if let Some(players) = parse_list_output_opt(&lines) {
+            return Ok(players);
+        }
+    }
+    Ok(Vec::new())
 }
 
 /// Apply a moderation action via the Minecraft console.
@@ -97,24 +105,33 @@ fn sanitize_reason(s: &str) -> String {
 }
 
 /// Parse the most recent Minecraft `list` response out of recent log lines.
+/// Returns `None` when no `players online:` line is present yet (so the poller
+/// can keep waiting), `Some(vec)` when one is found (possibly empty = 0 online).
 /// Format: `... There are 3 of a max of 20 players online: Alice, Bob, Carol`
-fn parse_list_output(lines: &[String]) -> Vec<Player> {
+fn parse_list_output_opt(lines: &[String]) -> Option<Vec<Player>> {
     const MARKER: &str = "players online:";
     for line in lines.iter().rev() {
         if let Some(idx) = line.find(MARKER) {
             let names = &line[idx + MARKER.len()..];
-            return names
-                .split(',')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(|s| Player {
-                    name: s.to_string(),
-                    id: None,
-                })
-                .collect();
+            return Some(
+                names
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| Player {
+                        name: s.to_string(),
+                        id: None,
+                    })
+                    .collect(),
+            );
         }
     }
-    Vec::new()
+    None
+}
+
+/// Convenience wrapper used by tests — empty vec when no marker found.
+fn parse_list_output(lines: &[String]) -> Vec<Player> {
+    parse_list_output_opt(lines).unwrap_or_default()
 }
 
 #[cfg(test)]

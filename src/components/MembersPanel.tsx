@@ -90,7 +90,7 @@ export function MembersPanel() {
     <section className="card mb-5">
       <div className="section-header">
         <div className="section-title">
-          <Users size={15} className="text-violet-400" />
+          <Users size={15} className="text-sky-400" />
           Team
         </div>
         {canManage && (

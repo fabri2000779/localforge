@@ -162,7 +162,7 @@ export function ServerCard({ server, machineLabel, machineKind, onOpen, onAction
           <Trash2 size={12} strokeWidth={2.2} />
         </button>
 
-        <span className="ml-auto inline-flex items-center gap-1 text-[11.5px] font-medium text-slate-500 group-hover:text-blue-300 transition-colors">
+        <span className="ml-auto inline-flex items-center gap-1 text-[11.5px] font-medium text-slate-500 group-hover:text-orange-300 transition-colors">
           Open
           <ArrowRight size={11} />
         </span>

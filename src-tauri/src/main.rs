@@ -83,7 +83,10 @@ fn main() {
         .manage(NodeRegistry::default())
         .manage(Arc::new(cloud::relay::RelayState::default()))
         .setup(|app| {
-            let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
+            let app_data_dir = app.path().app_data_dir().unwrap_or_else(|_| {
+                tracing::warn!("app_data_dir unavailable; falling back to current dir");
+                std::path::PathBuf::from(".")
+            });
             std::fs::create_dir_all(&app_data_dir).ok();
 
             // Bring up the local Docker backend and any persisted remote

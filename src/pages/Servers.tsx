@@ -183,12 +183,12 @@ export function Servers() {
             className="w-14 h-14 rounded-2xl flex items-center justify-center mb-5"
             style={{
               background:
-                'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(139,92,246,0.18))',
+                'linear-gradient(135deg, rgba(249,115,22,0.18), rgba(56,189,248,0.18))',
               boxShadow:
-                '0 0 0 1px rgba(99, 102, 241, 0.18), 0 14px 30px -10px rgba(59,130,246,0.35)',
+                '0 0 0 1px rgba(249, 115, 22, 0.18), 0 14px 30px -10px rgba(249,115,22,0.35)',
             }}
           >
-            <Server size={24} className="text-blue-200" />
+            <Server size={24} className="text-orange-200" />
           </div>
           <h2 className="text-lg font-semibold text-slate-100 mb-1.5">
             No servers yet
@@ -242,7 +242,7 @@ function FilterChip({
       onClick={onClick}
       className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12.5px] font-medium border transition-colors ${
         active
-          ? 'bg-blue-500/15 border-blue-500/40 text-blue-200'
+          ? 'bg-orange-500/15 border-orange-500/40 text-orange-200'
           : 'bg-slate-800/60 border-slate-700/60 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
       }`}
     >

@@ -161,11 +161,11 @@ export function CreateServer() {
       <div
         className="flex items-start gap-2 text-[12.5px] text-slate-400 mb-6 px-3 py-2.5 rounded-lg"
         style={{
-          background: 'rgba(59,130,246,0.06)',
-          border: '1px solid rgba(59,130,246,0.15)',
+          background: 'rgba(249,115,22,0.06)',
+          border: '1px solid rgba(249,115,22,0.15)',
         }}
       >
-        <Server size={14} className="text-blue-300 shrink-0 mt-0.5" />
+        <Server size={14} className="text-orange-300 shrink-0 mt-0.5" />
         <span>
           This server will be created on{' '}
           <span className="font-medium text-slate-200">

@@ -66,12 +66,12 @@ const getFileIcon = (entry: FileEntry) => {
     case 'yml':
     case 'yaml':
     case 'toml':
-      return <Settings size={18} className="text-purple-400" />;
+      return <Settings size={18} className="text-sky-400" />;
     case 'properties':
     case 'cfg':
     case 'conf':
     case 'ini':
-      return <FileCode size={18} className="text-blue-400" />;
+      return <FileCode size={18} className="text-orange-400" />;
     case 'txt':
     case 'log':
     case 'md':
@@ -537,7 +537,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
         {/* Editor Header */}
         <div className="flex items-center justify-between px-4 py-3 bg-zinc-800 border-b border-zinc-700">
           <div className="flex items-center gap-3">
-            <FileCode size={18} className="text-blue-400" />
+            <FileCode size={18} className="text-orange-400" />
             <span className="font-medium">{editingFile.name}</span>
             {hasChanges && <span className="text-xs text-yellow-400">• Modified</span>}
           </div>
@@ -747,7 +747,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
                 <tr
                   key={entry.path}
                   className={`hover:bg-zinc-800/50 cursor-pointer border-b border-zinc-800/50 ${
-                    selectedItems.has(entry.path) ? 'bg-indigo-500/20' : ''
+                    selectedItems.has(entry.path) ? 'bg-sky-500/20' : ''
                   }`}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -999,7 +999,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
               >
                 <div className="flex items-center gap-2 mb-2">
                   {t.direction === 'upload' ? (
-                    <Upload size={14} className="text-blue-400 shrink-0" />
+                    <Upload size={14} className="text-orange-400 shrink-0" />
                   ) : (
                     <Download size={14} className="text-emerald-400 shrink-0" />
                   )}
@@ -1013,7 +1013,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
                   <div
                     className={`h-full ${
                       t.direction === 'upload'
-                        ? 'bg-blue-500'
+                        ? 'bg-orange-500'
                         : 'bg-emerald-500'
                     } ${pct === null ? 'animate-pulse' : ''} transition-all`}
                     style={{ width: pct !== null ? `${pct}%` : '100%' }}

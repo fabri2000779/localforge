@@ -142,7 +142,7 @@ export function AddNodeWizard({ isOpen, onClose, onComplete }: Props) {
         {/* Header */}
         <header className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
           <div className="flex items-center gap-3">
-            <Server className="text-blue-400" size={20} />
+            <Server className="text-orange-400" size={20} />
             <h2 className="text-lg font-semibold">Add a remote node</h2>
           </div>
           <button
@@ -283,7 +283,7 @@ function StepIndicator({ current }: { current: Step }) {
               i < idx
                 ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
                 : i === idx
-                ? 'bg-blue-500/20 border-blue-500 text-blue-300'
+                ? 'bg-orange-500/20 border-orange-500 text-orange-300'
                 : 'border-slate-700'
             }`}
           >

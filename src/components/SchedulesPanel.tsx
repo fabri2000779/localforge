@@ -40,7 +40,7 @@ function actionLabel(a: ScheduleAction): string {
 function ActionIcon({ kind }: { kind: ScheduleAction['kind'] }) {
   if (kind === 'restart') return <RotateCcw size={15} className="text-amber-400" />;
   if (kind === 'command') return <Terminal size={15} className="text-sky-400" />;
-  return <Megaphone size={15} className="text-violet-400" />;
+  return <Megaphone size={15} className="text-sky-400" />;
 }
 
 export function SchedulesPanel({ serverId, nodeId }: { serverId: string; nodeId: string }) {

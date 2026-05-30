@@ -41,11 +41,13 @@ export function Settings() {
     setSearchParams(tab === 'account' ? {} : { tab });
   }
 
-  // If the page is navigated to with ?tab= from another part of the app, respect it.
+  // The URL is the single source of truth for the active tab: deep-links
+  // (?tab=) AND the browser back/forward buttons both flow through here.
+  // Defaulting a missing param to 'account' makes back-navigation revert
+  // correctly. No stale closure (activeTab isn't read) and no loop
+  // (setActiveTab doesn't mutate searchParams).
   useEffect(() => {
-    const t = searchParams.get('tab') as SettingsTab | null;
-    if (t && t !== activeTab) setActiveTab(t);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    setActiveTab((searchParams.get('tab') as SettingsTab | null) ?? 'account');
   }, [searchParams]);
 
   const { status, info, checkStatus, fetchInfo, isChecking } = useDockerStore();
@@ -152,7 +154,7 @@ export function Settings() {
           {/* About */}
           <section className="card">
             <div className="section-title mb-3">
-              <Info size={15} className="text-blue-400" />
+              <Info size={15} className="text-orange-400" />
               About LocalForge
             </div>
             <div className="space-y-3 text-sm text-slate-400 leading-relaxed">
@@ -166,7 +168,7 @@ export function Settings() {
             </div>
             <div className="flex items-center gap-2 pt-4 mt-3 border-t border-[var(--color-border)]">
               <span className="eyebrow">Version</span>
-              <span className="font-mono text-xs text-slate-300">v0.1.49</span>
+              <span className="font-mono text-xs text-slate-300">v0.1.51</span>
             </div>
           </section>
 

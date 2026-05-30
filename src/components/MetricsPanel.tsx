@@ -137,10 +137,10 @@ export function MetricsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
           </div>
           <div className="card">
             <div className="flex items-center justify-between mb-2">
-              <span className="flex items-center gap-2 text-sm text-zinc-300"><MemoryStick size={14} className="text-violet-400" /> Memory</span>
+              <span className="flex items-center gap-2 text-sm text-zinc-300"><MemoryStick size={14} className="text-sky-400" /> Memory</span>
               <span className="font-mono text-sm text-zinc-200">{last ? `${last.memoryMb.toFixed(0)} MB` : '—'}</span>
             </div>
-            <Chart points={xs} series={[{ values: mem, color: '#a78bfa' }]} />
+            <Chart points={xs} series={[{ values: mem, color: '#7dd3fc' }]} />
           </div>
           <div className="card">
             <div className="flex items-center justify-between mb-2">

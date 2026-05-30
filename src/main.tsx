@@ -4,6 +4,16 @@
 // effect import: the shim self-skips if it detects the real Tauri runtime.
 import './dev/tauri-shim';
 
+// Crucible brand faces, self-hosted so they render offline (no Google Fonts
+// round-trip). Space Grotesk = display/UI; JetBrains Mono = console / code.
+import '@fontsource/space-grotesk/400.css';
+import '@fontsource/space-grotesk/500.css';
+import '@fontsource/space-grotesk/600.css';
+import '@fontsource/space-grotesk/700.css';
+import '@fontsource/jetbrains-mono/400.css';
+import '@fontsource/jetbrains-mono/500.css';
+import '@fontsource/jetbrains-mono/600.css';
+
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';

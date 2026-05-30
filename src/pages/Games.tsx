@@ -296,7 +296,7 @@ export function GamesPage() {
             <span>Config:</span>
             <code className="text-slate-300">{configPath}</code>
           </div>
-          <button onClick={handleOpenConfigFolder} className="text-blue-400 hover:text-blue-300 flex items-center gap-1">
+          <button onClick={handleOpenConfigFolder} className="text-orange-400 hover:text-orange-300 flex items-center gap-1">
             Open <ExternalLink size={12} />
           </button>
         </div>
@@ -304,7 +304,7 @@ export function GamesPage() {
 
       {/* Edit/Create Form */}
       {editMode !== 'none' && editingGame && (
-        <div className="card mb-6 border-2 border-blue-500/50">
+        <div className="card mb-6 border-2 border-orange-500/50">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold">
               {editMode === 'create' ? 'Create New Game' : `Edit: ${editingGame.name}`}
@@ -335,7 +335,7 @@ export function GamesPage() {
                 <div className="flex gap-3 items-stretch">
                   <input type="text" value={editingGame.logo_url || ''}
                     onChange={(e) => updateEditingGame({ logo_url: e.target.value || undefined })}
-                    className="flex-1 min-w-0 px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                    className="flex-1 min-w-0 px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500" 
                     placeholder="https://example.com/logo.png" />
                   <div className="w-[42px] bg-slate-700 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden">
                     <GameIcon icon={editingGame.icon} logoUrl={editingGame.logo_url} name={editingGame.name} size="md" />
@@ -634,7 +634,7 @@ export function GamesPage() {
       {customGames.length > 0 && (
         <div className="mb-8">
           <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Package size={20} className="text-blue-400" />
+            <Package size={20} className="text-orange-400" />
             Custom Games ({customGames.length})
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -749,14 +749,14 @@ function GameCard({ game, expanded, onToggle, onEdit, onDelete, onExport, copied
   const defaultPort = game.ports[0]?.container_port || 25565;
   
   return (
-    <div className={`card ${game.is_custom ? 'border border-blue-500/30' : ''}`}>
+    <div className={`card ${game.is_custom ? 'border border-orange-500/30' : ''}`}>
       <div className="flex items-start gap-4">
         <GameIcon icon={game.icon} logoUrl={game.logo_url} name={game.name} size="lg" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <h3 className="font-semibold">{game.name}</h3>
             {game.is_custom && (
-              <span className="text-xs px-2 py-0.5 bg-blue-500/20 text-blue-400 rounded">Custom</span>
+              <span className="text-xs px-2 py-0.5 bg-orange-500/20 text-orange-400 rounded">Custom</span>
             )}
           </div>
           <p className="text-sm text-slate-400 truncate">{game.description}</p>
@@ -803,7 +803,7 @@ function GameCard({ game, expanded, onToggle, onEdit, onDelete, onExport, copied
                       <span className="text-slate-500">=</span>
                       <code className="bg-slate-700 px-1 rounded truncate">{v.default}</code>
                       {v.system_mapping && v.system_mapping !== 'none' && (
-                        <span className="px-1 py-0.5 bg-blue-500/20 text-blue-300 rounded text-xs">{v.system_mapping}</span>
+                        <span className="px-1 py-0.5 bg-orange-500/20 text-orange-300 rounded text-xs">{v.system_mapping}</span>
                       )}
                     </div>
                   ))}
