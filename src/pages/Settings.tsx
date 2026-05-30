@@ -71,7 +71,7 @@ export function Settings() {
             key={t.id}
             className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
               activeTab === t.id
-                ? 'border-sky-400 text-white'
+                ? 'border-orange-400 text-white'
                 : 'border-transparent text-zinc-500 hover:text-zinc-300'
             }`}
             onClick={() => selectTab(t.id)}
@@ -168,7 +168,7 @@ export function Settings() {
             </div>
             <div className="flex items-center gap-2 pt-4 mt-3 border-t border-[var(--color-border)]">
               <span className="eyebrow">Version</span>
-              <span className="font-mono text-xs text-slate-300">v0.1.51</span>
+              <span className="font-mono text-xs text-slate-300">v0.1.52</span>
             </div>
           </section>
 

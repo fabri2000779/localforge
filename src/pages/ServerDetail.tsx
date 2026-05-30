@@ -582,8 +582,8 @@ export function ServerDetail() {
             <div className="flex items-center gap-8">
               {/* CPU */}
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-sky-500/20 flex items-center justify-center">
-                  <Cpu size={20} className="text-sky-400" />
+                <div className="w-10 h-10 rounded-lg bg-orange-500/15 flex items-center justify-center">
+                  <Cpu size={20} className="text-orange-300" />
                 </div>
                 <div>
                   <div className="text-xs text-zinc-500 uppercase tracking-wide">CPU</div>
@@ -773,7 +773,7 @@ export function ServerDetail() {
           onClick={() => setActiveTab('console')}
           className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
             activeTab === 'console' 
-              ? 'bg-zinc-800 text-white' 
+              ? 'bg-orange-500/15 text-orange-200'
               : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
           }`}
         >
@@ -783,7 +783,7 @@ export function ServerDetail() {
           onClick={() => setActiveTab('files')}
           className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
             activeTab === 'files' 
-              ? 'bg-zinc-800 text-white' 
+              ? 'bg-orange-500/15 text-orange-200'
               : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
           }`}
         >
@@ -793,7 +793,7 @@ export function ServerDetail() {
           onClick={() => setActiveTab('network')}
           className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
             activeTab === 'network' 
-              ? 'bg-zinc-800 text-white' 
+              ? 'bg-orange-500/15 text-orange-200'
               : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
           }`}
         >
@@ -804,7 +804,7 @@ export function ServerDetail() {
             onClick={() => setActiveTab('players')}
             className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
               activeTab === 'players'
-                ? 'bg-zinc-800 text-white'
+                ? 'bg-orange-500/15 text-orange-200'
                 : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
             }`}
           >
@@ -815,7 +815,7 @@ export function ServerDetail() {
           onClick={() => setActiveTab('backups')}
           className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
             activeTab === 'backups'
-              ? 'bg-zinc-800 text-white'
+              ? 'bg-orange-500/15 text-orange-200'
               : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
           }`}
         >
@@ -825,7 +825,7 @@ export function ServerDetail() {
           onClick={() => setActiveTab('schedules')}
           className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
             activeTab === 'schedules'
-              ? 'bg-zinc-800 text-white'
+              ? 'bg-orange-500/15 text-orange-200'
               : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
           }`}
         >
@@ -835,7 +835,7 @@ export function ServerDetail() {
           onClick={() => setActiveTab('metrics')}
           className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
             activeTab === 'metrics'
-              ? 'bg-zinc-800 text-white'
+              ? 'bg-orange-500/15 text-orange-200'
               : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
           }`}
         >
@@ -845,7 +845,7 @@ export function ServerDetail() {
           onClick={() => setActiveTab('settings')}
           className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
             activeTab === 'settings' 
-              ? 'bg-zinc-800 text-white' 
+              ? 'bg-orange-500/15 text-orange-200'
               : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
           }`}
         >
