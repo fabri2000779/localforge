@@ -397,11 +397,11 @@ struct DeleteBackupBody {
 
 async fn delete_backup(
     State(s): State<AppState>,
-    Path(_id): Path<String>,
+    Path(id): Path<String>,
     Json(body): Json<DeleteBackupBody>,
 ) -> Result<StatusCode, ApiError> {
     s.backend
-        .delete_backup(&body.target, &body.key)
+        .delete_backup(&id, &body.target, &body.key)
         .await
         .map_err(map_err)?;
     Ok(StatusCode::NO_CONTENT)

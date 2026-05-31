@@ -208,11 +208,17 @@ ensure_config() {
     return
   fi
   log "Generating bearer token + self-signed TLS cert..."
+  # The agent prints the bearer token + cert fingerprint to stdout. Capture it
+  # in a private temp file with an UNPREDICTABLE name (mktemp, mode 0600) rather
+  # than a fixed /tmp path — a fixed name is a symlink-attack / readable-secret
+  # hazard on multi-user hosts. A trap guarantees cleanup even on early exit.
+  PAIRING_FILE="$(umask 077; mktemp "${TMPDIR:-/tmp}/localforge-pairing.XXXXXXXX")"
+  trap 'rm -f "${PAIRING_FILE:-}"' EXIT
   "${INSTALL_DIR}/localforge-agent" install \
     --config-path "$CONFIG_PATH" \
     --data-root "$DATA_ROOT" \
     --bind "$BIND" \
-    --port "$PORT" > /tmp/localforge-pairing.txt
+    --port "$PORT" > "$PAIRING_FILE"
   chown "${SERVICE_USER}:${SERVICE_USER}" "$CONFIG_PATH"
   chmod 600 "$CONFIG_PATH"
   ok "Config written to ${CONFIG_PATH} (0600)."
@@ -295,10 +301,12 @@ print_summary() {
   # Extract the pairing block emitted by `agent install`. Each field lives on
   # a line like "  Token:    lf_agent_..." — we just regex them out so we
   # can rewrite the URL with the detected public host.
-  local token fingerprint
-  token=$(grep -oE 'lf_agent_[a-f0-9]+' /tmp/localforge-pairing.txt 2>/dev/null | head -n1 || true)
-  fingerprint=$(grep -oE 'SHA256:[A-F0-9:]+' /tmp/localforge-pairing.txt 2>/dev/null | head -n1 || true)
-  rm -f /tmp/localforge-pairing.txt
+  local token="" fingerprint=""
+  if [[ -n "${PAIRING_FILE:-}" && -f "${PAIRING_FILE}" ]]; then
+    token=$(grep -oE 'lf_agent_[a-f0-9]+' "$PAIRING_FILE" 2>/dev/null | head -n1 || true)
+    fingerprint=$(grep -oE 'SHA256:[A-F0-9:]+' "$PAIRING_FILE" 2>/dev/null | head -n1 || true)
+    rm -f "$PAIRING_FILE"
+  fi
 
   cat <<SUMMARY
 

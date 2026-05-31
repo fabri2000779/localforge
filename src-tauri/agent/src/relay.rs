@@ -346,7 +346,7 @@ async fn handle_cmd(
         "server.delete_backup" => {
             let key = args.get("key").and_then(Value::as_str).unwrap_or("").to_string();
             match crate::backup_target::find(&data_root, args.get("targetId").and_then(|v| v.as_str())) {
-                Some(t) => match backend.delete_backup(&t, &key).await {
+                Some(t) => match backend.delete_backup(&target, &t, &key).await {
                     Ok(()) => cmd_result(&out, &rid, &cmd, &target, true, None),
                     Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),
                 },

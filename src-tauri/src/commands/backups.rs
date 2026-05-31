@@ -193,6 +193,7 @@ pub async fn cloud_restore_backup(
 /// Delete a backup object from the bucket.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn cloud_delete_backup(
+    server_id: String,
     key: String,
     node_id: Option<String>,
     target_id: Option<String>,
@@ -200,5 +201,5 @@ pub async fn cloud_delete_backup(
 ) -> Result<(), String> {
     let backend = require_backend(&state, node_id.as_deref()).await?;
     let target = require_target(target_id.as_deref())?;
-    backend.delete_backup(&target, &key).await.map_err(|e| e.to_string())
+    backend.delete_backup(&server_id, &target, &key).await.map_err(|e| e.to_string())
 }

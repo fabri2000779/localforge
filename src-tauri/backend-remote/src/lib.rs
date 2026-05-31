@@ -427,10 +427,10 @@ impl NodeBackend for RemoteAgentBackend {
         ensure_ok(resp).await
     }
 
-    async fn delete_backup(&self, target: &BackupTarget, key: &str) -> Result<()> {
-        // The agent route is server-scoped; delete doesn't need a real id, so a
-        // placeholder satisfies the path (the handler ignores it).
-        let url = self.endpoint("/v1/servers/_/backups/delete")?;
+    async fn delete_backup(&self, id: &str, target: &BackupTarget, key: &str) -> Result<()> {
+        // Server-scoped: the agent confines the delete to this server's backup
+        // prefix, so the real id must travel in the path.
+        let url = self.endpoint(&format!("/v1/servers/{}/backups/delete", id))?;
         let resp = self
             .http
             .post(url)

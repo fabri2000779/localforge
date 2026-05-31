@@ -231,7 +231,7 @@ impl NodeBackend for LocalDockerBackend {
     // ---- file operations -------------------------------------------------
 
     async fn list_files(&self, path: &str) -> Result<DirectoryContents> {
-        let dir = PathBuf::from(path);
+        let dir = confine_path(&self.data_root, path)?;
         if !dir.exists() {
             return Err(BackendError::not_found(format!(
                 "directory does not exist: {}",
@@ -291,64 +291,66 @@ impl NodeBackend for LocalDockerBackend {
     }
 
     async fn read_file_text(&self, path: &str) -> Result<String> {
-        std::fs::read_to_string(path).map_err(BackendError::io)
+        std::fs::read_to_string(confine_path(&self.data_root, path)?).map_err(BackendError::io)
     }
 
     async fn write_file_text(&self, path: &str, content: &str) -> Result<()> {
-        std::fs::write(path, content).map_err(BackendError::io)
+        std::fs::write(confine_path(&self.data_root, path)?, content).map_err(BackendError::io)
     }
 
     async fn create_file(&self, path: &str) -> Result<()> {
-        if Path::new(path).exists() {
-            return Err(BackendError::invalid(format!(
-                "file already exists: {}",
-                path
-            )));
+        let path = confine_path(&self.data_root, path)?;
+        if path.exists() {
+            return Err(BackendError::invalid("file already exists"));
         }
         std::fs::write(path, "").map_err(BackendError::io)
     }
 
     async fn create_directory(&self, path: &str) -> Result<()> {
-        std::fs::create_dir_all(path).map_err(BackendError::io)
+        std::fs::create_dir_all(confine_path(&self.data_root, path)?).map_err(BackendError::io)
     }
 
     async fn delete_path(&self, path: &str) -> Result<()> {
-        let p = Path::new(path);
+        let p = confine_path(&self.data_root, path)?;
         if !p.exists() {
             return Err(BackendError::not_found(format!("not found: {}", path)));
         }
         if p.is_dir() {
-            std::fs::remove_dir_all(p).map_err(BackendError::io)
+            std::fs::remove_dir_all(&p).map_err(BackendError::io)
         } else {
-            std::fs::remove_file(p).map_err(BackendError::io)
+            std::fs::remove_file(&p).map_err(BackendError::io)
         }
     }
 
     async fn rename_path(&self, from: &str, to: &str) -> Result<()> {
+        let from = confine_path(&self.data_root, from)?;
+        let to = confine_path(&self.data_root, to)?;
         std::fs::rename(from, to).map_err(BackendError::io)
     }
 
     async fn move_path(&self, from: &str, to: &str) -> Result<()> {
+        let from = confine_path(&self.data_root, from)?;
+        let to = confine_path(&self.data_root, to)?;
         // For cross-volume moves, fall back to copy + delete.
-        if std::fs::rename(from, to).is_ok() {
+        if std::fs::rename(&from, &to).is_ok() {
             return Ok(());
         }
-        let src = Path::new(from);
-        if src.is_dir() {
-            copy_dir_recursive(src, Path::new(to)).map_err(BackendError::io)?;
-            std::fs::remove_dir_all(src).map_err(BackendError::io)
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to).map_err(BackendError::io)?;
+            std::fs::remove_dir_all(&from).map_err(BackendError::io)
         } else {
-            std::fs::copy(from, to).map_err(BackendError::io)?;
-            std::fs::remove_file(from).map_err(BackendError::io)
+            std::fs::copy(&from, &to).map_err(BackendError::io)?;
+            std::fs::remove_file(&from).map_err(BackendError::io)
         }
     }
 
     async fn copy_path(&self, from: &str, to: &str) -> Result<()> {
-        let src = Path::new(from);
-        if src.is_dir() {
-            copy_dir_recursive(src, Path::new(to)).map_err(BackendError::io)
+        let from = confine_path(&self.data_root, from)?;
+        let to = confine_path(&self.data_root, to)?;
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to).map_err(BackendError::io)
         } else {
-            std::fs::copy(from, to).map_err(BackendError::io)?;
+            std::fs::copy(&from, &to).map_err(BackendError::io)?;
             Ok(())
         }
     }
@@ -673,6 +675,7 @@ impl NodeBackend for LocalDockerBackend {
     }
 
     async fn download_file(&self, path: &str) -> Result<ByteStream> {
+        let path = confine_path(&self.data_root, path)?;
         let file = tokio::fs::File::open(path).await.map_err(BackendError::io)?;
         let stream = tokio_util::io::ReaderStream::new(file)
             .map(|r| r.map_err(BackendError::io));
@@ -680,13 +683,14 @@ impl NodeBackend for LocalDockerBackend {
     }
 
     async fn upload_file(&self, path: &str, mut body: ByteStream) -> Result<()> {
+        let path = confine_path(&self.data_root, path)?;
         // Make sure the destination directory exists.
-        if let Some(parent) = std::path::Path::new(path).parent() {
+        if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(BackendError::io)?;
         }
-        let mut file = tokio::fs::File::create(path)
+        let mut file = tokio::fs::File::create(&path)
             .await
             .map_err(BackendError::io)?;
         while let Some(chunk) = body.next().await {
@@ -698,7 +702,7 @@ impl NodeBackend for LocalDockerBackend {
     }
 
     async fn file_info(&self, path: &str) -> Result<FileEntry> {
-        let p = PathBuf::from(path);
+        let p = confine_path(&self.data_root, path)?;
         let metadata = std::fs::metadata(&p).map_err(BackendError::io)?;
         let name = p
             .file_name()
@@ -783,11 +787,11 @@ impl NodeBackend for LocalDockerBackend {
             std::fs::rename(&data_path, &aside).map_err(BackendError::io)?;
         }
         create_server_data_dir(&data_path)?;
-        crate::backups::download_extract(target, key, &data_path).await
+        crate::backups::download_extract(target, id, key, &data_path).await
     }
 
-    async fn delete_backup(&self, target: &BackupTarget, key: &str) -> Result<()> {
-        crate::backups::delete(target, key).await
+    async fn delete_backup(&self, id: &str, target: &BackupTarget, key: &str) -> Result<()> {
+        crate::backups::delete(target, id, key).await
     }
 
     // ----- scheduled actions ---------------------------------------------
@@ -856,6 +860,39 @@ impl NodeBackend for LocalDockerBackend {
 /// we just created, so we widen its mode to 0o777. On the desktop (where the
 /// user is usually uid 1000 already) this is a harmless no-op; on Windows and
 /// macOS the cfg-gate compiles it out entirely.
+/// Resolve a file-manager `path` and ensure it stays within the servers data
+/// root. The file-manager API takes absolute paths from a potentially hostile
+/// caller (an agent-token holder, or an XSS'd WebView), so without this a
+/// crafted path could read/write/delete anywhere on the host. Canonicalising
+/// resolves `..` and symlinks; for a not-yet-existing target (create / write /
+/// rename or move/copy destination) we canonicalise the parent and re-append
+/// the final component. The resolved path must live under `<data_root>/servers`.
+fn confine_path(data_root: &Path, path: &str) -> Result<PathBuf> {
+    let root = std::fs::canonicalize(persistence::servers_data_root(data_root))
+        .map_err(BackendError::io)?;
+    let p = Path::new(path);
+    let canon = match std::fs::canonicalize(p) {
+        Ok(c) => c,
+        Err(_) => {
+            let parent = p
+                .parent()
+                .ok_or_else(|| BackendError::invalid("invalid path"))?;
+            let name = p
+                .file_name()
+                .ok_or_else(|| BackendError::invalid("invalid path"))?;
+            std::fs::canonicalize(parent)
+                .map_err(BackendError::io)?
+                .join(name)
+        }
+    };
+    if !canon.starts_with(&root) {
+        return Err(BackendError::invalid(
+            "path is outside the server data directory",
+        ));
+    }
+    Ok(canon)
+}
+
 fn create_server_data_dir(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path).map_err(BackendError::io)?;
     #[cfg(unix)]

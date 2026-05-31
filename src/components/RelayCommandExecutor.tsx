@@ -55,7 +55,7 @@ const CMD_MAP: Record<string, { tauri: string; minRole: OrgRole; argTransform?: 
   // (older client), None → first configured target (the Rust default).
   'server.backup_now':     { tauri: 'cloud_backup_now',     minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local', targetId: c.args?.targetId ?? null }) },
   'server.restore_backup': { tauri: 'cloud_restore_backup', minRole: 'admin',    argTransform: (c) => ({ serverId: c.target, key: c.args?.key, nodeId: c.args?.nodeId ?? 'local', targetId: c.args?.targetId ?? null }) },
-  'server.delete_backup':  { tauri: 'cloud_delete_backup',  minRole: 'admin',    argTransform: (c) => ({ key: c.args?.key, nodeId: c.args?.nodeId ?? 'local', targetId: c.args?.targetId ?? null }) },
+  'server.delete_backup':  { tauri: 'cloud_delete_backup',  minRole: 'admin',    argTransform: (c) => ({ serverId: c.target, key: c.args?.key, nodeId: c.args?.nodeId ?? 'local', targetId: c.args?.targetId ?? null }) },
   // Schedules (no secret).
   'server.upsert_schedule':{ tauri: 'upsert_schedule',      minRole: 'operator', argTransform: (c) => ({ schedule: c.args?.schedule, nodeId: c.args?.nodeId ?? 'local' }) },
   'server.delete_schedule':{ tauri: 'delete_schedule',      minRole: 'operator', argTransform: (c) => ({ id: c.args?.schedule_id, nodeId: c.args?.nodeId ?? 'local' }) },

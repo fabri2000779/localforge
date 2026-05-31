@@ -636,10 +636,31 @@ async fn run_install_pipeline(
         .ok_or_else(|| format!("server '{}' not found after install", server_id))
 }
 
+/// Guard a log-derived URL before handing it to the OS opener. The URL is
+/// auto-detected from untrusted container output (`detect_oauth_url`), so a
+/// malicious game image could print something hostile. Require https + reject
+/// whitespace/control/quote chars so nothing weird reaches the shell layer.
+fn is_safe_external_url(url: &str) -> bool {
+    url.starts_with("https://")
+        && url.len() <= 2048
+        && !url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '"' || c == '\'' || c == '`')
+}
+
 fn open_url_in_browser(url: &str) {
+    if !is_safe_external_url(url) {
+        tracing::warn!("refusing to open non-https/unsafe URL from logs");
+        return;
+    }
+    // Windows: use rundll32's FileProtocolHandler instead of `cmd /c start`.
+    // It hands the URL straight to the shell's protocol handler WITHOUT a
+    // cmd.exe parse step, so metacharacters (&, |, ^, >) can't be interpreted
+    // as commands. macOS `open` / Linux `xdg-open` already receive the URL as
+    // a single argv entry (no shell), so they're safe as-is.
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/c", "start", "", url])
+    let _ = std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", url])
         .spawn();
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(url).spawn();

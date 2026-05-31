@@ -25,6 +25,24 @@ fn server_prefix(server_id: &str) -> String {
     format!("localforge/{server_id}/")
 }
 
+/// Reject any object key that is not within this server's backup prefix.
+///
+/// Restore/delete keys arrive from the client — and on the agent from a
+/// possibly lower-privileged caller who only has rights to *this* server.
+/// Without this guard a crafted key (e.g. another server's prefix, or any
+/// object in a BYO bucket) could be read or deleted using the host's S3
+/// credentials. Confine every mutating/reading op to `localforge/<id>/`.
+fn ensure_key_in_prefix(server_id: &str, key: &str) -> Result<()> {
+    let prefix = server_prefix(server_id);
+    if key.starts_with(&prefix) {
+        Ok(())
+    } else {
+        Err(BackendError::invalid(
+            "backup key is outside this server's backup prefix",
+        ))
+    }
+}
+
 fn s3_err<E: std::fmt::Display>(e: E) -> BackendError {
     BackendError::Other(format!("s3: {e}"))
 }
@@ -135,7 +153,13 @@ pub async fn list(target: &BackupTarget, server_id: &str) -> Result<Vec<BackupEn
 
 /// Download `key` and extract it over `dest_dir`. The caller has already
 /// stopped the server and moved the old data aside.
-pub async fn download_extract(target: &BackupTarget, key: &str, dest_dir: &Path) -> Result<()> {
+pub async fn download_extract(
+    target: &BackupTarget,
+    server_id: &str,
+    key: &str,
+    dest_dir: &Path,
+) -> Result<()> {
+    ensure_key_in_prefix(server_id, key)?;
     let bucket = bucket_for(target)?;
     let tmp = std::env::temp_dir().join(format!(
         "localforge-restore-{}.tar.gz",
@@ -161,7 +185,8 @@ pub async fn download_extract(target: &BackupTarget, key: &str, dest_dir: &Path)
 }
 
 /// Delete a backup object from the bucket.
-pub async fn delete(target: &BackupTarget, key: &str) -> Result<()> {
+pub async fn delete(target: &BackupTarget, server_id: &str, key: &str) -> Result<()> {
+    ensure_key_in_prefix(server_id, key)?;
     let bucket = bucket_for(target)?;
     bucket.delete_object(key).await.map_err(s3_err)?;
     Ok(())

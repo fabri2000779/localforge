@@ -258,8 +258,8 @@ pub trait NodeBackend: Send + Sync {
     }
 
     /// Delete a backup object from the bucket.
-    async fn delete_backup(&self, target: &BackupTarget, key: &str) -> Result<()> {
-        let _ = (target, key);
+    async fn delete_backup(&self, id: &str, target: &BackupTarget, key: &str) -> Result<()> {
+        let _ = (id, target, key);
         Err(BackendError::Other(
             "backups are not supported on this backend".into(),
         ))

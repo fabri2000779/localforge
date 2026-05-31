@@ -123,7 +123,7 @@ export function BackupsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
     if (!confirm('Delete this backup from the bucket? This cannot be undone.')) return;
     setBusy(`del:${key}`); setErr(null); setNote(null);
     try {
-      await invoke('cloud_delete_backup', { key, nodeId, targetId: selectedId });
+      await invoke('cloud_delete_backup', { serverId, key, nodeId, targetId: selectedId });
       setBackups((b) => b.filter((x) => x.key !== key));
     } catch (e) { setErr(String(e)); }
     finally { setBusy(null); }

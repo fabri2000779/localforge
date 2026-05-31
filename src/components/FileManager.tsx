@@ -140,6 +140,16 @@ const formatDate = (timestamp: number | null): string => {
   return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
+// Path helpers — split on BOTH separators since a local (Windows) node uses
+// "\" while a remote agent (Linux) node uses "/". The backend's rename/copy/
+// move take full source AND destination paths, so we build the dest here.
+const baseName = (p: string): string => p.split(/[/\\]/).filter(Boolean).pop() ?? p;
+const parentDir = (p: string): string => {
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+  return i > 0 ? p.slice(0, i) : p;
+};
+const joinPath = (dir: string, name: string): string => `${dir.replace(/[/\\]+$/, '')}/${name}`;
+
 export function FileManager({ rootPath, serverName }: FileManagerProps) {
   const [currentPath, setCurrentPath] = useState(rootPath);
   const [contents, setContents] = useState<DirectoryContents | null>(null);
@@ -276,7 +286,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     setSelectedItems(new Set());
     
     try {
-      const result = await invoke<DirectoryContents>('list_directory', { path });
+      const result = await invoke<DirectoryContents>('list_directory', { path, nodeId: activeNodeId });
       setContents(result);
       setCurrentPath(path);
     } catch (e) {
@@ -284,7 +294,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeNodeId]);
 
   // Initial load
   useEffect(() => {
@@ -296,7 +306,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     const interval = setInterval(() => {
       if (!editingFile && !renameDialog && !newItemDialog && !deleteConfirm) {
         // Silent refresh - don't show loading state
-        invoke<DirectoryContents>('list_directory', { path: currentPath })
+        invoke<DirectoryContents>('list_directory', { path: currentPath, nodeId: activeNodeId })
           .then(result => {
             // Only update if entries changed (compare by JSON)
             const currentEntries = JSON.stringify(contents?.entries.map(e => ({ name: e.name, size: e.size, modified: e.modified })));
@@ -310,7 +320,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [currentPath, contents, editingFile, renameDialog, newItemDialog, deleteConfirm]);
+  }, [currentPath, contents, editingFile, renameDialog, newItemDialog, deleteConfirm, activeNodeId]);
 
   // Close context menu on click outside
   useEffect(() => {
@@ -346,7 +356,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     } else if (isEditable(entry)) {
       // Open in editor
       try {
-        const content = await invoke<string>('read_file_text', { path: entry.path });
+        const content = await invoke<string>('read_file_text', { path: entry.path, nodeId: activeNodeId });
         setEditingFile({ path: entry.path, name: entry.name, content, original: content });
       } catch (e) {
         setError(String(e));
@@ -399,7 +409,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     
     try {
       for (const entry of deleteConfirm) {
-        await invoke('delete_path', { path: entry.path });
+        await invoke('delete_path', { path: entry.path, nodeId: activeNodeId });
       }
       setDeleteConfirm(null);
       loadDirectory(currentPath);
@@ -413,7 +423,11 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     if (!renameDialog) return;
     
     try {
-      await invoke('rename_path', { oldPath: renameDialog.entry.path, newName: renameDialog.newName });
+      await invoke('rename_path', {
+        from: renameDialog.entry.path,
+        to: joinPath(parentDir(renameDialog.entry.path), renameDialog.newName),
+        nodeId: activeNodeId,
+      });
       setRenameDialog(null);
       loadDirectory(currentPath);
     } catch (e) {
@@ -429,9 +443,9 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     
     try {
       if (newItemDialog.type === 'folder') {
-        await invoke('create_directory', { path: newPath });
+        await invoke('create_directory', { path: newPath, nodeId: activeNodeId });
       } else {
-        await invoke('create_file', { path: newPath, content: '' });
+        await invoke('create_file', { path: newPath, nodeId: activeNodeId });
       }
       setNewItemDialog(null);
       loadDirectory(currentPath);
@@ -456,9 +470,9 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     try {
       for (const path of clipboard.paths) {
         if (clipboard.operation === 'copy') {
-          await invoke('copy_path', { source: path, destinationDir: currentPath });
+          await invoke('copy_path', { from: path, to: joinPath(currentPath, baseName(path)), nodeId: activeNodeId });
         } else {
-          await invoke('move_path', { source: path, destinationDir: currentPath });
+          await invoke('move_path', { from: path, to: joinPath(currentPath, baseName(path)), nodeId: activeNodeId });
         }
       }
       
@@ -479,7 +493,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     
     setEditorSaving(true);
     try {
-      await invoke('write_file_text', { path: editingFile.path, content: editingFile.content });
+      await invoke('write_file_text', { path: editingFile.path, content: editingFile.content, nodeId: activeNodeId });
       setEditingFile({ ...editingFile, original: editingFile.content });
     } catch (e) {
       setError(String(e));

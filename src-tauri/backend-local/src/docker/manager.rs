@@ -136,7 +136,26 @@ impl DockerManager {
 
         // Build environment variables
         let env_vars: Vec<String> = env.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
-        tracing::debug!("Environment variables: {:?}", env_vars);
+        // Redact secret-ish values before logging — env can carry RCON/admin
+        // passwords, API tokens, etc. The real (unredacted) `env_vars` still
+        // goes to the container below; only this log line is sanitized.
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let redacted: Vec<String> = env
+                .iter()
+                .map(|(k, v)| {
+                    let ku = k.to_ascii_uppercase();
+                    if ["PASSWORD", "PASS", "TOKEN", "SECRET", "KEY"]
+                        .iter()
+                        .any(|needle| ku.contains(needle))
+                    {
+                        format!("{}=<redacted>", k)
+                    } else {
+                        format!("{}={}", k, v)
+                    }
+                })
+                .collect();
+            tracing::debug!("Environment variables: {:?}", redacted);
+        }
 
         // Build port bindings
         let mut port_bindings = HashMap::new();
@@ -239,7 +258,9 @@ impl DockerManager {
             } else {
                 // Build command that changes to volume dir and runs startup
                 let full_cmd = format!("cd {} && exec {}", container_volume_path, startup);
-                tracing::info!("Container command: {}", full_cmd);
+                // debug, not info: a custom startup command can carry sensitive
+                // args, and this can surface in shared agent logs.
+                tracing::debug!("Container command: {}", full_cmd);
                 Some(vec!["/bin/bash".to_string(), "-c".to_string(), full_cmd])
             }
         });
