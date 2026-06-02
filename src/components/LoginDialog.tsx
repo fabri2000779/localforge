@@ -82,6 +82,7 @@ export function LoginDialog({ open, onClose, initialMode = 'login' }: Props) {
         {mode !== 'forgot' && (
           <>
             <div className="auth-oauth-grid">
+              <OAuthBtn provider="apple"   disabled={loading} onClick={() => loginOAuth('apple')} />
               <OAuthBtn provider="discord" disabled={loading} onClick={() => loginOAuth('discord')} />
               <OAuthBtn provider="google"  disabled={loading} onClick={() => loginOAuth('google')} />
               <OAuthBtn provider="github"  disabled={loading} onClick={() => loginOAuth('github')} />
@@ -170,19 +171,26 @@ function Field({ label, value, onChange, type = 'text', required, minLength, aut
 }
 
 function OAuthBtn({ provider, disabled, onClick }: {
-  provider: 'discord' | 'google' | 'github';
+  provider: 'apple' | 'discord' | 'google' | 'github';
   disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <button type="button" className={`auth-oauth oauth-${provider}`} disabled={disabled} onClick={onClick}>
       <ProviderIcon provider={provider} />
-      <span>{provider === 'discord' ? 'Discord' : provider === 'google' ? 'Google' : 'GitHub'}</span>
+      <span>{provider === 'apple' ? 'Apple' : provider === 'discord' ? 'Discord' : provider === 'google' ? 'Google' : 'GitHub'}</span>
     </button>
   );
 }
 
-function ProviderIcon({ provider }: { provider: 'discord' | 'google' | 'github' }) {
+function ProviderIcon({ provider }: { provider: 'apple' | 'discord' | 'google' | 'github' }) {
+  if (provider === 'apple') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M16.365 1.43c0 1.14-.42 2.2-1.13 3.02-.83.97-2.2 1.72-3.34 1.63-.14-1.13.46-2.32 1.12-3.06.78-.9 2.16-1.55 3.35-1.59zM20.78 17.5c-.6 1.37-.88 1.98-1.66 3.19-1.08 1.69-2.6 3.79-4.48 3.8-1.67.02-2.1-1.09-4.37-1.08-2.27.01-2.74 1.1-4.41 1.08-1.88-.01-3.32-1.91-4.4-3.6C-1.04 16.55-1.4 9.96 1.87 6.96c1.17-1.08 2.71-1.71 4.18-1.71 1.5 0 2.44 1.08 4.37 1.08 1.87 0 3-1.08 4.74-1.08 1.31 0 2.7.71 3.69 1.94-3.24 1.78-2.71 6.41.93 8.31z"/>
+      </svg>
+    );
+  }
   if (provider === 'discord') {
     return (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

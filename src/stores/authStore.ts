@@ -68,7 +68,7 @@ interface AuthState {
   subscribeToEvents: () => Promise<() => void>;
   signupEmail: (email: string, password: string, displayName?: string) => Promise<boolean>;
   loginEmail: (email: string, password: string) => Promise<boolean>;
-  loginOAuth: (provider: 'discord' | 'google' | 'github') => Promise<void>;
+  loginOAuth: (provider: 'apple' | 'discord' | 'google' | 'github') => Promise<void>;
   logout: () => Promise<void>;
   refreshMe: () => Promise<void>;
   requestPasswordReset: (email: string) => Promise<boolean>;
