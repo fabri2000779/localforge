@@ -12,13 +12,13 @@
 
 /// Validated set of OAuth providers we support. The cloud's
 /// `/v1/auth/<provider>/start` route only accepts these.
-const PROVIDERS: &[&str] = &["discord", "google", "github"];
+const PROVIDERS: &[&str] = &["apple", "discord", "google", "github"];
 
 /// Build the cloud-side OAuth-start URL for a given provider.
 ///
 ///   `api_origin`   — base URL of the cloud API.
-///   `provider`     — one of `discord`, `google`, `github`. Other
-///                    values return `Err`.
+///   `provider`     — one of `apple`, `discord`, `google`, `github`.
+///                    Other values return `Err`.
 ///   `redirect_uri` — where the cloud should 302 the user after they
 ///                    sign in. Desktop uses `localforge://auth/callback`;
 ///                    mobile uses a platform-appropriate scheme or
