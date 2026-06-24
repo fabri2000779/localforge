@@ -110,6 +110,15 @@ apple-native-keyring-store = { version = "1", features = ["keychain"] }
 # backend, so the build needs no system libdbus.
 [target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
 zbus-secret-service-keyring-store = "1"
+# `secret-service` (pulled transitively by the store crate above) refuses to
+# compile until a runtime+crypto feature is chosen — it emits
+# `compile_error!("Please enable a feature to pick a runtime …")` otherwise,
+# which broke the Linux release build (Windows/macOS use their own native
+# stores so they were unaffected, and a host `cargo check` on Windows never
+# compiles this cfg block — hence it slipped past local verification). We pick
+# tokio (already in the tree via Tauri) + pure-Rust crypto to avoid OpenSSL;
+# Cargo feature-unification turns it on for the transitive dependency.
+secret-service = { version = "5", features = ["rt-tokio-crypto-rust"] }
 
 [features]
 default = ["custom-protocol"]
