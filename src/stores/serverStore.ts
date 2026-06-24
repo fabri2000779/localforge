@@ -83,24 +83,51 @@ function autoSyncToCloud() {
   });
 }
 
-/// Last-seen status per local server, used to fire a cloud crash push only on
-/// a genuine transition INTO 'crashed' (not on every poll, and never on the
-/// first sighting — a server already crashed before the app opened shouldn't
-/// re-alert). The cloud fans the ID-only push out to the org's members' phones
-/// (handy for teammates without this desktop open); it's credential-gated +
-/// best-effort, and `cloud_push_notify` no-ops when the user isn't signed in.
-const prevServerStatus: Record<string, Server['status']> = {};
+/// The newest crash-journal event timestamp (ms) we've already pushed for. We
+/// poll the host crash JOURNAL rather than the server status, because an
+/// auto-restart flips Running→Crashed→Running inside a single crash-watcher
+/// tick (~1s) — a 10s status poll almost always misses that window, whereas the
+/// journal records every event. Seeded on the first read so crashes that
+/// predate the app opening never re-alert.
+let lastCrashEventTs: number | null = null;
 
-function detectCrashTransitions(servers: Server[]) {
-  for (const s of servers) {
-    const prev = prevServerStatus[s.id];
-    if (prev !== undefined && prev !== 'crashed' && s.status === 'crashed') {
-      void invoke('cloud_push_notify', { serverId: s.id, kind: 'crashed' }).catch(() => {
+interface CrashJournalEvent {
+  ts: number;
+  server_id: string;
+  /// 'crashed' | 'restarted' | 'backoff' (CrashEventKind, kebab-case).
+  kind: string;
+}
+
+/// Fire a cloud crash push for any NEW 'crashed' / 'backoff' event in the host
+/// journal (we skip 'restarted' — an auto-recovery needs no alert). The cloud
+/// fans the ID-only push out to the org's members' phones (handy for teammates
+/// without this desktop open); it's credential-gated + best-effort, and
+/// `cloud_push_notify` no-ops when the user isn't signed in. Reads the LOCAL
+/// node's journal regardless of the active node — remote agents own theirs.
+async function checkCrashJournal() {
+  let events: CrashJournalEvent[];
+  try {
+    events = await invoke<CrashJournalEvent[]>('query_crash_events', {
+      serverId: null,
+      limit: 50,
+    });
+  } catch {
+    return;
+  }
+  if (events.length === 0) return;
+  const newest = events.reduce((m, e) => Math.max(m, e.ts), 0);
+  if (lastCrashEventTs === null) {
+    lastCrashEventTs = newest; // baseline only — don't alert for pre-existing events
+    return;
+  }
+  for (const e of events) {
+    if (e.ts > lastCrashEventTs && (e.kind === 'crashed' || e.kind === 'backoff')) {
+      void invoke('cloud_push_notify', { serverId: e.server_id, kind: e.kind }).catch(() => {
         /* not signed in / no team / delivery best-effort — ignore */
       });
     }
-    prevServerStatus[s.id] = s.status;
   }
+  lastCrashEventTs = Math.max(lastCrashEventTs, newest);
 }
 
 export const useServerStore = create<ServerState>((set, get) => ({
@@ -121,7 +148,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
         nodeId: currentNodeId(),
       });
       set({ servers, isLoading: false });
-      detectCrashTransitions(servers);
+      void checkCrashJournal();
       const selected = get().selectedServer;
       if (selected) {
         const updated = servers.find((s) => s.id === selected.id);
