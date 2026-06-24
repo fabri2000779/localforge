@@ -276,6 +276,7 @@ fn main() {
             cloud::templates::cloud_templates_list,
             cloud::templates::cloud_template_get,
             cloud::templates::cloud_template_delete,
+            cloud::push::cloud_push_notify,
             cloud::auth::cloud_export_data,
         ])
         .run(tauri::generate_context!())

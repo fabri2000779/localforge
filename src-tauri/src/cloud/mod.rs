@@ -24,6 +24,7 @@ pub mod keychain;
 pub mod nodes;
 pub mod oauth;
 pub mod orgs;
+pub mod push;
 pub mod relay;
 pub mod sync;
 pub mod templates;

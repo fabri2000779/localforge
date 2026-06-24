@@ -83,6 +83,26 @@ function autoSyncToCloud() {
   });
 }
 
+/// Last-seen status per local server, used to fire a cloud crash push only on
+/// a genuine transition INTO 'crashed' (not on every poll, and never on the
+/// first sighting — a server already crashed before the app opened shouldn't
+/// re-alert). The cloud fans the ID-only push out to the org's members' phones
+/// (handy for teammates without this desktop open); it's credential-gated +
+/// best-effort, and `cloud_push_notify` no-ops when the user isn't signed in.
+const prevServerStatus: Record<string, Server['status']> = {};
+
+function detectCrashTransitions(servers: Server[]) {
+  for (const s of servers) {
+    const prev = prevServerStatus[s.id];
+    if (prev !== undefined && prev !== 'crashed' && s.status === 'crashed') {
+      void invoke('cloud_push_notify', { serverId: s.id, kind: 'crashed' }).catch(() => {
+        /* not signed in / no team / delivery best-effort — ignore */
+      });
+    }
+    prevServerStatus[s.id] = s.status;
+  }
+}
+
 export const useServerStore = create<ServerState>((set, get) => ({
   servers: [],
   selectedServer: null,
@@ -101,6 +121,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
         nodeId: currentNodeId(),
       });
       set({ servers, isLoading: false });
+      detectCrashTransitions(servers);
       const selected = get().selectedServer;
       if (selected) {
         const updated = servers.find((s) => s.id === selected.id);
