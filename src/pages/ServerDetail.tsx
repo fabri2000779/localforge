@@ -1,10 +1,11 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { 
-  ArrowLeft, Play, Square, Trash2, RefreshCw, Send, Folder, 
-  Cpu, HardDrive, Terminal, Settings, RotateCcw, Copy, 
-  Clock, Network, FolderOpen, Check, Save, Globe, Wifi, ExternalLink, Key, Archive, Activity, Users
+import {
+  ArrowLeft, Play, Square, Trash2, RefreshCw, Send, Folder,
+  Cpu, HardDrive, Terminal, Settings, RotateCcw, Copy,
+  Clock, Network, FolderOpen, Check, Save, Globe, Wifi, ExternalLink, Key, Archive, Activity, Users, QrCode, X
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { useServerStore } from '../stores/serverStore';
 import { useGamesStore } from '../stores/gamesStore';
 import { useNodesStore } from '../stores/nodesStore';
@@ -80,6 +81,7 @@ export function ServerDetail() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
   const [publicIP, setPublicIP] = useState<string>('');
+  const [shareOpen, setShareOpen] = useState(false);
   const [oauthUrl, setOauthUrl] = useState<string | null>(null);
   const [oauthCode, setOauthCode] = useState<string | null>(null);
   const [oauthDismissed, setOauthDismissed] = useState(false);
@@ -486,6 +488,7 @@ export function ServerDetail() {
     installing: { bg: 'bg-orange-500/10', border: 'border-orange-500/30', text: 'text-orange-500', dot: 'bg-orange-500' },
     stopping: { bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', text: 'text-yellow-500', dot: 'bg-yellow-500' },
     error: { bg: 'bg-red-500/10', border: 'border-red-500/30', text: 'text-red-500', dot: 'bg-red-500' },
+    crashed: { bg: 'bg-rose-500/10', border: 'border-rose-500/30', text: 'text-rose-400', dot: 'bg-rose-500' },
   };
 
   // Format bytes to human readable
@@ -532,8 +535,27 @@ export function ServerDetail() {
               <Copy size={12} className="text-slate-400" />
             )}
           </button>
+          <button
+            onClick={() => setShareOpen(true)}
+            className="p-1 hover:bg-slate-700/60 rounded transition-colors"
+            title="Share — QR code & link"
+          >
+            <QrCode size={13} className="text-slate-400" />
+          </button>
         </div>
       </div>
+
+      {shareOpen && (
+        <ShareServerModal
+          serverName={server.name}
+          gameName={gameConfig?.name || server.game_type}
+          localAddress={serverAddress}
+          publicAddress={publicAddress}
+          onCopy={(addr) => copyToClipboard(addr, 'share')}
+          copied={copied === 'share'}
+          onClose={() => setShareOpen(false)}
+        />
+      )}
 
       {/* Server Info Card */}
       <div className="card card-elevated mb-6">
@@ -679,13 +701,37 @@ export function ServerDetail() {
             </button>
           )}
           
-          <button 
-            onClick={() => openFolder(String(server.data_path))} 
+          <button
+            onClick={() => openFolder(String(server.data_path))}
             className="btn btn-secondary"
           >
             <FolderOpen size={18} /> Open Folder
           </button>
-          
+
+          <button
+            onClick={async () => {
+              const name = window.prompt(
+                'Save this server’s setup as a reusable template:',
+                `${server.name} template`,
+              );
+              if (!name || !name.trim()) return;
+              try {
+                await invoke('save_server_as_template', {
+                  serverId: server.id,
+                  templateName: name.trim(),
+                  nodeId: activeNodeId,
+                });
+                alert('Template saved — find it under Games to spin up new servers from it.');
+              } catch (e) {
+                alert('Couldn’t save template: ' + String(e));
+              }
+            }}
+            className="btn btn-secondary"
+            title="Save this server's setup as a reusable template"
+          >
+            <Save size={18} /> Save as template
+          </button>
+
           <div className="flex-1" />
           
           <button
@@ -1200,6 +1246,86 @@ export function ServerDetail() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Share dialog: a scannable QR + copyable address so friends can join. */
+function ShareServerModal({
+  serverName, gameName, localAddress, publicAddress, onCopy, copied, onClose,
+}: {
+  serverName: string;
+  gameName: string;
+  localAddress: string;
+  publicAddress: string;
+  onCopy: (addr: string) => void;
+  copied: boolean;
+  onClose: () => void;
+}) {
+  const hasPublic = publicAddress.length > 0;
+  const [sel, setSel] = useState<'public' | 'local'>(hasPublic ? 'public' : 'local');
+  const addr = sel === 'public' && hasPublic ? publicAddress : localAddress;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      onClick={onClose}
+    >
+      <div className="card card-elevated w-full max-w-sm relative" onClick={(e) => e.stopPropagation()}>
+        <button
+          onClick={onClose}
+          className="absolute top-3 right-3 p-1 text-slate-400 hover:text-white rounded transition-colors"
+          title="Close"
+        >
+          <X size={16} />
+        </button>
+
+        <div className="text-center mb-4">
+          <div className="eyebrow mb-1">Share</div>
+          <h2 className="text-lg font-bold text-slate-100 truncate">{serverName}</h2>
+          <p className="text-[12.5px] text-slate-400">{gameName}</p>
+        </div>
+
+        {hasPublic && (
+          <div className="flex gap-1 mb-3 p-1 bg-[var(--color-surface)] rounded-lg">
+            <button
+              className={`flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-[12.5px] font-medium transition-colors ${sel === 'public' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}
+              onClick={() => setSel('public')}
+            >
+              <Globe size={13} /> Public
+            </button>
+            <button
+              className={`flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-[12.5px] font-medium transition-colors ${sel === 'local' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}
+              onClick={() => setSel('local')}
+            >
+              <Wifi size={13} /> Local
+            </button>
+          </div>
+        )}
+
+        <div className="flex justify-center mb-4">
+          <div className="p-3 bg-white rounded-xl">
+            <QRCodeSVG value={addr} size={184} level="M" />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 px-3 py-2 bg-[var(--color-surface)] rounded-lg border border-[var(--color-border)]">
+          <code className="font-mono text-[13px] text-slate-100 flex-1 truncate">{addr}</code>
+          <button
+            onClick={() => onCopy(addr)}
+            className="p-1.5 hover:bg-slate-700/60 rounded transition-colors shrink-0"
+            title="Copy address"
+          >
+            {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} className="text-slate-400" />}
+          </button>
+        </div>
+
+        <p className="text-[11.5px] text-slate-500 mt-3 text-center">
+          {sel === 'public' && hasPublic
+            ? 'Friends scan this or paste the address into the game. Public access needs the port forwarded on your router.'
+            : 'Players on your local network scan this or paste the address into the game.'}
+        </p>
+      </div>
     </div>
   );
 }

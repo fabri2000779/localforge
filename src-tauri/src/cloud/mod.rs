@@ -26,6 +26,7 @@ pub mod oauth;
 pub mod orgs;
 pub mod relay;
 pub mod sync;
+pub mod templates;
 pub mod vault;
 
 // HTTP wrapper + base helpers come from the shared crate now. Existing

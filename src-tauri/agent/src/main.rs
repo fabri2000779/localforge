@@ -182,8 +182,14 @@ async fn serve(config_path: &std::path::Path) -> anyhow::Result<()> {
     let backend: Arc<dyn NodeBackend> = Arc::new(backend);
 
     // Start the host scheduler so cron actions fire 24/7 (the agent runs
-    // headless as a service — this is the intended home for schedules).
-    localforge_backend_local::spawn_scheduler(backend.clone(), cfg.data_root.clone());
+    // headless as a service — this is the intended home for schedules). Backup
+    // schedules resolve their target id against the provisioned target file.
+    let sched_data_root = cfg.data_root.clone();
+    let resolver: localforge_backend_local::BackupTargetResolver =
+        Arc::new(move |id| crate::backup_target::find(&sched_data_root, id));
+    localforge_backend_local::spawn_scheduler(backend.clone(), cfg.data_root.clone(), resolver);
+    // Watch for unexpected container exits 24/7 and auto-restart per policy.
+    localforge_backend_local::spawn_crash_watcher(backend.clone(), cfg.data_root.clone());
 
     let app_state = routes::AppState {
         backend,

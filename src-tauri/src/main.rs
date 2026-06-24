@@ -102,8 +102,14 @@ fn main() {
                         let arc = Arc::new(b);
                         state.install_local(arc.clone()).await;
                         // Start the host scheduler (idempotent) so cron actions
-                        // fire while the app is open.
-                        localforge_backend_local::spawn_scheduler(arc, paths::home_root());
+                        // fire while the app is open. Backup schedules resolve
+                        // their target id against the desktop keychain at fire time.
+                        let resolver: localforge_backend_local::BackupTargetResolver =
+                            Arc::new(|id| crate::backups::find_target(id).map(|(_, t)| t));
+                        localforge_backend_local::spawn_scheduler(arc.clone(), paths::home_root(), resolver);
+                        // Watch for unexpected container exits and auto-restart
+                        // per policy (the event source for crash alerts).
+                        localforge_backend_local::spawn_crash_watcher(arc, paths::home_root());
                         tracing::info!("Local Docker backend connected");
                     }
                     Err(e) => {
@@ -172,6 +178,7 @@ fn main() {
             commands::games::export_all_custom_games,
             commands::games::import_game,
             commands::games::import_games,
+            commands::games::save_server_as_template,
             commands::games::reset_games_to_defaults,
             commands::games::get_games_config_path,
             commands::files::list_directory,
@@ -207,6 +214,12 @@ fn main() {
             commands::schedules::upsert_schedule,
             commands::schedules::delete_schedule,
             commands::metrics::query_metrics,
+            commands::crash::query_crash_events,
+            commands::webhooks::list_webhooks,
+            commands::webhooks::add_webhook,
+            commands::webhooks::remove_webhook,
+            commands::webhooks::set_webhook_enabled,
+            commands::webhooks::test_webhook,
             commands::players::list_players,
             commands::players::player_action,
             commands::nodes::test_remote_node,
@@ -249,6 +262,8 @@ fn main() {
             cloud::orgs::cloud_orgs_list_invitations,
             cloud::orgs::cloud_orgs_revoke_invitation,
             cloud::orgs::cloud_orgs_remove_member,
+            cloud::orgs::cloud_member_scopes_get,
+            cloud::orgs::cloud_member_scopes_set,
             cloud::orgs::cloud_orgs_accept_invite,
             cloud::nodes::cloud_node_create,
             cloud::nodes::cloud_node_list,
@@ -256,6 +271,11 @@ fn main() {
             cloud::nodes::cloud_node_revoke,
             cloud::nodes::cloud_claim_desktop,
             cloud::audit::cloud_audit_emit,
+            cloud::audit::cloud_audit_list,
+            cloud::templates::cloud_template_publish,
+            cloud::templates::cloud_templates_list,
+            cloud::templates::cloud_template_get,
+            cloud::templates::cloud_template_delete,
             cloud::auth::cloud_export_data,
         ])
         .run(tauri::generate_context!())

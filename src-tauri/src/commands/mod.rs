@@ -1,6 +1,7 @@
 // Commands module - Tauri command handlers
 
 pub mod backups;
+pub mod crash;
 pub mod docker;
 pub mod files;
 pub mod games;
@@ -9,6 +10,7 @@ pub mod nodes;
 pub mod players;
 pub mod schedules;
 pub mod server;
+pub mod webhooks;
 
 use crate::backend::{DynBackend, NodeRegistry};
 use localforge_core::NodeId;

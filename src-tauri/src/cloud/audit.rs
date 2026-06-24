@@ -7,6 +7,46 @@
 //! spawn primitive.
 
 use super::{api, auth};
+use serde::{Deserialize, Serialize};
+
+// ── Activity feed (read) ───────────────────────────────────────────────────
+
+/// One row of the org's activity feed, as the cloud returns it (camelCase).
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEntry {
+    #[serde(default)]
+    pub actor_user_id: Option<String>,
+    pub actor_name: String,
+    pub action: String,
+    #[serde(default)]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+    pub created_at: i64,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditList {
+    pub entries: Vec<AuditEntry>,
+    #[serde(default)]
+    pub next_before: Option<i64>,
+}
+
+/// Read the active org's activity feed (Team plan, admin+; cloud enforces).
+/// `before` is a created_at-ms cursor for "load older"; omit for the latest page.
+#[tauri::command]
+pub async fn cloud_audit_list(before: Option<i64>, limit: Option<u32>) -> Result<AuditList, String> {
+    let token = auth::current_token().ok_or("not signed in")?;
+    let mut path = format!("/v1/audit?limit={}", limit.unwrap_or(50));
+    if let Some(b) = before {
+        path.push_str(&format!("&before={b}"));
+    }
+    api::get::<AuditList>(&path, Some(&token))
+        .await
+        .map_err(|e| e.to_string())
+}
 
 /// Best-effort audit emit. Spawns the HTTP call so callers don't pay
 /// any cost on the request path.

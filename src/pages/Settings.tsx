@@ -13,20 +13,24 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Activity, Cpu, HardDrive, Container, Box, Info,
-  Folder, Archive, Users, UserCircle, Wrench,
+  Folder, Archive, Users, UserCircle, Wrench, Webhook,
   RefreshCw,
 } from 'lucide-react';
 import { CloudAccountPanel } from '../components/CloudAccountPanel';
 import { MembersPanel } from '../components/MembersPanel';
 import { BackupStoragePanel } from '../components/BackupStoragePanel';
+import { WebhooksPanel } from '../components/WebhooksPanel';
+import { ActivityPanel } from '../components/ActivityPanel';
 import { useDockerStore } from '../stores/dockerStore';
 
-type SettingsTab = 'account' | 'team' | 'backup-storage' | 'system';
+type SettingsTab = 'account' | 'team' | 'activity' | 'backup-storage' | 'alerts' | 'system';
 
 const TABS: Array<{ id: SettingsTab; label: string; icon: React.ReactNode }> = [
   { id: 'account',        label: 'Account',        icon: <UserCircle size={15} /> },
   { id: 'team',           label: 'Team',            icon: <Users size={15} /> },
+  { id: 'activity',       label: 'Activity',        icon: <Activity size={15} /> },
   { id: 'backup-storage', label: 'Backup storage',  icon: <Archive size={15} /> },
+  { id: 'alerts',         label: 'Alerts',          icon: <Webhook size={15} /> },
   { id: 'system',         label: 'System',          icon: <Wrench size={15} /> },
 ];
 
@@ -91,9 +95,19 @@ export function Settings() {
         <MembersPanel />
       )}
 
+      {/* ── Activity (audit feed) ───────────────────────────────────────── */}
+      {activeTab === 'activity' && (
+        <ActivityPanel />
+      )}
+
       {/* ── Backup Storage ──────────────────────────────────────────────── */}
       {activeTab === 'backup-storage' && (
         <BackupStoragePanel />
+      )}
+
+      {/* ── Alerts (crash webhooks) ─────────────────────────────────────── */}
+      {activeTab === 'alerts' && (
+        <WebhooksPanel />
       )}
 
       {/* ── System ──────────────────────────────────────────────────────── */}

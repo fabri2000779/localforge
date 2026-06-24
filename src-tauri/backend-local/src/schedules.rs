@@ -15,7 +15,15 @@ use std::time::Duration;
 use chrono::{DateTime, Local, TimeZone};
 use croner::Cron;
 use localforge_core::backend::NodeBackend;
-use localforge_core::types::{Schedule, ScheduleAction};
+use localforge_core::types::{BackupTarget, Schedule, ScheduleAction};
+
+/// Resolves a backup `target_id` (None = the first/default target) to its S3
+/// credentials. Injected per host at [`spawn_scheduler`] time because the
+/// desktop keeps targets in the OS keychain while the headless agent keeps them
+/// in a file under its data root — `backend-local` can reach neither layer
+/// directly, so each host hands in its own lookup closure.
+pub type BackupTargetResolver =
+    Arc<dyn Fn(Option<&str>) -> Option<BackupTarget> + Send + Sync>;
 
 fn schedules_file(data_root: &Path) -> PathBuf {
     data_root.join("schedules.json")
@@ -89,7 +97,7 @@ fn next_fire(expr: &str, from: &DateTime<Local>) -> Option<DateTime<Local>> {
         .ok()
 }
 
-async fn run_action(backend: &dyn NodeBackend, s: &Schedule) {
+async fn run_action(backend: &dyn NodeBackend, s: &Schedule, resolve_target: &BackupTargetResolver) {
     match &s.action {
         ScheduleAction::Restart => {
             let _ = backend.stop_server(&s.server_id).await;
@@ -104,7 +112,84 @@ async fn run_action(backend: &dyn NodeBackend, s: &Schedule) {
                 .send_command(&s.server_id, &format!("say {message}"))
                 .await;
         }
+        ScheduleAction::Backup {
+            target_id,
+            keep_last,
+            max_age_days,
+        } => match resolve_target(target_id.as_deref()) {
+            Some(target) => match backend.create_backup(&s.server_id, &target).await {
+                Ok(key) => {
+                    tracing::info!("[scheduler] backup of {} uploaded: {key}", s.server_id);
+                    if keep_last.is_some() || max_age_days.is_some() {
+                        if let Err(e) =
+                            enforce_retention(backend, &target, &s.server_id, *keep_last, *max_age_days)
+                                .await
+                        {
+                            tracing::warn!(
+                                "[scheduler] retention prune for {} failed: {e}",
+                                s.server_id
+                            );
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("[scheduler] backup of {} failed: {e}", s.server_id),
+            },
+            None => tracing::warn!(
+                "[scheduler] backup schedule {} references target {:?} which is not \
+                 configured on this host — skipping",
+                s.id,
+                target_id
+            ),
+        },
     }
+}
+
+/// Prune a server's backup objects after a scheduled upload. `keep_last` is a
+/// floor (the N most recent are never deleted); `max_age_days` deletes anything
+/// older than that. With both set, the N newest are kept and older-than-max
+/// beyond them are pruned. Best-effort: a failed delete is logged, not fatal.
+async fn enforce_retention(
+    backend: &dyn NodeBackend,
+    target: &BackupTarget,
+    server_id: &str,
+    keep_last: Option<u32>,
+    max_age_days: Option<u32>,
+) -> Result<(), String> {
+    let mut entries = backend
+        .list_backups(server_id, target)
+        .await
+        .map_err(|e| e.to_string())?;
+    // Sort newest-first ourselves rather than trusting the listing order.
+    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut deleted = 0u32;
+    for (i, e) in entries.iter().enumerate() {
+        // keep_last is a floor: never delete the N most recent.
+        if let Some(n) = keep_last {
+            if i < n as usize {
+                continue;
+            }
+        }
+        let too_old = max_age_days
+            .map(|d| now_ms - e.created_at > (d as i64) * 86_400_000)
+            .unwrap_or(false);
+        let delete = match (keep_last, max_age_days) {
+            (Some(_), Some(_)) => too_old, // beyond the floor AND older than max age
+            (Some(_), None) => true,       // beyond the floor, no age limit → prune
+            (None, Some(_)) => too_old,    // age limit only
+            (None, None) => false,         // no policy → keep everything
+        };
+        if delete {
+            match backend.delete_backup(server_id, target, &e.key).await {
+                Ok(()) => deleted += 1,
+                Err(err) => tracing::warn!("[scheduler] failed to prune backup {}: {err}", e.key),
+            }
+        }
+    }
+    if deleted > 0 {
+        tracing::info!("[scheduler] retention pruned {deleted} old backup(s) for {server_id}");
+    }
+    Ok(())
 }
 
 static SCHEDULER_STARTED: AtomicBool = AtomicBool::new(false);
@@ -114,7 +199,11 @@ static SCHEDULER_STARTED: AtomicBool = AtomicBool::new(false);
 /// — after its last run, or the loop's start for a never-run schedule — has
 /// passed. A schedule that came due while the host was off fires once on the
 /// next tick after startup.
-pub fn spawn_scheduler(backend: Arc<dyn NodeBackend>, data_root: PathBuf) {
+pub fn spawn_scheduler(
+    backend: Arc<dyn NodeBackend>,
+    data_root: PathBuf,
+    resolve_target: BackupTargetResolver,
+) {
     if SCHEDULER_STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -148,7 +237,7 @@ pub fn spawn_scheduler(backend: Arc<dyn NodeBackend>, data_root: PathBuf) {
                         s.action,
                         s.server_id
                     );
-                    run_action(&*backend, s).await;
+                    run_action(&*backend, s, &resolve_target).await;
                     s.last_run = Some(now.timestamp_millis());
                     changed = true;
                 }

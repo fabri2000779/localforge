@@ -424,6 +424,7 @@ impl NodeBackend for LocalDockerBackend {
             config: user_config,
             installed: false,
             install_container_id: None,
+            restart_policy: Default::default(),
         };
 
         persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
@@ -522,6 +523,15 @@ impl NodeBackend for LocalDockerBackend {
             .container_id
             .clone()
             .ok_or_else(|| BackendError::invalid("server has no container"))?;
+
+        // Persist `Stopping` BEFORE asking Docker to stop. A graceful shutdown
+        // can take several seconds, and during that window the container is
+        // already going down while the persisted state would otherwise still
+        // read `Running` — which the crash-watcher would mistake for an
+        // unexpected exit and try to "recover". Marking Stopping first closes
+        // that race (the watcher only acts on `Running`).
+        server.status = ServerStatus::Stopping;
+        let _ = persistence::save_server(&self.data_root, &server);
 
         self.docker
             .stop_container(&container_id)

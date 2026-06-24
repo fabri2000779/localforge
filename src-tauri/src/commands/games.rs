@@ -1,6 +1,9 @@
 // Game-related commands
 
+use crate::backend::NodeRegistry;
+use crate::commands::require_backend;
 use crate::games::{GameConfig, GameType, GamesManager};
+use localforge_core::types::SystemMapping;
 use std::sync::Arc;
 use tauri::State;
 use tokio::sync::Mutex;
@@ -129,6 +132,52 @@ pub fn get_games_config_path() -> String {
     if !path.exists() {
         let _ = std::fs::create_dir_all(&path);
     }
-    
+
     path.to_string_lossy().to_string()
+}
+
+/// Capture an existing server's current setup as a reusable Custom Game
+/// template. Clones the server's game definition, bakes its current config
+/// values in as the variable defaults, and saves it as a new custom game —
+/// which the Games library can then one-click deploy (locally or to any node).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn save_server_as_template(
+    server_id: String,
+    template_name: String,
+    node_id: Option<String>,
+    games: State<'_, GamesState>,
+    registry: State<'_, NodeRegistry>,
+) -> Result<GameConfig, String> {
+    let backend = require_backend(&registry, node_id.as_deref()).await?;
+    let server = backend
+        .get_server(&server_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "server not found".to_string())?;
+
+    let mut manager = games.manager.lock().await;
+    let mut tpl = manager
+        .get_game(&server.game_type)
+        .ok_or_else(|| "no game definition for this server".to_string())?;
+
+    // Fresh unique id so it never collides with the base game or other
+    // templates; mark custom, name it, carry the server's RAM as the rec.
+    tpl.game_type = GameType::new(&format!("tpl-{}", uuid::Uuid::new_v4()));
+    tpl.name = template_name;
+    tpl.is_custom = true;
+    tpl.recommended_ram_mb = server.memory_mb;
+
+    // Bake the server's chosen values in as the variable defaults — but leave
+    // RAM/port-mapped variables alone (those are filled per-server at create).
+    for v in tpl.variables.iter_mut() {
+        if matches!(v.system_mapping, Some(SystemMapping::Ram) | Some(SystemMapping::Port)) {
+            continue;
+        }
+        if let Some(val) = server.config.get(&v.env) {
+            v.default = val.clone();
+        }
+    }
+
+    manager.add_game(tpl.clone())?;
+    Ok(tpl)
 }

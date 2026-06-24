@@ -30,6 +30,7 @@ const STATUS_LABEL: Record<Server['status'], string> = {
   stopping: 'Stopping',
   installing: 'Installing',
   error: 'Error',
+  crashed: 'Crashed',
 };
 
 const STATUS_CLASS: Record<Server['status'], string> = {
@@ -39,6 +40,7 @@ const STATUS_CLASS: Record<Server['status'], string> = {
   stopping: 'status-starting',
   installing: 'status-starting',
   error: 'status-error',
+  crashed: 'status-error',
 };
 
 export function ServerCard({ server, machineLabel, machineKind, onOpen, onAction }: Props) {

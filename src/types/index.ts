@@ -8,7 +8,8 @@ export type ServerStatus =
   | 'installing'
   | 'running'
   | 'stopping'
-  | 'error';
+  | 'error'
+  | 'crashed';
 
 export interface Server {
   id: string;

@@ -23,6 +23,7 @@ import { RelayFleetBridge } from './components/RelayFleetBridge';
 import { MachineNameDialog } from './components/MachineNameDialog';
 import { SyncKeyDialog } from './components/SyncKeyDialog';
 import { UpdateChecker } from './components/UpdateChecker';
+import { OnboardingWizard } from './components/OnboardingWizard';
 import './App.css';
 
 function App() {
@@ -98,6 +99,7 @@ function App() {
         <RelayFleetBridge />
         <SyncKeyDialog />
         <MachineNameDialog />
+        <OnboardingWizard />
         <UpdateChecker />
       </div>
     </BrowserRouter>

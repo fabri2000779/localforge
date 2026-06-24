@@ -8,13 +8,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
-  Clock, Plus, Trash2, Loader2, Power, RotateCcw, Terminal, Megaphone, Check, X,
+  Clock, Plus, Trash2, Loader2, Power, RotateCcw, Terminal, Megaphone, Archive, Check, X,
 } from 'lucide-react';
 
 type ScheduleAction =
   | { kind: 'restart' }
   | { kind: 'command'; command: string }
-  | { kind: 'broadcast'; message: string };
+  | { kind: 'broadcast'; message: string }
+  | { kind: 'backup'; targetId?: string; keepLast?: number; maxAgeDays?: number };
+
+/** Minimal projection of OrgBackupTargetView — just what the picker needs. */
+interface BackupTargetOption { id: string; name: string }
 
 interface Schedule {
   id: string;
@@ -35,11 +39,13 @@ const CRON_PRESETS: Array<{ label: string; cron: string }> = [
 function actionLabel(a: ScheduleAction): string {
   if (a.kind === 'restart') return 'Restart';
   if (a.kind === 'command') return `Command: ${a.command}`;
+  if (a.kind === 'backup') return 'Backup to S3';
   return `Broadcast: ${a.message}`;
 }
 function ActionIcon({ kind }: { kind: ScheduleAction['kind'] }) {
   if (kind === 'restart') return <RotateCcw size={15} className="text-amber-400" />;
   if (kind === 'command') return <Terminal size={15} className="text-sky-400" />;
+  if (kind === 'backup') return <Archive size={15} className="text-emerald-400" />;
   return <Megaphone size={15} className="text-sky-400" />;
 }
 
@@ -158,12 +164,43 @@ function ScheduleForm({
   const [kind, setKind] = useState<ScheduleAction['kind']>('restart');
   const [arg, setArg] = useState('');
   const [cron, setCron] = useState('0 5 * * *');
+  const [targets, setTargets] = useState<BackupTargetOption[] | null>(null); // null = loading
+  const [targetId, setTargetId] = useState<string>('');
+  const [keepLast, setKeepLast] = useState<string>('7'); // retention floor (blank = no limit)
+  const [maxAgeDays, setMaxAgeDays] = useState<string>(''); // age limit in days (blank = none)
+
+  // Load the org's backup targets so the Backup action can offer a picker. The
+  // local list is enough — ids match what the agent was provisioned with, so a
+  // schedule resolves on whichever host (desktop or agent) actually fires it.
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const list = await invoke<BackupTargetOption[]>('cloud_list_backup_targets');
+        if (!alive) return;
+        setTargets(list);
+        if (list.length > 0) setTargetId((cur) => cur || list[0].id);
+      } catch {
+        if (alive) setTargets([]);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
 
   function submit() {
     let action: ScheduleAction;
     if (kind === 'command') action = { kind: 'command', command: arg.trim() };
     else if (kind === 'broadcast') action = { kind: 'broadcast', message: arg.trim() };
-    else action = { kind: 'restart' };
+    else if (kind === 'backup') {
+      const kl = parseInt(keepLast, 10);
+      const ma = parseInt(maxAgeDays, 10);
+      action = {
+        kind: 'backup',
+        targetId: targetId || undefined,
+        keepLast: Number.isFinite(kl) && kl > 0 ? kl : undefined,
+        maxAgeDays: Number.isFinite(ma) && ma > 0 ? ma : undefined,
+      };
+    } else action = { kind: 'restart' };
     onSave({
       id: crypto.randomUUID(),
       serverId,
@@ -173,16 +210,20 @@ function ScheduleForm({
     });
   }
 
-  const needsArg = kind !== 'restart';
-  const valid = cron.trim().split(/\s+/).length === 5 && (!needsArg || arg.trim().length > 0);
+  const needsText = kind === 'command' || kind === 'broadcast';
+  const cronValid = cron.trim().split(/\s+/).length === 5;
+  const valid =
+    cronValid &&
+    (kind !== 'backup' ? true : (targets?.length ?? 0) > 0 && targetId.length > 0) &&
+    (!needsText || arg.trim().length > 0);
 
   return (
     <div className="card space-y-3">
       <div className="font-medium text-zinc-200">New schedule</div>
       <div>
         <span className="text-[11px] uppercase tracking-wider font-semibold text-zinc-500">Action</span>
-        <div className="flex gap-1 mt-1">
-          {(['restart', 'command', 'broadcast'] as const).map((k) => (
+        <div className="flex flex-wrap gap-1 mt-1">
+          {(['restart', 'command', 'broadcast', 'backup'] as const).map((k) => (
             <button
               key={k}
               type="button"
@@ -194,7 +235,7 @@ function ScheduleForm({
           ))}
         </div>
       </div>
-      {needsArg && (
+      {needsText && (
         <label className="block">
           <span className="text-[11px] uppercase tracking-wider font-semibold text-zinc-500">
             {kind === 'command' ? 'Console command' : 'Message'}
@@ -202,6 +243,41 @@ function ScheduleForm({
           <input className="input w-full mt-1" value={arg} onChange={(e) => setArg(e.target.value)}
             placeholder={kind === 'command' ? 'say Server restarting soon' : 'Restarting in 5 minutes'} />
         </label>
+      )}
+      {kind === 'backup' && (
+        <div className="block">
+          <span className="text-[11px] uppercase tracking-wider font-semibold text-zinc-500">Backup target</span>
+          {targets === null ? (
+            <div className="flex items-center gap-2 text-zinc-400 text-sm mt-1"><Loader2 size={14} className="animate-spin" /> Loading targets…</div>
+          ) : targets.length === 0 ? (
+            <p className="text-[13px] text-amber-300/90 mt-1">
+              No S3 backup target configured. Add one in Settings → Backup Storage first.
+            </p>
+          ) : (
+            <select className="input w-full mt-1" value={targetId} onChange={(e) => setTargetId(e.target.value)}>
+              {targets.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          )}
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wider font-semibold text-zinc-500">Keep last</span>
+              <input type="number" min="0" className="input w-full mt-1" value={keepLast}
+                onChange={(e) => setKeepLast(e.target.value)} placeholder="e.g. 7" />
+            </label>
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wider font-semibold text-zinc-500">Delete older than (days)</span>
+              <input type="number" min="0" className="input w-full mt-1" value={maxAgeDays}
+                onChange={(e) => setMaxAgeDays(e.target.value)} placeholder="off" />
+            </label>
+          </div>
+          <p className="text-[11px] text-zinc-500 mt-1">
+            Archives the server's data to the selected S3 target (Minecraft Java is flushed first). Retention runs after
+            each backup: the newest "keep last" are always kept; older ones beyond that are pruned (plus anything past the
+            age limit, if set). Leave both blank to keep everything.
+          </p>
+        </div>
       )}
       <div>
         <span className="text-[11px] uppercase tracking-wider font-semibold text-zinc-500">When (cron)</span>

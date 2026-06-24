@@ -48,7 +48,10 @@ pub async fn check_docker_status(
                 match arc.ping().await {
                     Ok(_) => {
                         state.install_local(arc.clone()).await;
-                        localforge_backend_local::spawn_scheduler(arc, paths::home_root());
+                        let resolver: localforge_backend_local::BackupTargetResolver =
+                            Arc::new(|id| crate::backups::find_target(id).map(|(_, t)| t));
+                        localforge_backend_local::spawn_scheduler(arc.clone(), paths::home_root(), resolver);
+                        localforge_backend_local::spawn_crash_watcher(arc, paths::home_root());
                         Ok(DockerStatus {
                             available: true,
                             running: true,

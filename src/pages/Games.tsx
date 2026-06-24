@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
-import { 
-  Plus, Download, Upload, Trash2, Edit2, Save, X, 
+import {
+  Plus, Download, Upload, Trash2, Edit2, Save, X,
   Package, Settings, ChevronDown, ChevronUp, Copy, Check,
-  RotateCcw, ExternalLink, FolderOpen, FileCode, ArrowRight
+  RotateCcw, ExternalLink, FolderOpen, FileCode, ArrowRight, Store
 } from 'lucide-react';
 import { useGamesStore } from '../stores/gamesStore';
 import { GameConfig, DEFAULT_GAME_CONFIG, Variable, PortConfig, ConfigFile, SystemMapping, FieldType, ConfigFileFormat } from '../types';
 import { open } from '@tauri-apps/plugin-shell';
 import { GameIcon } from '../components/GameIcon';
+import { TemplateGallery } from '../components/TemplateGallery';
 
 type EditMode = 'none' | 'create' | 'edit';
 
@@ -20,6 +21,7 @@ export function GamesPage() {
   const [expandedGame, setExpandedGame] = useState<string | null>(null);
   const [importJson, setImportJson] = useState('');
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const [showGallery, setShowGallery] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   
   // New variable form
@@ -270,6 +272,9 @@ export function GamesPage() {
           <button onClick={() => setShowImportDialog(true)} className="btn btn-secondary btn-sm">
             <Upload size={14} /> Import
           </button>
+          <button onClick={() => setShowGallery(true)} className="btn btn-secondary btn-sm" title="Browse & publish community templates">
+            <Store size={14} /> Community
+          </button>
           {customGames.length > 0 && (
             <button onClick={handleExportAll} className="btn btn-secondary btn-sm">
               {copied === 'all' ? <Check size={14} className="text-emerald-500" /> : <Download size={14} />}
@@ -281,6 +286,14 @@ export function GamesPage() {
           </button>
         </div>
       </header>
+
+      {showGallery && (
+        <TemplateGallery
+          customGames={customGames}
+          onImported={() => { void fetchGames(); }}
+          onClose={() => setShowGallery(false)}
+        />
+      )}
 
       {error && (
         <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 flex items-center justify-between">

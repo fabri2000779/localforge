@@ -185,6 +185,11 @@ pub struct Server {
     pub installed: bool,
     #[serde(default)]
     pub install_container_id: Option<String>,
+    /// What the host crash-watcher does if this server's container exits
+    /// unexpectedly. Defaults (via serde) to [`RestartPolicy::OnCrash`] for
+    /// servers persisted before this field existed.
+    #[serde(default)]
+    pub restart_policy: RestartPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -196,6 +201,108 @@ pub enum ServerStatus {
     Running,
     Stopping,
     Error,
+    /// The container exited unexpectedly while we believed it was running —
+    /// set by the host crash-watcher (distinct from a user-initiated Stop).
+    Crashed,
+}
+
+/// What the host crash-watcher does when a server's container exits
+/// unexpectedly (i.e. while the persisted state was `Running`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum RestartPolicy {
+    /// Detect + record the crash, but leave the server stopped.
+    Off,
+    /// Auto-restart on an unexpected exit, with crash-loop backoff (default).
+    #[default]
+    OnCrash,
+    /// Bring it back up after any unexpected exit, with the same backoff.
+    Always,
+}
+
+/// One entry in a server's host-side crash journal. Metadata only — no secrets
+/// or config — so it's safe to surface in the UI and to notify on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrashEvent {
+    /// Unix ms when the host noticed the unexpected exit.
+    pub ts: i64,
+    pub server_id: String,
+    pub server_name: String,
+    pub kind: CrashEventKind,
+    /// Last few log lines before the exit, for quick diagnosis (best-effort).
+    #[serde(default)]
+    pub log_tail: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CrashEventKind {
+    /// The container exited unexpectedly.
+    Crashed,
+    /// We auto-restarted it per the restart policy.
+    Restarted,
+    /// Crash-loop backoff tripped — we stopped auto-restarting.
+    Backoff,
+}
+
+/// Outbound alert destination. The host POSTs to these directly when a server
+/// event fires (e.g. a crash) — the URL is stored host-side and never reaches
+/// the cloud, so even a Discord/Slack token stays on the user's machine.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WebhookKind {
+    /// Discord incoming webhook (`{ content, embeds }`).
+    Discord,
+    /// Slack incoming webhook (`{ text }`).
+    Slack,
+    /// Any endpoint — receives the raw event JSON.
+    Generic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookConfig {
+    pub id: String,
+    pub name: String,
+    pub kind: WebhookKind,
+    /// The full endpoint URL (secret — carries the Discord/Slack token).
+    pub url: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl WebhookConfig {
+    /// Non-secret projection for the frontend — the URL is masked so the token
+    /// never leaves the Rust side once saved.
+    pub fn view(&self) -> WebhookConfigView {
+        WebhookConfigView {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            kind: self.kind,
+            url_hint: mask_url(&self.url),
+            enabled: self.enabled,
+        }
+    }
+}
+
+/// Redacted [`WebhookConfig`] for display (no secret URL).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookConfigView {
+    pub id: String,
+    pub name: String,
+    pub kind: WebhookKind,
+    /// Masked URL, e.g. `https://discord.com/api/webhooks/…1a2b`.
+    pub url_hint: String,
+    pub enabled: bool,
+}
+
+/// Mask a webhook URL: keep the scheme+host and the last 4 chars, hide the rest.
+fn mask_url(url: &str) -> String {
+    let scheme_host: String = url.split('/').take(3).collect::<Vec<_>>().join("/");
+    let tail: String = url.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("{scheme_host}/…{tail}")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -452,6 +559,25 @@ pub enum ScheduleAction {
     Command { command: String },
     /// Announce a message in-game (Minecraft `say`; other games vary).
     Broadcast { message: String },
+    /// Archive the server's data dir and upload it to a configured S3 backup
+    /// target. `target_id` selects which named target (None = the first/default
+    /// one). The host scheduler resolves the id to credentials at fire time —
+    /// from the desktop keychain or, on a headless agent, the provisioned
+    /// target file — so the secret never has to live in the schedule itself.
+    ///
+    /// Optional retention: after a successful upload the scheduler prunes the
+    /// server's objects in the bucket. `keep_last` is a floor (never deletes the
+    /// N most recent); `max_age_days` deletes anything older than that. With both
+    /// set, the N newest are always kept and older-than-max beyond them are
+    /// pruned. With neither set, nothing is pruned.
+    Backup {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keep_last: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_age_days: Option<u32>,
+    },
 }
 
 /// One backup object found in the bucket (returned by `list_backups`).

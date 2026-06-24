@@ -8,8 +8,10 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
-import { Users, UserPlus, X, MailWarning, Trash2 } from 'lucide-react';
+import { Users, UserPlus, X, MailWarning, Trash2, Shield } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { useAuthStore } from '../stores/authStore';
+import { ServerScopeDialog } from './ServerScopeDialog';
 
 interface Member {
   id: string;
@@ -44,6 +46,7 @@ export function MembersPanel() {
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [rotateOpen, setRotateOpen] = useState(false);
+  const [scopeMember, setScopeMember] = useState<{ id: string; name: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -120,6 +123,15 @@ export function MembersPanel() {
             {canManage && m.role !== 'owner' && m.id !== me?.id && (
               <button
                 className="member-remove"
+                title="Manage server access"
+                onClick={() => setScopeMember({ id: m.id, name: m.display_name ?? m.email })}
+              >
+                <Shield size={13} strokeWidth={2.2} />
+              </button>
+            )}
+            {canManage && m.role !== 'owner' && m.id !== me?.id && (
+              <button
+                className="member-remove"
                 title="Remove from org"
                 onClick={() => onRemoveMember(m.id)}
               >
@@ -166,6 +178,14 @@ export function MembersPanel() {
         orgId={org.id}
         onClose={() => setRotateOpen(false)}
       />
+
+      {scopeMember && (
+        <ServerScopeDialog
+          orgId={org.id}
+          member={scopeMember}
+          onClose={() => setScopeMember(null)}
+        />
+      )}
     </section>
   );
 }
@@ -305,7 +325,12 @@ function InviteDialog({ open, orgId, onClose }: { open: boolean; orgId: string; 
             >
               {link}
             </div>
-            <button className="auth-submit mt-3" type="button" onClick={copyLink}>
+            <div className="flex justify-center my-3">
+              <div className="p-3 bg-white rounded-xl" title="Scan on the teammate's phone to accept">
+                <QRCodeSVG value={link} size={168} level="M" />
+              </div>
+            </div>
+            <button className="auth-submit" type="button" onClick={copyLink}>
               {copied ? 'Copied!' : 'Copy invite link'}
             </button>
             <p className="text-xs text-slate-500 mt-2">

@@ -122,6 +122,60 @@ pub async fn cloud_orgs_remove_member(
     .await
 }
 
+// ── Per-server access scopes (Team) ─────────────────────────────────────────
+
+/// One server a member is scoped to. `expires_at` (ms) = temporary grant; None
+/// = permanent. Empty list (set) = unrestricted (full org access).
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MemberScope {
+    pub server_id: String,
+    #[serde(default)]
+    pub expires_at: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+struct ScopesResp {
+    scopes: Vec<MemberScope>,
+}
+
+#[derive(serde::Serialize)]
+struct ScopesBody<'a> {
+    scopes: &'a [MemberScope],
+}
+
+/// Read a member's per-server access scope (empty = full access).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn cloud_member_scopes_get(
+    org_id: String,
+    user_id: String,
+) -> Result<Vec<MemberScope>, api::ApiError> {
+    let token = auth::current_token().ok_or_else(unauth)?;
+    let r: ScopesResp = api::get(
+        &format!("/v1/orgs/{org_id}/members/{user_id}/scopes"),
+        Some(&token),
+    )
+    .await?;
+    Ok(r.scopes)
+}
+
+/// Replace a member's per-server access scope. Empty list = unrestricted.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn cloud_member_scopes_set(
+    org_id: String,
+    user_id: String,
+    scopes: Vec<MemberScope>,
+) -> Result<(), api::ApiError> {
+    let token = auth::current_token().ok_or_else(unauth)?;
+    let _: serde_json::Value = api::put(
+        &format!("/v1/orgs/{org_id}/members/{user_id}/scopes"),
+        &ScopesBody { scopes: &scopes },
+        Some(&token),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Accept an invitation token (delivered via the `localforge://invite`
 /// deep link OR pasted by the user). Returns the org id they joined so the UI
 /// can switch to it. `secret` is the base64 invite secret from the link
