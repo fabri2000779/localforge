@@ -31,6 +31,13 @@ flate2 = "1"
 # Scheduled actions: parse standard 5-field cron expressions + compute the next
 # fire time. Evaluated in the host's local time.
 croner = "2"
+# Outbound event alerts (crash → Discord/Slack/generic webhook). The host POSTs
+# directly; the webhook URL never transits the cloud. rustls-no-provider + a
+# preconfigured webpki-roots config matches the rest of the workspace (one TLS
+# stack, ring provider, no OpenSSL / aws-lc-rs C toolchain).
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
+rustls = { version = "0.23", features = ["ring"] }
+webpki-roots = "1"
 # Local metrics history is stored as plain append-only JSONL (serde_json, below)
 # — Docker keeps no history, so the host persists samples itself. Host-side only,
 # never synced to the cloud. No DB engine: the data is tiny at one line/min and

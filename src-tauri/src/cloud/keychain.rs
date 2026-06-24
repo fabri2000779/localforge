@@ -22,22 +22,7 @@ const ACCOUNT: &str = "session-jwt";
 /// what produced the v0.1.14 "logs in, then immediately asks to log in
 /// again" bug.
 pub fn init() {
-    // Empty config = the store's defaults (matches the old v3 behaviour).
-    let config: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
-
-    #[cfg(target_os = "windows")]
-    let res = keyring::use_windows_native_store(&config);
-    #[cfg(target_os = "macos")]
-    let res = keyring::use_apple_keychain_store(&config);
-    #[cfg(target_os = "linux")]
-    let res = keyring::use_zbus_secret_service_store(&config);
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    let res: keyring_core::Result<()> = {
-        let _ = &config;
-        Ok(())
-    };
-
-    match res {
+    match install_native_store() {
         Ok(_) => tracing::info!("[keychain] OS credential store installed"),
         Err(e) => tracing::error!(
             "[keychain] FAILED to install the OS credential store: {e}. \
@@ -45,6 +30,37 @@ pub fn init() {
              machine until this is resolved."
         ),
     }
+}
+
+/// Install the per-platform native store as keyring-core's process-wide
+/// default. This is the install snippet keyring's docs tell apps to copy from
+/// the crate's `cli` module rather than linking the umbrella crate's `cli`
+/// feature. The `cfg`s here mirror the per-target deps in `Cargo.toml`, so each
+/// build only references the one store crate it actually links.
+fn install_native_store() -> keyring_core::Result<()> {
+    // Empty config = the store's defaults.
+    let config: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+
+    #[cfg(target_os = "windows")]
+    keyring_core::set_default_store(windows_native_keyring_store::Store::new_with_configuration(
+        &config,
+    )?);
+    #[cfg(target_os = "macos")]
+    keyring_core::set_default_store(
+        apple_native_keyring_store::keychain::Store::new_with_configuration(&config)?,
+    );
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+    keyring_core::set_default_store(
+        zbus_secret_service_keyring_store::Store::new_with_configuration(&config)?,
+    );
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "macos",
+        all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))
+    )))]
+    let _ = config;
+
+    Ok(())
 }
 
 fn entry() -> Result<keyring_core::Entry, keyring_core::Error> {

@@ -66,25 +66,20 @@ tauri-plugin-deep-link = "2"
 # process that can never deliver the URL.
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # OS-native credential storage (Win Credential Manager, macOS Keychain,
-# Linux Secret Service). Used to stash the JWT + the sync DEK — never
-# localStorage.
+# Linux Secret Service) for the JWT + sync DEK — never localStorage.
 #
-# keyring 4 reworked the model: the backend is NO LONGER chosen at
-# compile time via Cargo features. Instead the app installs a credential
-# store at runtime (see `cloud::keychain::init`). This crate bundles the
-# per-platform native stores; we register the right one on startup with
-# `keyring::use_*_store()`. On Linux we pick the pure-Rust zbus Secret
-# Service backend so the build needs no system libdbus.
+# We drive this through keyring-core directly and install the right native
+# store at runtime in `cloud::keychain::init`. keyring 4.1's own docs are
+# explicit that an app which controls its own store should depend on
+# keyring-core + the specific per-platform store crates — NOT the `keyring`
+# umbrella, whose `use_*_store` installers now sit behind the heavy `cli`
+# feature (which drags in sqlite/dbus/etc. we don't want). So we link only the
+# native store for each target (see the per-target sections below) and copy the
+# tiny install snippet from keyring's `cli` module into `keychain::init`.
 #
-# The v0.1.14 "silent mock backend → endless re-login" bug is now
-# structurally impossible: if `init()` can't install the native store it
-# logs an error loudly instead of silently falling back to a no-op store.
-keyring = "4"
-# keyring 4 split the Entry/Error API into keyring-core; the `keyring`
-# crate only provides the per-platform store installers. Pin to the same
-# major keyring 4.0 resolves so there's ONE keyring-core (the default
-# store is process-global state on keyring-core — two copies would mean
-# Entry can't see the store we installed).
+# The v0.1.14 "silent mock backend → endless re-login" bug stays structurally
+# impossible: if `init()` can't install the native store it logs loudly instead
+# of silently falling back to a no-op store.
 keyring-core = "1"
 tokio-util = { version = "0.7", features = ["io"] }
 bytes = "1"
@@ -102,6 +97,19 @@ base64 = "0.22"
 rand = "0.9"
 # WS client for the cloud relay. rustls so we don't pull OpenSSL.
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
+
+# Per-platform keyring-core native stores. Only the store for the target OS is
+# linked; `cloud::keychain::init` sets it as keyring-core's default at startup.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+
+# Linux + other *nix (not macOS/iOS/Android): pure-Rust zbus Secret Service
+# backend, so the build needs no system libdbus.
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+zbus-secret-service-keyring-store = "1"
 
 [features]
 default = ["custom-protocol"]
