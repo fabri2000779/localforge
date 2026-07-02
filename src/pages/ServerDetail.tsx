@@ -22,6 +22,7 @@ import { BackupsPanel } from '../components/BackupsPanel';
 import { SchedulesPanel } from '../components/SchedulesPanel';
 import { MetricsPanel } from '../components/MetricsPanel';
 import { PlayersPanel } from '../components/PlayersPanel';
+import { useEscapeClose } from '../hooks/useEscapeClose';
 
 type TabType = 'console' | 'files' | 'network' | 'players' | 'backups' | 'schedules' | 'metrics' | 'settings';
 
@@ -141,6 +142,10 @@ export function ServerDetail() {
       }
     };
 
+    // `listen()` resolves asynchronously — if this effect is cleaned up
+    // (navigation / id change) before it lands, the resolved listener used
+    // to leak and double every log line on the next mount (audit finding).
+    let cancelled = false;
     const setupStreaming = async () => {
       try {
         const unlisten = await listen<{ server_id: string; line: string }>('server-log', (event) => {
@@ -148,6 +153,10 @@ export function ServerDetail() {
             setLogs((prev) => [...prev, event.payload.line]);
           }
         });
+        if (cancelled) {
+          unlisten();
+          return;
+        }
 
         unlistenRef.current = unlisten;
         if (isSubUser) {
@@ -176,6 +185,7 @@ export function ServerDetail() {
     startStatsPolling(id);
 
     return () => {
+      cancelled = true;
       if (unlistenRef.current) {
         unlistenRef.current();
         unlistenRef.current = null;
@@ -199,22 +209,38 @@ export function ServerDetail() {
     }
   }, [server?.config]);
 
-  // Uptime calculator
+  // Uptime — measured from the moment we SAW the server enter 'running'.
+  // (It used created_at, the server's INSTALL date, so "uptime" showed days
+  // for a server started seconds ago; audit finding.) If the app opened onto
+  // an already-running server the real start time is unknown → hide uptime
+  // rather than lie.
+  const startedAtRef = useRef<number | null>(null);
   useEffect(() => {
     if (server?.status !== 'running') {
+      startedAtRef.current = null;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setUptime('');
       return;
     }
-    
-    const startTime = new Date(server.created_at);
+    if (startedAtRef.current === null) {
+      // This effect runs BEFORE the prevStatusRef updater below, so on a
+      // transition prevStatusRef still holds the PRIOR status; equal-to-
+      // 'running' means we mounted onto an already-running server.
+      if (prevStatusRef.current && prevStatusRef.current !== 'running') {
+        startedAtRef.current = Date.now();
+      } else {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setUptime('');
+        return;
+      }
+    }
+    const startMs = startedAtRef.current;
     const updateUptime = () => {
-      const now = new Date();
-      const diff = now.getTime() - startTime.getTime();
+      const diff = Date.now() - startMs;
       const hours = Math.floor(diff / (1000 * 60 * 60));
       const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
       const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-      
+
       if (hours > 0) {
         setUptime(`${hours}h ${minutes}m`);
       } else if (minutes > 0) {
@@ -223,11 +249,11 @@ export function ServerDetail() {
         setUptime(`${seconds}s`);
       }
     };
-    
+
     updateUptime();
     const interval = setInterval(updateUptime, 1000);
     return () => clearInterval(interval);
-  }, [server?.status, server?.created_at]);
+  }, [server?.status]);
 
   // Clear the console whenever the server transitions INTO 'stopped'
   // from any other state. The previous check required the prior status
@@ -682,9 +708,12 @@ export function ServerDetail() {
 
         {/* Action Buttons */}
         <div className="flex items-center gap-3 mt-6 pt-6 border-t border-zinc-800">
-          {server.status === 'stopped' ? (
+          {server.status === 'stopped' || server.status === 'crashed' || server.status === 'error' ? (
+            // Crashed / errored servers get a way back up — the old
+            // stopped-only branch left them on a permanent spinner (audit
+            // finding: dead-end).
             <button onClick={handleStart} disabled={isLoading || !canOperate} className="btn btn-success">
-              <Play size={18} /> Start Server
+              <Play size={18} /> {server.status === 'crashed' ? 'Restart Server' : 'Start Server'}
             </button>
           ) : server.status === 'running' ? (
             <>
@@ -1262,6 +1291,7 @@ function ShareServerModal({
   copied: boolean;
   onClose: () => void;
 }) {
+  useEscapeClose(onClose);
   const hasPublic = publicAddress.length > 0;
   const [sel, setSel] = useState<'public' | 'local'>(hasPublic ? 'public' : 'local');
   const addr = sel === 'public' && hasPublic ? publicAddress : localAddress;

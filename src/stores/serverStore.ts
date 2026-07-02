@@ -16,7 +16,7 @@ import type {
 } from '../types';
 import { useNodesStore } from './nodesStore';
 import { emitAudit } from '../utils/audit';
-import { routeServerAction } from '../utils/subUser';
+import { isRelayRouted, routeServerAction } from '../utils/subUser';
 
 interface LogEvent {
   server_id: string;
@@ -70,6 +70,9 @@ interface ServerState {
 /// switching nodes mid-flight doesn't strand stale calls.
 const currentNodeId = () => useNodesStore.getState().activeNodeId;
 
+/// Monotonic token for attach/detach ordering — see attachToServer.
+let attachGeneration = 0;
+
 /// Fire-and-forget push of the local servers to the cloud after a
 /// config-changing mutation (create / config edit / delete), so the new
 /// state lands on the user's other devices and the mobile app without a
@@ -91,9 +94,12 @@ function autoSyncToCloud() {
 /// predate the app opening never re-alert.
 let lastCrashEventTs: number | null = null;
 
+// Wire shape of core::CrashEvent — #[serde(rename_all = "camelCase")], so the
+// fields arrive camelCase (a snake_case `server_id` here silently read
+// undefined and killed every crash push; audit finding).
 interface CrashJournalEvent {
   ts: number;
-  server_id: string;
+  serverId: string;
   /// 'crashed' | 'restarted' | 'backoff' (CrashEventKind, kebab-case).
   kind: string;
 }
@@ -122,8 +128,10 @@ async function checkCrashJournal() {
   }
   for (const e of events) {
     if (e.ts > lastCrashEventTs && (e.kind === 'crashed' || e.kind === 'backoff')) {
-      void invoke('cloud_push_notify', { serverId: e.server_id, kind: e.kind }).catch(() => {
-        /* not signed in / no team / delivery best-effort — ignore */
+      void invoke('cloud_push_notify', { serverId: e.serverId, kind: e.kind }).catch((err) => {
+        // Not-signed-in / no-team is the normal case — but keep it visible in
+        // dev tools so an arg-shape regression can't hide again.
+        console.debug('[push] cloud_push_notify skipped:', err);
       });
     }
   }
@@ -233,6 +241,19 @@ export const useServerStore = create<ServerState>((set, get) => ({
   deleteServer: async (serverId, deleteData = true) => {
     set({ isLoading: true, error: null });
     try {
+      if (isRelayRouted()) {
+        // Sub-user mode: ship the delete to the owner's machine as a relay
+        // cmd (their executor runs delete_server, admin-gated). None of the
+        // local calls below apply — the old unconditional detachFromServer
+        // here fired a stray server.stop at the owner's LIVE server before
+        // the local delete failed (audit finding).
+        await routeServerAction('server.delete', { serverId, deleteData });
+        emitAudit('server.delete', serverId, { deleteData });
+        const selected = get().selectedServer;
+        if (selected?.id === serverId) set({ selectedServer: null });
+        set({ isLoading: false });
+        return;
+      }
       get().stopStatsPolling();
       await get().detachFromServer(serverId);
       await invoke<ServerResponse>('delete_server', {
@@ -275,6 +296,14 @@ export const useServerStore = create<ServerState>((set, get) => ({
   reinstallServer: async (serverId) => {
     set({ isLoading: true, error: null, logs: [] });
     try {
+      if (isRelayRouted()) {
+        // Sub-user: relay the reinstall to the owner's machine. The old path
+        // called attachToServer first, which fired a stray server.start at
+        // the owner before the local invoke failed (audit finding).
+        await routeServerAction('server.reinstall', { serverId });
+        set({ isLoading: false });
+        return;
+      }
       await get().attachToServer(serverId);
       await invoke<ServerResponse>('reinstall_server', {
         serverId,
@@ -291,6 +320,15 @@ export const useServerStore = create<ServerState>((set, get) => ({
   updateServerGame: async (serverId) => {
     set({ isLoading: true, error: null, logs: [] });
     try {
+      if (isRelayRouted()) {
+        // No relay cmd exists for a game update — surface that honestly
+        // instead of firing stray cmds + a doomed local invoke.
+        set({
+          error: "Updating the game image runs on the owner's machine — ask the owner to run it.",
+          isLoading: false,
+        });
+        return;
+      }
       await get().attachToServer(serverId);
       await invoke<ServerResponse>('update_server_game', {
         serverId,
@@ -374,6 +412,11 @@ export const useServerStore = create<ServerState>((set, get) => ({
       logUnlisten();
       set({ logUnlisten: null });
     }
+    // Generation guard: `listen()` resolves asynchronously, so a detach (or a
+    // second attach) racing in before it lands used to leak an orphaned
+    // listener that doubled every log line (audit finding). Any newer
+    // attach/detach bumps the generation and the stale resolution self-drops.
+    const gen = ++attachGeneration;
 
     try {
       // The xterm listener subscribes to local `server-log` Tauri events
@@ -385,24 +428,25 @@ export const useServerStore = create<ServerState>((set, get) => ({
           set((state) => ({ logs: [...state.logs, event.payload.line] }));
         }
       });
+      if (gen !== attachGeneration) {
+        unlisten(); // superseded while listen() was in flight
+        return;
+      }
 
       set({ logUnlisten: unlisten, isStreaming: true });
 
-      // Route the actual "start the stream" call. Owner: local Tauri
-      // command kicks Docker's log reader. Sub-user: relay cmd asks
-      // the owner's RelayCommandExecutor to do the same on their
-      // hardware, and the owner's RelayLogBridge forwards each line.
-      const route = await routeServerAction('server.start' /* unused */, { serverId });
-      // The route helper signature requires an ActionKind we have in
-      // the map; reuse the more-specific attach for clarity.
-      if (route.via === 'local') {
+      // Route the actual "start the stream" call. Owner: local Tauri command
+      // kicks Docker's log reader. Sub-user: relay cmd asks the owner's
+      // RelayCommandExecutor to do the same on their hardware, and the
+      // owner's RelayLogBridge forwards each line. Pure probe — the old
+      // routeServerAction('server.start') call here actually STARTED the
+      // owner's server in sub-user mode (audit finding).
+      if (!isRelayRouted()) {
         await invoke('attach_server', {
           serverId,
           nodeId: currentNodeId(),
         });
       } else {
-        // Send the attach cmd explicitly — we re-used routeServerAction
-        // above just to know which path we're on.
         await invoke('cloud_relay_send_cmd', {
           payload: {
             type: 'cmd',
@@ -419,14 +463,16 @@ export const useServerStore = create<ServerState>((set, get) => ({
   },
 
   detachFromServer: async (serverId) => {
+    attachGeneration++; // cancel any attach whose listen() is still in flight
     const { logUnlisten } = get();
     if (logUnlisten) {
       logUnlisten();
       set({ logUnlisten: null, isStreaming: false });
     }
     try {
-      const route = await routeServerAction('server.stop' /* unused */, { serverId });
-      if (route.via === 'local') {
+      // Pure probe — the old routeServerAction('server.stop') call here
+      // actually STOPPED the owner's server in sub-user mode (audit finding).
+      if (!isRelayRouted()) {
         await invoke('detach_server', { serverId });
       } else {
         await invoke('cloud_relay_send_cmd', {

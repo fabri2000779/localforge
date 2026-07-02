@@ -135,14 +135,14 @@ export function ServerCard({ server, machineLabel, machineKind, onOpen, onAction
 
       {/* Actions — reveal on hover, but always render so layout doesn't shift */}
       <div className="server-card-actions">
-        {server.status === 'stopped' ? (
+        {server.status === 'stopped' || server.status === 'crashed' || server.status === 'error' ? (
           <button
             onClick={handleStart}
             disabled={isLoading}
             className="btn btn-success btn-sm"
           >
             <Play size={12} strokeWidth={2.5} />
-            Start
+            {server.status === 'crashed' ? 'Restart' : 'Start'}
           </button>
         ) : server.status === 'running' ? (
           <button

@@ -140,6 +140,22 @@ pub async fn stop_server(
 
     let backend = require_backend(&state, node_id.as_deref()).await?;
 
+    // Close the crash-watcher race: persist Stopping BEFORE the graceful
+    // console-stop + 5s window below. The container can exit inside that
+    // window while the persisted status still said Running — which the
+    // watcher treated as a crash and auto-restarted the server mid-stop
+    // (audit finding). Local node only; a remote agent persists Stopping in
+    // its own backend.stop_server.
+    if node_is_local(node_id.as_deref()) {
+        let root = paths::home_root();
+        if let Ok(mut server) =
+            localforge_backend_local::persistence::load_server(&root, &server_id)
+        {
+            server.status = ServerStatus::Stopping;
+            let _ = localforge_backend_local::persistence::save_server(&root, &server);
+        }
+    }
+
     // Graceful stop: send the game's stop_command and give the container
     // a few seconds. Game metadata lookup happens on the desktop's
     // catalogue regardless of node (game configs are content-addressable
@@ -220,6 +236,15 @@ pub async fn list_servers(
             continue;
         }
         if let Ok(status) = backend.server_status(&server.id).await {
+            // Keep a persisted Crashed verdict visible: the live probe maps
+            // an EXITED container to Stopped, which used to overwrite Crashed
+            // here and make the status unreachable in the UI (audit finding).
+            // A successful start persists Running and clears it naturally.
+            if server.status == ServerStatus::Crashed
+                && matches!(status, ServerStatus::Stopped | ServerStatus::Error)
+            {
+                continue;
+            }
             server.status = status;
         }
     }

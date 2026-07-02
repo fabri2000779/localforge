@@ -187,9 +187,26 @@ export function useServerMachineInfo(): Record<string, ServerMachine> {
 }
 
 /**
+ * Pure route probe — answers "would a server action go over the relay right
+ * now?" WITHOUT sending anything. Callers that only need to pick a code path
+ * (attach/detach, delete guards) must use THIS, not routeServerAction: the
+ * audit found serverStore calling routeServerAction with placeholder actions
+ * "just to know the route", which actually fired real server.start/stop cmds
+ * at the owner's machine.
+ */
+export function isRelayRouted(): boolean {
+  const auth = useAuthStore.getState();
+  const cur = auth.orgs.find((o) => o.id === auth.currentOrgId);
+  return cur ? !cur.isOwner : false;
+}
+
+/**
  * Route a server action to either the local Tauri command (owner mode)
  * or a relay `cmd` message (sub-user mode). Mutates nothing in the
  * stores directly — callers wrap their own optimistic updates.
+ *
+ * NOT a probe: in sub-user mode this SENDS the cmd. Use `isRelayRouted()`
+ * when you only need to know which path you're on.
  *
  * The relay path is fire-and-forget; the owner's RelayCommandExecutor
  * processes the cmd and broadcasts a `cmd_result` event that the UI
@@ -199,11 +216,8 @@ export async function routeServerAction(
   action: ActionKind,
   payload: Record<string, unknown>,
 ): Promise<{ via: 'local' | 'relay'; requestId?: string }> {
+  if (!isRelayRouted()) return { via: 'local' };
   const auth = useAuthStore.getState();
-  const cur = auth.orgs.find((o) => o.id === auth.currentOrgId);
-  const isSubUser = cur ? !cur.isOwner : false;
-
-  if (!isSubUser) return { via: 'local' };
 
   // Look up the server's node_id from the decrypted sync result so the
   // owner's RelayCommandExecutor knows whether to hit local Docker or

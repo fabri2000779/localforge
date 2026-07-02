@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { X, Loader2, Download, Store, UploadCloud } from 'lucide-react';
+import { useEscapeClose } from '../hooks/useEscapeClose';
 
 interface TemplateSummary {
   id: string;
@@ -31,6 +32,7 @@ export function TemplateGallery({
   onImported: () => void;
   onClose: () => void;
 }) {
+  useEscapeClose(onClose);
   const [list, setList] = useState<TemplateSummary[] | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);

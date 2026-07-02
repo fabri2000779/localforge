@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { X, Loader2, Shield } from 'lucide-react';
 import { useServerStore } from '../stores/serverStore';
+import { useEscapeClose } from '../hooks/useEscapeClose';
 
 interface MemberScope {
   serverId: string;
@@ -29,8 +30,14 @@ export function ServerScopeDialog({
   const [restricted, setRestricted] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [temporary, setTemporary] = useState(false);
+  // The deadline as LOADED — preserved on save so re-saving doesn't silently
+  // re-extend the grant to +48h every time (audit finding). Cleared when the
+  // admin unchecks "temporary", so re-checking mints a fresh 48h window.
+  const [loadedExpiresAt, setLoadedExpiresAt] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  useEscapeClose(onClose, !saving);
 
   useEffect(() => {
     let alive = true;
@@ -44,7 +51,9 @@ export function ServerScopeDialog({
         if (scopes.length > 0) {
           setRestricted(true);
           setSelected(new Set(scopes.map((s) => s.serverId)));
-          setTemporary(scopes.some((s) => s.expiresAt != null));
+          const exp = scopes.find((s) => s.expiresAt != null)?.expiresAt ?? null;
+          setTemporary(exp != null);
+          setLoadedExpiresAt(exp);
         }
       } catch (e) {
         if (alive) setErr(String(e));
@@ -70,7 +79,8 @@ export function ServerScopeDialog({
     setSaving(true);
     setErr(null);
     try {
-      const expiresAt = temporary ? Date.now() + 48 * 3600 * 1000 : null;
+      // Preserve the existing deadline; only mint +48h for a NEW grant.
+      const expiresAt = temporary ? (loadedExpiresAt ?? Date.now() + 48 * 3600 * 1000) : null;
       const scopes = restricted ? [...selected].map((serverId) => ({ serverId, expiresAt })) : [];
       await invoke('cloud_member_scopes_set', { orgId, userId: member.id, scopes });
       onClose();
@@ -133,14 +143,28 @@ export function ServerScopeDialog({
             )}
 
             {restricted && (
-              <label className="flex items-center gap-2 text-[13px] text-zinc-400 mt-3">
-                <input
-                  type="checkbox"
-                  checked={temporary}
-                  onChange={(e) => setTemporary(e.target.checked)}
-                />
-                Temporary — access expires in 48 hours
-              </label>
+              <>
+                <label className="flex items-center gap-2 text-[13px] text-zinc-400 mt-3">
+                  <input
+                    type="checkbox"
+                    checked={temporary}
+                    onChange={(e) => {
+                      setTemporary(e.target.checked);
+                      // Unchecking abandons the old deadline — re-checking
+                      // grants a fresh 48h window.
+                      if (!e.target.checked) setLoadedExpiresAt(null);
+                    }}
+                  />
+                  Temporary — access expires in 48 hours
+                </label>
+                {temporary && loadedExpiresAt != null && (
+                  <p className="text-[12px] text-zinc-500 mt-1 ml-6">
+                    Expires {new Date(loadedExpiresAt).toLocaleString()} (in{' '}
+                    {Math.max(0, Math.round((loadedExpiresAt - Date.now()) / 3_600_000))}h). Saving
+                    keeps this deadline.
+                  </p>
+                )}
+              </>
             )}
 
             {err && <div className="auth-err mt-2 break-all">{err}</div>}

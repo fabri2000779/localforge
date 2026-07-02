@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Webhook, Plus, Trash2, Loader2, Check, X, Send, Power } from 'lucide-react';
+import { Webhook, Plus, Trash2, Loader2, Check, X, Send, Power, PowerOff } from 'lucide-react';
 
 type WebhookKind = 'discord' | 'slack' | 'generic';
 
@@ -135,12 +135,18 @@ export function WebhooksPanel() {
                   {busy === h.id ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
                 </button>
                 <button
-                  className={`icon-btn ${h.enabled ? 'text-emerald-400' : 'text-zinc-600'}`}
-                  title={h.enabled ? 'Enabled — click to pause' : 'Paused — click to enable'}
+                  className={`inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded-full border text-[11px] font-medium transition-colors ${
+                    h.enabled
+                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                      : 'border-zinc-700 bg-zinc-800/60 text-zinc-400 hover:text-zinc-200'
+                  }`}
+                  title={h.enabled ? 'Alerts on — click to pause' : 'Alerts paused — click to enable'}
+                  aria-pressed={h.enabled}
                   onClick={() => toggle(h)}
                   disabled={busy === h.id}
                 >
-                  <Power size={15} />
+                  {h.enabled ? <Power size={13} /> : <PowerOff size={13} />}
+                  {h.enabled ? 'On' : 'Paused'}
                 </button>
                 <button className="icon-btn text-zinc-400 hover:text-red-400" title="Delete" onClick={() => remove(h.id)} disabled={busy === h.id}>
                   <Trash2 size={14} />

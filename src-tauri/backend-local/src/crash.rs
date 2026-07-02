@@ -100,7 +100,11 @@ pub fn spawn_crash_watcher(backend: Arc<dyn NodeBackend>, data_root: PathBuf) {
         tokio::time::sleep(Duration::from_secs(STARTUP_DELAY_SECS)).await;
         // server_id -> recent crash timestamps (for crash-loop backoff).
         let mut recent: HashMap<String, Vec<i64>> = HashMap::new();
-        let mut last_prune = Utc::now().timestamp_millis();
+        // 0 ⇒ the first tick prunes immediately. Seeding "now" meant a prune
+        // only ever ran after 24h of CONTINUOUS process uptime — which a
+        // desktop app never reaches, so the journal grew forever (audit
+        // finding). Long-lived agents keep the 24h cadence after the first.
+        let mut last_prune = 0i64;
         loop {
             watch_once(&*backend, &data_root, &mut recent).await;
             let now = Utc::now().timestamp_millis();
@@ -138,6 +142,16 @@ async fn watch_once(
         };
         if actual == ServerStatus::Running || actual == ServerStatus::Starting {
             continue; // still up (or coming up) — all good
+        }
+
+        // Re-check the PERSISTED intent right before acting: a user stop can
+        // land while we're querying Docker (stop_server persists Stopping
+        // before its graceful console-stop window) — that exit is intended,
+        // not a crash (audit finding: the watcher auto-restarted servers the
+        // user was stopping).
+        match crate::persistence::load_server(data_root, &s.id) {
+            Ok(cur) if cur.status == ServerStatus::Running => {}
+            _ => continue,
         }
 
         // Unexpected exit: the container is gone but we thought it was running.
@@ -187,16 +201,18 @@ async fn watch_once(
         match backend.start_server(&s.id).await {
             Ok(_) => {
                 tracing::info!("[crash-watcher] auto-restarted {}", s.name);
-                append_event(
-                    data_root,
-                    &CrashEvent {
-                        ts: Utc::now().timestamp_millis(),
-                        server_id: s.id.clone(),
-                        server_name: s.name.clone(),
-                        kind: CrashEventKind::Restarted,
-                        log_tail: Vec::new(),
-                    },
-                );
+                let restarted = CrashEvent {
+                    ts: Utc::now().timestamp_millis(),
+                    server_id: s.id.clone(),
+                    server_name: s.name.clone(),
+                    kind: CrashEventKind::Restarted,
+                    log_tail: Vec::new(),
+                };
+                append_event(data_root, &restarted);
+                // Recovery notice → webhooks too (it was journaled but never
+                // dispatched, leaving webhooks::message_for's Restarted arm
+                // dead; audit finding).
+                dispatch(data_root, &restarted);
             }
             Err(e) => tracing::warn!("[crash-watcher] failed to restart {}: {e}", s.name),
         }

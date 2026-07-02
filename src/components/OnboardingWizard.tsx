@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router-dom';
 import { Rocket, Server, Smartphone, X, Check } from 'lucide-react';
 import { useDockerStore } from '../stores/dockerStore';
 import { useServerStore } from '../stores/serverStore';
+import { useEscapeClose } from '../hooks/useEscapeClose';
 
 const SEEN_KEY = 'lf_onboarded_v1';
 
@@ -22,10 +23,17 @@ export function OnboardingWizard() {
   const [dismissed, setDismissed] = useState(
     () => typeof localStorage !== 'undefined' && !!localStorage.getItem(SEEN_KEY),
   );
+  // A backdrop click / Escape only hides for THIS session — an accidental
+  // mis-click used to write SEEN_KEY and kill onboarding forever (audit
+  // finding). Only the explicit buttons below dismiss permanently.
+  const [hiddenThisSession, setHiddenThisSession] = useState(false);
 
   // Only for a fresh start: Docker ready and no servers yet.
   const fresh = !!status?.running && servers.length === 0;
-  if (dismissed || !fresh) return null;
+  const visible = !dismissed && !hiddenThisSession && fresh;
+  const dismissForSession = () => setHiddenThisSession(true);
+  useEscapeClose(dismissForSession, visible);
+  if (!visible) return null;
 
   const close = () => {
     try {
@@ -43,13 +51,13 @@ export function OnboardingWizard() {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-      onClick={close}
+      onClick={dismissForSession}
     >
       <div className="card card-elevated w-full max-w-md relative" onClick={(e) => e.stopPropagation()}>
         <button
-          onClick={close}
+          onClick={dismissForSession}
           className="absolute top-3 right-3 p-1 text-slate-400 hover:text-white rounded transition-colors"
-          title="Close"
+          title="Close (shows again next launch)"
         >
           <X size={16} />
         </button>

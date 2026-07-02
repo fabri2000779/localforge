@@ -500,15 +500,27 @@ impl NodeBackend for LocalDockerBackend {
             .await
             .map_err(BackendError::docker)?;
 
+        // Persist Running IMMEDIATELY — the container IS started. If the
+        // status probe below hiccups we must not bail with the persisted
+        // state still saying Stopped/Crashed while a live container runs
+        // (that parks the server outside crash-watcher coverage and shows a
+        // stale badge; audit finding). The probe below only refines this.
+        server.status = ServerStatus::Running;
+        let _ = persistence::save_server(&self.data_root, &server);
+
         // Give the container a moment to settle before we read the status.
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        let status = self
-            .docker
-            .get_container_status(&container_id)
-            .await
-            .map_err(BackendError::docker)?;
+        let status = match self.docker.get_container_status(&container_id).await {
+            Ok(s) => s,
+            // Probe hiccup — keep the optimistic Running we just persisted.
+            Err(_) => return Ok(ServerStatus::Running),
+        };
 
         if status == ServerStatus::Stopped || status == ServerStatus::Error {
+            // It really failed to start — roll the optimistic Running back so
+            // the persisted state reflects reality.
+            server.status = status;
+            let _ = persistence::save_server(&self.data_root, &server);
             return Err(BackendError::Docker("container failed to start".into()));
         }
 
@@ -533,16 +545,25 @@ impl NodeBackend for LocalDockerBackend {
         server.status = ServerStatus::Stopping;
         let _ = persistence::save_server(&self.data_root, &server);
 
-        self.docker
-            .stop_container(&container_id)
-            .await
-            .map_err(BackendError::docker)?;
+        if let Err(e) = self.docker.stop_container(&container_id).await {
+            // Roll the persisted status back to reality — bailing with it
+            // stuck at Stopping parks a still-running server outside crash-
+            // watcher coverage forever (it only acts on Running; audit
+            // finding).
+            if let Ok(actual) = self.docker.get_container_status(&container_id).await {
+                server.status = actual;
+                let _ = persistence::save_server(&self.data_root, &server);
+            }
+            return Err(BackendError::docker(e));
+        }
 
+        // The stop succeeded — a probe hiccup here shouldn't strand the
+        // persisted state at Stopping, so fall back to Stopped.
         let status = self
             .docker
             .get_container_status(&container_id)
             .await
-            .map_err(BackendError::docker)?;
+            .unwrap_or(ServerStatus::Stopped);
 
         server.status = status.clone();
         persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;

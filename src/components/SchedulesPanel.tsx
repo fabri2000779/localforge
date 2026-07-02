@@ -8,14 +8,19 @@
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
-  Clock, Plus, Trash2, Loader2, Power, RotateCcw, Terminal, Megaphone, Archive, Check, X,
+  Clock, Plus, Trash2, Loader2, Power, PowerOff, RotateCcw, Terminal, Megaphone, Archive, Check, X,
 } from 'lucide-react';
 
+// Wire shape of core::ScheduleAction. NB: the Rust enum's rename_all =
+// "camelCase" renames only the VARIANT TAGS — struct-variant FIELDS stay
+// snake_case. Sending camelCase fields here made serde silently drop the
+// backup target + retention on every schedule created from the UI (audit
+// finding: wrong bucket + unbounded growth).
 type ScheduleAction =
   | { kind: 'restart' }
   | { kind: 'command'; command: string }
   | { kind: 'broadcast'; message: string }
-  | { kind: 'backup'; targetId?: string; keepLast?: number; maxAgeDays?: number };
+  | { kind: 'backup'; target_id?: string; keep_last?: number; max_age_days?: number };
 
 /** Minimal projection of OrgBackupTargetView — just what the picker needs. */
 interface BackupTargetOption { id: string; name: string }
@@ -66,8 +71,12 @@ export function SchedulesPanel({ serverId, nodeId }: { serverId: string; nodeId:
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  async function save(s: Schedule) {
-    setBusy(s.id); setErr(null);
+  // `busyKey` lets the create form register as 'new' — the form's saving
+  // prop checks busy === 'new', but save() used to set busy to the fresh
+  // UUID, so the flag never matched and a double-click created duplicate
+  // schedules (audit finding).
+  async function save(s: Schedule, busyKey: string = s.id) {
+    setBusy(busyKey); setErr(null);
     try {
       await invoke('upsert_schedule', { schedule: s, nodeId });
       await refresh();
@@ -114,7 +123,7 @@ export function SchedulesPanel({ serverId, nodeId }: { serverId: string; nodeId:
         <ScheduleForm
           serverId={serverId}
           onCancel={() => setAdding(false)}
-          onSave={save}
+          onSave={(s) => save(s, 'new')}
           saving={busy === 'new'}
         />
       )}
@@ -134,12 +143,24 @@ export function SchedulesPanel({ serverId, nodeId }: { serverId: string; nodeId:
                   <div className="text-xs text-zinc-500 font-mono">{s.cron}{s.lastRun ? ` · last ${new Date(s.lastRun).toLocaleString()}` : ''}</div>
                 </div>
                 <button
-                  className={`icon-btn ${s.enabled ? 'text-emerald-400' : 'text-zinc-600'}`}
+                  className={`inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded-full border text-[11px] font-medium transition-colors ${
+                    s.enabled
+                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                      : 'border-zinc-700 bg-zinc-800/60 text-zinc-400 hover:text-zinc-200'
+                  }`}
                   title={s.enabled ? 'Enabled — click to pause' : 'Paused — click to enable'}
+                  aria-pressed={s.enabled}
                   onClick={() => toggle(s)}
                   disabled={busy === s.id}
                 >
-                  {busy === s.id ? <Loader2 size={14} className="animate-spin" /> : <Power size={15} />}
+                  {busy === s.id ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : s.enabled ? (
+                    <Power size={13} />
+                  ) : (
+                    <PowerOff size={13} />
+                  )}
+                  {s.enabled ? 'On' : 'Paused'}
                 </button>
                 <button className="icon-btn text-zinc-400 hover:text-red-400" title="Delete" onClick={() => remove(s.id)} disabled={busy === s.id}>
                   <Trash2 size={14} />
@@ -196,9 +217,9 @@ function ScheduleForm({
       const ma = parseInt(maxAgeDays, 10);
       action = {
         kind: 'backup',
-        targetId: targetId || undefined,
-        keepLast: Number.isFinite(kl) && kl > 0 ? kl : undefined,
-        maxAgeDays: Number.isFinite(ma) && ma > 0 ? ma : undefined,
+        target_id: targetId || undefined,
+        keep_last: Number.isFinite(kl) && kl > 0 ? kl : undefined,
+        max_age_days: Number.isFinite(ma) && ma > 0 ? ma : undefined,
       };
     } else action = { kind: 'restart' };
     onSave({

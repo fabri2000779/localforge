@@ -4,9 +4,10 @@
  * admin only (the cloud enforces; a 402 here shows the upgrade hint). The feed
  * is metadata only — no server config or secrets — so it's E2E-safe.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Activity, Loader2, RefreshCw, Lock } from 'lucide-react';
+import { useServerStore } from '../stores/serverStore';
 
 interface AuditEntry {
   actorUserId: string | null;
@@ -30,9 +31,13 @@ const ACTION_LABEL: Record<string, string> = {
   'server.update_config': 'edited the config of',
 };
 
-function describe(e: AuditEntry): string {
+function describe(e: AuditEntry, serverName?: string): string {
   const verb = ACTION_LABEL[e.action] ?? e.action;
-  return e.target ? `${verb} ${e.target}` : verb;
+  if (!e.target) return verb;
+  // Resolve the target to a server NAME when we know it — raw UUIDs made the
+  // feed unreadable (audit finding). Unknown ids (deleted servers, other
+  // nodes) fall back to a short id; the full id lives in the hover title.
+  return `${verb} ${serverName ?? `${e.target.slice(0, 8)}…`}`;
 }
 
 function ago(ts: number): string {
@@ -47,6 +52,12 @@ function ago(ts: number): string {
 }
 
 export function ActivityPanel() {
+  // Local server inventory for target-id → name resolution in the feed.
+  const servers = useServerStore((s) => s.servers);
+  const serverNames = useMemo(
+    () => new Map(servers.map((s) => [s.id, s.name] as const)),
+    [servers],
+  );
   const [entries, setEntries] = useState<AuditEntry[] | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -64,7 +75,10 @@ export function ActivityPanel() {
       const s = String(e);
       if (s.includes('plan_required') || s.includes('402')) setNeedsTeam(true);
       else setErr(s);
-      setEntries([]);
+      // Only wipe on a FIRST-page failure — a failed "Load older" keeps the
+      // already-loaded feed + cursor so the user can just retry (audit
+      // finding: pagination errors blanked the whole panel).
+      if (!before) setEntries([]);
     } finally {
       setLoading(false);
     }
@@ -117,7 +131,9 @@ export function ActivityPanel() {
               {entries.map((e, i) => (
                 <div key={`${e.createdAt}-${i}`} className="flex items-baseline gap-2 py-2.5 text-[13px]">
                   <span className="text-zinc-200 font-medium shrink-0">{e.actorName}</span>
-                  <span className="text-zinc-400 min-w-0 flex-1 truncate">{describe(e)}</span>
+                  <span className="text-zinc-400 min-w-0 flex-1 truncate" title={e.target ?? undefined}>
+                    {describe(e, e.target ? serverNames.get(e.target) : undefined)}
+                  </span>
                   <span className="text-xs text-zinc-600 shrink-0" title={new Date(e.createdAt).toLocaleString()}>
                     {ago(e.createdAt)}
                   </span>

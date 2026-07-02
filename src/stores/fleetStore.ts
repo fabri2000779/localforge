@@ -25,8 +25,9 @@ import type { Server } from '../types';
 export type FleetStatus = Server['status'];
 
 /** Coerce whatever string the relay sent into our canonical status enum.
- *  Unknown / agent-specific values ('crashed', 'unknown', …) collapse to a
- *  safe default so the UI never renders a broken badge. */
+ *  Unknown values collapse to a safe default so the UI never renders a
+ *  broken badge. 'crashed' passes through — it's a canonical status the UI
+ *  renders distinctly (flattening it to 'error' hid crashes on remote nodes). */
 export function coerceStatus(raw: unknown): FleetStatus {
   switch (raw) {
     case 'running':
@@ -35,9 +36,8 @@ export function coerceStatus(raw: unknown): FleetStatus {
     case 'stopping':
     case 'installing':
     case 'error':
-      return raw;
     case 'crashed':
-      return 'error';
+      return raw;
     default:
       return 'stopped';
   }

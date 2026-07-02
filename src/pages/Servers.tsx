@@ -12,6 +12,7 @@ import {
 } from '../utils/subUser';
 import { useOwnerFleet, type FleetEntry } from '../hooks/useFleet';
 import { ServerCard } from '../components/ServerCard';
+import { emitAudit } from '../utils/audit';
 import type { Server as ServerType } from '../types';
 
 const ALL = '__all__';
@@ -49,6 +50,7 @@ export function Servers() {
   const canCreate = useCanAct('server.create');
 
   const [filter, setFilter] = useState<string>(ALL);
+  const [actionErr, setActionErr] = useState<string | null>(null);
 
   // Node-targeted action for the owner fleet: act on the server's OWN node
   // (not the globally-active one), then refresh so the badge catches up.
@@ -63,8 +65,15 @@ export function Servers() {
       action === 'delete'
         ? { serverId: e.server.id, nodeId: e.machineId, deleteData: false }
         : { serverId: e.server.id, nodeId: e.machineId };
+    setActionErr(null);
     void invoke(cmd, args)
-      .catch(() => {})
+      .then(() => {
+        // Mirror the store path's side effects — this fleet path used to skip
+        // the audit trail + cloud sync and swallow every error (audit finding).
+        emitAudit(`server.${action}`, e.server.id);
+        if (action === 'delete') void invoke('cloud_sync_now').catch(() => {});
+      })
+      .catch((err) => setActionErr(`${action} failed on ${e.server.name}: ${String(err)}`))
       .finally(() => setTimeout(() => ownerFleet.refresh(), 800));
   }
 
@@ -155,6 +164,12 @@ export function Servers() {
           )}
         </div>
       </header>
+
+      {actionErr && (
+        <div className="text-sm text-red-300 mb-4 break-all" role="alert">
+          {actionErr}
+        </div>
+      )}
 
       {/* Machine filter chips — appear only when servers span 2+ machines.
           Mirrors the mobile app's group-by-machine switcher. */}

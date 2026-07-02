@@ -215,9 +215,8 @@ pub fn spawn_scheduler(
         loop {
             tokio::time::sleep(Duration::from_secs(30)).await;
             let now = Local::now();
-            let mut list = load(&data_root);
-            let mut changed = false;
-            for s in list.iter_mut() {
+            let list = load(&data_root);
+            for s in list.iter() {
                 if !s.enabled {
                     continue;
                 }
@@ -238,13 +237,19 @@ pub fn spawn_scheduler(
                         s.server_id
                     );
                     run_action(&*backend, s, &resolve_target).await;
-                    s.last_run = Some(now.timestamp_millis());
-                    changed = true;
-                }
-            }
-            if changed {
-                if let Err(e) = save(&data_root, &list) {
-                    tracing::warn!("[scheduler] persist failed: {e}");
+                    // Re-load and patch ONLY this schedule's last_run.
+                    // run_action can await for minutes (backups) — saving the
+                    // whole pre-tick snapshot afterwards resurrected schedules
+                    // the user deleted meanwhile and clobbered concurrent
+                    // edits (audit finding). A schedule deleted mid-run simply
+                    // isn't patched.
+                    let mut fresh = load(&data_root);
+                    if let Some(cur) = fresh.iter_mut().find(|x| x.id == s.id) {
+                        cur.last_run = Some(now.timestamp_millis());
+                        if let Err(e) = save(&data_root, &fresh) {
+                            tracing::warn!("[scheduler] persist failed: {e}");
+                        }
+                    }
                 }
             }
         }

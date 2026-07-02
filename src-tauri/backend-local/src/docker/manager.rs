@@ -352,8 +352,14 @@ impl DockerManager {
                 Ok(ServerStatus::Stopped)
             }
             Err(e) => {
+                // Propagate the failure. Mapping it to Ok(Stopped) made a
+                // transient Docker-daemon hiccup look like a mass exit — the
+                // crash watcher's Err-guard never fired and it marked every
+                // running server Crashed (audit finding). Callers that want
+                // to tolerate this (the list_servers reconcile) already keep
+                // the persisted status on Err.
                 tracing::warn!("Failed to inspect container {}: {}", container_id, e);
-                Ok(ServerStatus::Stopped)
+                Err(e.into())
             }
         }
     }

@@ -12,6 +12,7 @@ import { Users, UserPlus, X, MailWarning, Trash2, Shield } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useAuthStore } from '../stores/authStore';
 import { ServerScopeDialog } from './ServerScopeDialog';
+import { useEscapeClose } from '../hooks/useEscapeClose';
 
 interface Member {
   id: string;
@@ -200,6 +201,7 @@ function RotateKeyDialog({ open, orgId, onClose }: { open: boolean; orgId: strin
   const [passphrase, setPassphrase] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  useEscapeClose(onClose, open && !busy);
 
   useEffect(() => {
     if (!open) { setPassphrase(''); setErr(null); setBusy(false); }
@@ -267,6 +269,7 @@ function InviteDialog({ open, orgId, onClose }: { open: boolean; orgId: string; 
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<'admin' | 'operator' | 'viewer'>('operator');
   const [submitting, setSubmitting] = useState(false);
+  useEscapeClose(onClose, open && !submitting);
   const [err, setErr] = useState<string | null>(null);
   // After a successful invite we show the secret-bearing link to SHARE: the
   // emailed link works but carries no key, so only this link grants instant
