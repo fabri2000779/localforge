@@ -20,6 +20,8 @@ interface AuditEntry {
 interface AuditList {
   entries: AuditEntry[];
   nextBefore: number | null;
+  /** Rowid tiebreaker — with `nextBefore` it forms the composite cursor. */
+  nextBeforeId: number | null;
 }
 
 const ACTION_LABEL: Record<string, string> = {
@@ -59,18 +61,26 @@ export function ActivityPanel() {
     [servers],
   );
   const [entries, setEntries] = useState<AuditEntry[] | null>(null);
-  const [cursor, setCursor] = useState<number | null>(null);
+  const [cursor, setCursor] = useState<{ before: number; beforeId: number | null } | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [needsTeam, setNeedsTeam] = useState(false);
 
-  const load = useCallback(async (before?: number) => {
+  const load = useCallback(async (before?: number, beforeId?: number | null) => {
     setLoading(true);
     setErr(null);
     try {
-      const res = await invoke<AuditList>('cloud_audit_list', { before: before ?? null, limit: 50 });
+      const res = await invoke<AuditList>('cloud_audit_list', {
+        before: before ?? null,
+        beforeId: beforeId ?? null,
+        limit: 50,
+      });
       setEntries((cur) => (before && cur ? [...cur, ...res.entries] : res.entries));
-      setCursor(res.nextBefore);
+      setCursor(
+        res.nextBefore != null
+          ? { before: res.nextBefore, beforeId: res.nextBeforeId ?? null }
+          : null,
+      );
     } catch (e) {
       const s = String(e);
       if (s.includes('plan_required') || s.includes('402')) setNeedsTeam(true);
@@ -141,7 +151,11 @@ export function ActivityPanel() {
               ))}
             </div>
             {cursor != null && (
-              <button className="btn btn-secondary btn-sm mt-3" onClick={() => load(cursor)} disabled={loading}>
+              <button
+                className="btn btn-secondary btn-sm mt-3"
+                onClick={() => load(cursor.before, cursor.beforeId)}
+                disabled={loading}
+              >
                 {loading ? <Loader2 size={14} className="animate-spin" /> : null} Load older
               </button>
             )}

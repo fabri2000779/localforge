@@ -32,16 +32,30 @@ pub struct AuditList {
     pub entries: Vec<AuditEntry>,
     #[serde(default)]
     pub next_before: Option<i64>,
+    /// Rowid tiebreaker for the composite cursor — batch-inserted audit rows
+    /// share a created_at ms, and paging on the timestamp alone dropped the
+    /// boundary-ms siblings (audit finding).
+    #[serde(default)]
+    pub next_before_id: Option<i64>,
 }
 
 /// Read the active org's activity feed (Team plan, admin+; cloud enforces).
-/// `before` is a created_at-ms cursor for "load older"; omit for the latest page.
-#[tauri::command]
-pub async fn cloud_audit_list(before: Option<i64>, limit: Option<u32>) -> Result<AuditList, String> {
+/// `(before, before_id)` is the composite cursor for "load older" — pass both
+/// values from the previous page's `nextBefore`/`nextBeforeId`; omit for the
+/// latest page.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn cloud_audit_list(
+    before: Option<i64>,
+    before_id: Option<i64>,
+    limit: Option<u32>,
+) -> Result<AuditList, String> {
     let token = auth::current_token().ok_or("not signed in")?;
     let mut path = format!("/v1/audit?limit={}", limit.unwrap_or(50));
     if let Some(b) = before {
         path.push_str(&format!("&before={b}"));
+        if let Some(bid) = before_id {
+            path.push_str(&format!("&beforeId={bid}"));
+        }
     }
     api::get::<AuditList>(&path, Some(&token))
         .await
