@@ -34,10 +34,22 @@ pub struct ServerState {
     pub streams: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
 }
 
-fn node_is_local(node_id: Option<&str>) -> bool {
-    node_id
-        .map(|s| s == NodeId::LOCAL || s.is_empty())
-        .unwrap_or(true)
+/// Does `node_id` address THIS machine's local backend? Accepts the relative
+/// "local"/empty alias AND this machine's GLOBAL device id — the registry maps
+/// both to the local backend, so a command relayed from a sub-user (or the
+/// owner's other device) targeting the device id must be treated as local.
+/// Without the device-id case, a relayed keep-data delete fell into the
+/// `!is_local` branch and wiped the world, and stop_server skipped persisting
+/// Stopping and reopened the crash-watcher race (audit finding).
+async fn node_is_local(state: &NodeRegistry, node_id: Option<&str>) -> bool {
+    match node_id {
+        None => true,
+        Some(s) if s == NodeId::LOCAL || s.is_empty() => true,
+        Some(s) => state
+            .this_machine()
+            .await
+            .is_some_and(|m| m.id.as_str() == s),
+    }
 }
 
 // ===========================================================================
@@ -146,7 +158,7 @@ pub async fn stop_server(
     // watcher treated as a crash and auto-restarted the server mid-stop
     // (audit finding). Local node only; a remote agent persists Stopping in
     // its own backend.stop_server.
-    if node_is_local(node_id.as_deref()) {
+    if node_is_local(&state, node_id.as_deref()).await {
         let root = paths::home_root();
         if let Ok(mut server) =
             localforge_backend_local::persistence::load_server(&root, &server_id)
@@ -199,7 +211,7 @@ pub async fn delete_server(
 ) -> Result<ServerResponse, String> {
     abort_stream(&server_id, &server_state).await;
 
-    let is_local = node_is_local(node_id.as_deref());
+    let is_local = node_is_local(&state, node_id.as_deref()).await;
     let backend = require_backend(&state, node_id.as_deref()).await?;
 
     if delete_data.unwrap_or(true) || !is_local {
@@ -215,6 +227,14 @@ pub async fn delete_server(
             let _ = docker.remove_container(container_id).await;
         }
         paths::delete_server_record(&server_id).map_err(|e| e.to_string())?;
+        // Also drop the server's schedules + metrics, exactly like
+        // backend.delete_server does. Without this the keep-data path left
+        // schedule entries the scheduler kept firing against a now-missing
+        // server (nightly "backup of X failed" forever) and a dead metrics file
+        // (audit finding).
+        let root = paths::home_root();
+        let _ = localforge_backend_local::schedules::delete_for_server(&root, &server_id);
+        localforge_backend_local::metrics::remove_server(&root, &server_id);
     }
 
     Ok(ServerResponse {
@@ -284,7 +304,7 @@ pub async fn send_command(
     node_id: Option<String>,
     state: State<'_, NodeRegistry>,
 ) -> Result<String, String> {
-    let is_local = node_is_local(node_id.as_deref());
+    let is_local = node_is_local(&state, node_id.as_deref()).await;
     let backend = require_backend(&state, node_id.as_deref()).await?;
 
     if backend.send_command(&server_id, &command).await.is_ok() {

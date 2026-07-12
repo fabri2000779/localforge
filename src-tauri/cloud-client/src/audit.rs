@@ -18,6 +18,11 @@ struct AuditPayload<'a> {
     action: &'a str,
     target: Option<&'a str>,
     metadata: Option<serde_json::Value>,
+    /// The active org the action targeted. The cloud already accepts + verifies
+    /// this; stamping it stops a sub-user's action landing in their OWN primary
+    /// feed instead of the owner's (audit finding).
+    #[serde(rename = "organizationId", skip_serializing_if = "Option::is_none")]
+    organization_id: Option<String>,
 }
 
 /// POST a single audit-log entry. `action` is a stable enum the cloud
@@ -25,9 +30,9 @@ struct AuditPayload<'a> {
 /// dropped server-side rather than rejected, so this call rarely
 /// errors on a well-formed token.
 ///
-/// The cloud picks the org from the caller's primary membership for
-/// now; a future API revision will accept an explicit `organization_id`
-/// in the body when we surface the org switcher in the mobile UI.
+/// The org is taken from the client's active-org pin (the same value sent as
+/// the `X-LocalForge-Org` header); when unset the cloud falls back to the
+/// caller's primary membership.
 pub async fn emit(
     action: &str,
     target: Option<&str>,
@@ -40,6 +45,7 @@ pub async fn emit(
             action,
             target,
             metadata,
+            organization_id: api::active_org(),
         },
         Some(token),
     )

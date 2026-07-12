@@ -86,6 +86,11 @@ pub async fn cloud_logout() -> Result<(), api::ApiError> {
         let _ = localforge_cloud_client::auth::logout(&t).await;
     }
     keychain::clear_token().map_err(|e| api::ApiError::Decode(format!("keychain: {e}")))?;
+    // Wipe cached key material so the next account on this machine can't inherit
+    // the previous user's DEK (cloud_sync_key_setup reuses any local DEK, which
+    // would cross-link the two accounts' E2E data — audit finding). Mirrors the
+    // mobile client.
+    super::vault::clear_local_keys(&[]);
     // Allow the next sign-in to re-claim this machine (the target org may
     // differ if a different account logs in).
     super::nodes::reset_desktop_claim();
@@ -98,9 +103,13 @@ pub async fn cloud_me() -> Result<Option<Me>, api::ApiError> {
     match fetch_me(&t).await {
         Ok(me) => Ok(Some(me)),
         // Token was revoked / expired remotely — clear locally + report
-        // unauthenticated so the UI shows the login affordance again.
+        // unauthenticated so the UI shows the login affordance again. Wipe key
+        // material too, same as logout: otherwise a remotely-revoked session
+        // (password change on another device) left the DEK behind for the next
+        // account to inherit (audit finding).
         Err(api::ApiError::Server { status, .. }) if status == 401 || status == 403 => {
             let _ = keychain::clear_token();
+            super::vault::clear_local_keys(&[]);
             Ok(None)
         }
         Err(e) => Err(e),

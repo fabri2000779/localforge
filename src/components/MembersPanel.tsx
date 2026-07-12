@@ -293,7 +293,9 @@ function InviteDialog({ open, orgId, onClose }: { open: boolean; orgId: string; 
       const res = await invoke<{ id: string; secret: string }>('cloud_orgs_invite', {
         orgId, email: email.trim(), role,
       });
-      setLink(`https://localforge.gg/auth/invite?token=${res.id}#k=${res.secret}`);
+      // /invite (NOT /auth/invite): that path had no page + wasn't in the AASA,
+      // so the shared link opened neither the site nor the app (audit finding).
+      setLink(`https://localforge.gg/invite?token=${res.id}#k=${res.secret}`);
     } catch (e) {
       const msg = (e as { code?: string; message?: string });
       setErr(

@@ -23,6 +23,11 @@ interface LogEvent {
   line: string;
 }
 
+/// Cap for in-memory console buffers. Beyond this the oldest lines are dropped
+/// — a running server streams indefinitely and an unbounded array both leaks
+/// memory and makes every append O(n) (audit finding).
+const MAX_CONSOLE_LINES = 2000;
+
 interface ContainerStats {
   cpu_percent: number;
   memory_usage_mb: number;
@@ -44,7 +49,7 @@ interface ServerState {
   fetchServers: () => Promise<void>;
   createServer: (request: CreateServerRequest) => Promise<Server | null>;
   startServer: (serverId: string) => Promise<void>;
-  stopServer: (serverId: string) => Promise<void>;
+  stopServer: (serverId: string) => Promise<boolean>;
   deleteServer: (serverId: string, deleteData?: boolean) => Promise<void>;
   updateServerConfig: (
     serverId: string,
@@ -72,6 +77,13 @@ const currentNodeId = () => useNodesStore.getState().activeNodeId;
 
 /// Monotonic token for attach/detach ordering — see attachToServer.
 let attachGeneration = 0;
+
+/// Monotonic token for list fetches. `fetchServers` reads the active node at
+/// invoke time, but a slow response from a previous node used to land after a
+/// node switch and overwrite the new node's list with stale rows (audit
+/// finding). Any node switch / newer fetch bumps this; a stale resolution
+/// whose captured token no longer matches self-drops.
+let fetchGeneration = 0;
 
 /// Fire-and-forget push of the local servers to the cloud after a
 /// config-changing mutation (create / config edit / delete), so the new
@@ -151,10 +163,16 @@ export const useServerStore = create<ServerState>((set, get) => ({
 
   fetchServers: async () => {
     set({ isLoading: true, error: null });
+    const gen = ++fetchGeneration;
+    const nodeAtStart = currentNodeId();
     try {
       const servers = await invoke<Server[]>('list_servers', {
-        nodeId: currentNodeId(),
+        nodeId: nodeAtStart,
       });
+      // Drop a response that resolved after the user switched nodes (or a
+      // newer fetch started) — otherwise the previous node's list clobbers the
+      // current one for up to a full poll interval (audit finding).
+      if (gen !== fetchGeneration || nodeAtStart !== currentNodeId()) return;
       set({ servers, isLoading: false });
       void checkCrashJournal();
       const selected = get().selectedServer;
@@ -163,6 +181,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
         if (updated) set({ selectedServer: updated });
       }
     } catch (error) {
+      if (gen !== fetchGeneration) return;
       console.error('[Store] fetchServers error:', error);
       set({ error: String(error), isLoading: false });
     }
@@ -233,8 +252,13 @@ export const useServerStore = create<ServerState>((set, get) => ({
       }
       emitAudit('server.stop', serverId);
       set({ isLoading: false });
+      return true;
     } catch (error) {
+      // Return the outcome so callers like handleRestart can abort the start
+      // when the stop failed, instead of racing a start onto a still-running
+      // container and clobbering this error (audit finding).
       set({ error: String(error), isLoading: false });
+      return false;
     }
   },
 
@@ -274,6 +298,16 @@ export const useServerStore = create<ServerState>((set, get) => ({
 
   updateServerConfig: async (serverId, config) => {
     try {
+      if (isRelayRouted()) {
+        // Sub-user (admin) editing an owner's server: the server lives on the
+        // owner's Docker, not ours. Ship the config change over the relay
+        // instead of invoking the local command, which would fail with a
+        // "server not found" (audit finding). server.update_config is
+        // admin-gated cloud-side.
+        await routeServerAction('server.update_config', { serverId, config });
+        emitAudit('server.update_config', serverId);
+        return true;
+      }
       const response = await invoke<ServerResponse>('update_server_config', {
         serverId,
         config,
@@ -425,7 +459,12 @@ export const useServerStore = create<ServerState>((set, get) => ({
       // `server-log` events, so this single listener feeds both modes.
       const unlisten = await listen<LogEvent>('server-log', (event) => {
         if (event.payload.server_id === serverId) {
-          set((state) => ({ logs: [...state.logs, event.payload.line] }));
+          // Cap the buffer — an unbounded array grew without limit on a chatty
+          // server and every append copied the whole thing (audit finding).
+          set((state) => {
+            const next = [...state.logs, event.payload.line];
+            return { logs: next.length > MAX_CONSOLE_LINES ? next.slice(-MAX_CONSOLE_LINES) : next };
+          });
         }
       });
       if (gen !== attachGeneration) {

@@ -100,13 +100,20 @@ pub fn spawn_crash_watcher(backend: Arc<dyn NodeBackend>, data_root: PathBuf) {
         tokio::time::sleep(Duration::from_secs(STARTUP_DELAY_SECS)).await;
         // server_id -> recent crash timestamps (for crash-loop backoff).
         let mut recent: HashMap<String, Vec<i64>> = HashMap::new();
+        // The first tick recovers servers that went down while this process
+        // wasn't watching (host reboot, app restart) WITHOUT logging them as
+        // crashes — otherwise, now that Docker no longer auto-restarts (see
+        // manager.rs), every persisted-Running server would fire a false crash
+        // alert on every reboot (audit finding follow-up).
+        let mut first_tick = true;
         // 0 ⇒ the first tick prunes immediately. Seeding "now" meant a prune
         // only ever ran after 24h of CONTINUOUS process uptime — which a
         // desktop app never reaches, so the journal grew forever (audit
         // finding). Long-lived agents keep the 24h cadence after the first.
         let mut last_prune = 0i64;
         loop {
-            watch_once(&*backend, &data_root, &mut recent).await;
+            watch_once(&*backend, &data_root, &mut recent, first_tick).await;
+            first_tick = false;
             let now = Utc::now().timestamp_millis();
             if now - last_prune > 24 * 60 * 60 * 1000 {
                 prune_journal(&data_root, now - EVENT_RETENTION_MS);
@@ -121,6 +128,7 @@ async fn watch_once(
     backend: &dyn NodeBackend,
     data_root: &Path,
     recent: &mut HashMap<String, Vec<i64>>,
+    first_tick: bool,
 ) {
     let servers = match backend.list_servers().await {
         Ok(s) => s,
@@ -152,6 +160,24 @@ async fn watch_once(
         match crate::persistence::load_server(data_root, &s.id) {
             Ok(cur) if cur.status == ServerStatus::Running => {}
             _ => continue,
+        }
+
+        // First tick after (re)start: the exit happened while we weren't
+        // watching (reboot / app restart), not an observed crash. Recover
+        // quietly per policy — no journal entry, webhook, push, or backoff.
+        if first_tick {
+            if s.restart_policy == RestartPolicy::Off {
+                mark_status(data_root, &s.id, ServerStatus::Stopped);
+            } else {
+                match backend.start_server(&s.id).await {
+                    Ok(_) => tracing::info!("[crash-watcher] recovered {} after downtime", s.name),
+                    Err(e) => {
+                        tracing::warn!("[crash-watcher] failed to recover {}: {e}", s.name);
+                        mark_status(data_root, &s.id, ServerStatus::Stopped);
+                    }
+                }
+            }
+            continue;
         }
 
         // Unexpected exit: the container is gone but we thought it was running.

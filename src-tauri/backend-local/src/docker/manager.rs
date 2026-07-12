@@ -237,15 +237,21 @@ impl DockerManager {
             binds: Some(vec![data_mount, machine_id_mount]),
             memory: memory_limit,
             memory_swap: memory_limit, // Same as memory to disable swap
-            // Auto-restart on crash AND survive a host reboot — "set & forget"
-            // hosting. `unless-stopped` means Docker brings the container back
-            // if it exits unexpectedly or the machine restarts, but respects an
-            // explicit Stop from the panel (a manual `docker stop` is NOT
-            // auto-restarted). Docker's own exponential backoff guards against a
-            // crash-loop hammering the host. (Existing containers keep their old
-            // policy until recreated via reinstall/update.)
+            // NO Docker restart policy — the crash-watcher owns restarts.
+            // `unless-stopped` used to auto-restart a crashed container in
+            // ~100ms, so the 20s watcher only ever saw it Running/RESTARTING and
+            // `continue`d: no CrashEvent journaled, no webhook/push fired, and
+            // the crash-loop backoff never engaged — a mod-broken server flapped
+            // forever in silence, and a per-server RestartPolicy::Off was
+            // ignored (audit finding). Letting the container stay exited makes
+            // every crash visible to the watcher, which restarts it per the
+            // user's policy WITH backoff + alerts. Trade-off: a crash while the
+            // host process is down no longer auto-recovers via Docker; the
+            // watcher recovers persisted-Running servers on its first tick after
+            // (re)start instead. (Existing containers keep their old policy
+            // until recreated via reinstall/update.)
             restart_policy: Some(bollard::models::RestartPolicy {
-                name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
+                name: Some(bollard::models::RestartPolicyNameEnum::NO),
                 ..Default::default()
             }),
             ..Default::default()
@@ -491,9 +497,11 @@ impl DockerManager {
 
         match self.docker.attach_container(container_id, Some(options)).await {
             Ok(AttachContainerResults { input: mut stdin_writer, .. }) => {
-                // Write the command followed by newline
-                let data = format!("{}\n", input);
-                stdin_writer.write_all(data.as_bytes()).await
+                // Write the input verbatim. Every caller already newline-
+                // terminates (send_command, the backup save fence, players.rs);
+                // adding another `\n` here sent "cmd\n\n" to the container's TTY,
+                // an extra blank line per command (audit finding).
+                stdin_writer.write_all(input.as_bytes()).await
                     .map_err(|e| DockerError::AttachFailed(format!("Failed to write to stdin: {}", e)))?;
                 stdin_writer.flush().await
                     .map_err(|e| DockerError::AttachFailed(format!("Failed to flush stdin: {}", e)))?;

@@ -21,6 +21,7 @@ interface TemplateSummary {
 interface TemplateList {
   templates: TemplateSummary[];
   nextBefore: number | null;
+  nextBeforeId?: number | null;
 }
 
 export function TemplateGallery({
@@ -35,6 +36,9 @@ export function TemplateGallery({
   useEscapeClose(onClose);
   const [list, setList] = useState<TemplateSummary[] | null>(null);
   const [cursor, setCursor] = useState<number | null>(null);
+  // Rowid tiebreaker for the composite cursor — pass back with `before` so a
+  // template sharing the boundary ms isn't skipped (audit finding).
+  const [cursorId, setCursorId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -45,13 +49,18 @@ export function TemplateGallery({
   const [pubDesc, setPubDesc] = useState('');
   const [publishing, setPublishing] = useState(false);
 
-  const load = useCallback(async (before?: number) => {
+  const load = useCallback(async (before?: number, beforeId?: number) => {
     setLoading(true);
     setErr(null);
     try {
-      const r = await invoke<TemplateList>('cloud_templates_list', { before: before ?? null, limit: 40 });
+      const r = await invoke<TemplateList>('cloud_templates_list', {
+        before: before ?? null,
+        beforeId: beforeId ?? null,
+        limit: 40,
+      });
       setList((cur) => (before && cur ? [...cur, ...r.templates] : r.templates));
       setCursor(r.nextBefore);
+      setCursorId(r.nextBeforeId ?? null);
     } catch (e) {
       setErr(String(e));
       setList([]);
@@ -178,7 +187,7 @@ export function TemplateGallery({
           </div>
         )}
         {cursor != null && (
-          <button className="btn btn-secondary btn-sm mt-3" onClick={() => load(cursor)} disabled={loading}>
+          <button className="btn btn-secondary btn-sm mt-3" onClick={() => load(cursor, cursorId ?? undefined)} disabled={loading}>
             {loading ? <Loader2 size={14} className="animate-spin" /> : null} Load more
           </button>
         )}

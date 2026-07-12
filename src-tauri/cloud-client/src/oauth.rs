@@ -54,8 +54,16 @@ pub fn parse_callback_token(url: &str) -> Option<String> {
 
 /// Extract any single query parameter from a URL. Useful for the
 /// invite-acceptance flow too (`localforge://invite?token=…`).
+///
+/// The query is truncated at `#` first: an invite deep link carries the handoff
+/// secret in its fragment (`…?token=INV#k=SECRET`), and without the cut the
+/// `token` value came back as `INV#k=SECRET` — a contaminated token the cloud
+/// 404s, plus the secret leaking into the token field (audit finding). The
+/// fragment is parsed separately by the caller's `parse_fragment_param`.
 pub fn parse_query_param(url: &str, name: &str) -> Option<String> {
-    let (_, q) = url.split_once('?')?;
+    let (_, after_q) = url.split_once('?')?;
+    // Drop the fragment before splitting params.
+    let q = after_q.split_once('#').map_or(after_q, |(before, _)| before);
     q.split('&').find_map(|pair| {
         let (k, v) = pair.split_once('=')?;
         (k == name).then(|| urldecode(v))
@@ -146,6 +154,21 @@ mod tests {
     fn missing_token_returns_none() {
         let url = "localforge://auth/callback";
         assert_eq!(parse_callback_token(url), None);
+    }
+
+    #[test]
+    fn token_not_contaminated_by_fragment() {
+        // An invite deep link carries the handoff secret in the #fragment; the
+        // token must come back clean, not `INV123#k=SECRET` (audit finding).
+        let url = "localforge://invite?token=INV123#k=c2VjcmV0";
+        assert_eq!(parse_query_param(url, "token"), Some("INV123".to_string()));
+        // A `k` in the QUERY (web-bridge form) is still readable; a `k` that
+        // lives only in the fragment is not this function's job.
+        assert_eq!(parse_query_param(url, "k"), None);
+        assert_eq!(
+            parse_query_param("localforge://invite?token=A&k=B#frag", "k"),
+            Some("B".to_string()),
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@
  *
  * If no storage is configured at all, an inline CTA links to Settings.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -49,6 +49,9 @@ export function BackupsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
 
   const [targets, setTargets] = useState<OrgBackupTargetView[] | null>(null); // null = loading
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Mirror of selectedId readable synchronously inside async list responses, so
+  // a stale list can tell it's for a target the user already switched away from.
+  const selectedIdRef = useRef<string | null>(null);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [listing, setListing] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -82,20 +85,32 @@ export function BackupsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
 
   const refreshList = useCallback(async () => {
     if (!selectedId) return;
+    const targetAtStart = selectedId;
     setListing(true); setErr(null);
     try {
       const list = await invoke<BackupEntry[]>('cloud_list_backups', {
         serverId, nodeId, targetId: selectedId,
       });
+      // Drop a list that resolved after the target changed — otherwise it
+      // populates rows whose keys belong to a DIFFERENT bucket (audit finding).
+      if (targetAtStart !== selectedIdRef.current) return;
       setBackups(list);
     } catch (e) {
+      if (targetAtStart !== selectedIdRef.current) return;
       setErr(String(e));
     } finally {
       setListing(false);
     }
   }, [serverId, nodeId, selectedId]);
 
-  useEffect(() => { if (selectedId) void refreshList(); }, [refreshList, selectedId]);
+  // Clear the previous bucket's rows the instant the target changes, so a
+  // Restore/Delete can't fire with a stale key against the new target while
+  // the new list loads (audit finding).
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+    setBackups([]);
+    if (selectedId) void refreshList();
+  }, [refreshList, selectedId]);
 
   // ── actions ───────────────────────────────────────────────────────────────
 
@@ -254,7 +269,7 @@ export function BackupsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
                 <button
                   className="btn btn-secondary btn-sm"
                   onClick={() => restore(b.key)}
-                  disabled={!!busy}
+                  disabled={!!busy || listing}
                 >
                   {busy === `restore:${b.key}` ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
                   Restore
@@ -263,7 +278,7 @@ export function BackupsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
                   className="icon-btn text-zinc-400 hover:text-red-400"
                   title="Delete backup"
                   onClick={() => del(b.key)}
-                  disabled={!!busy}
+                  disabled={!!busy || listing}
                 >
                   {busy === `del:${b.key}` ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={14} />}
                 </button>

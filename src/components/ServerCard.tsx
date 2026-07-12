@@ -75,7 +75,9 @@ export function ServerCard({ server, machineLabel, machineKind, onOpen, onAction
       )
     ) {
       if (onAction) onAction('delete');
-      else await deleteServer(server.id);
+      // Pass deleteData:false so the delete honours the dialog's promise to
+      // preserve the world data — the store default is true (audit finding).
+      else await deleteServer(server.id, false);
     }
   };
 

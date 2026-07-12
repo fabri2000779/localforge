@@ -50,6 +50,11 @@ export function RelayLogBridge() {
 
     let unlistenLocal: (() => void) | null = null;
     let unlistenRelay: (() => void) | null = null;
+    // Guard the async listen() resolutions: if `me` changes (a /me refresh on
+    // every Settings open) before either promise lands, the cleanup runs with
+    // both handles null and the late listeners leak, duplicating every relay
+    // console line (audit finding).
+    let cancelled = false;
 
     // Owner-side forward. Two conditions must be true to forward:
     //   1. The active relay is for an org WE OWN (so the receiving
@@ -80,7 +85,7 @@ export function RelayLogBridge() {
       } catch {
         // relay not connected → swallow; nothing to forward to.
       }
-    }).then((fn) => { unlistenLocal = fn; });
+    }).then((fn) => { if (cancelled) fn(); else unlistenLocal = fn; });
 
     // Sub-user-side receive. Filter relay events for console_line and
     // re-emit them as local server-log events. The existing xterm
@@ -98,9 +103,10 @@ export function RelayLogBridge() {
         // (prevents the multi-owner-device echo loop).
         relayed: true,
       });
-    }).then((fn) => { unlistenRelay = fn; });
+    }).then((fn) => { if (cancelled) fn(); else unlistenRelay = fn; });
 
     return () => {
+      cancelled = true;
       if (unlistenLocal) unlistenLocal();
       if (unlistenRelay) unlistenRelay();
     };

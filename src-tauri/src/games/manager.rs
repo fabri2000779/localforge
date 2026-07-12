@@ -4,6 +4,19 @@ use localforge_core::{get_builtin_games, GameConfig, GameType};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// A game id is used verbatim as a directory name under the server data root.
+/// Only allow a single, separator-free, non-traversal component so an imported
+/// game definition can't write outside the root (audit finding).
+fn is_safe_game_id(id: &str) -> bool {
+    !id.is_empty()
+        && id != "."
+        && id != ".."
+        && !id.contains('/')
+        && !id.contains('\\')
+        && !id.contains(':')
+        && !id.contains('\0')
+}
+
 pub struct GamesManager {
     builtin_games: HashMap<String, GameConfig>,
     custom_games: HashMap<String, GameConfig>,
@@ -146,6 +159,14 @@ impl GamesManager {
         if game.game_type.0.is_empty() {
             return Err("Game ID cannot be empty".to_string());
         }
+        // game_type becomes a directory name under the data root; reject
+        // separators / traversal so an imported definition can't escape it
+        // (audit finding — matches backend-local's validate_path_component).
+        if !is_safe_game_id(&game.game_type.0) {
+            return Err(
+                "Game ID must be a single path component (no '/', '\\', '..', or ':')".to_string(),
+            );
+        }
         if game.docker_image.is_empty() {
             return Err("Docker image cannot be empty".to_string());
         }
@@ -162,7 +183,10 @@ impl GamesManager {
         let mut imported = Vec::new();
         for mut game in games {
             game.is_custom = true;
-            if !game.game_type.0.is_empty() && !game.docker_image.is_empty() {
+            if !game.game_type.0.is_empty()
+                && is_safe_game_id(&game.game_type.0)
+                && !game.docker_image.is_empty()
+            {
                 self.custom_games.insert(game.game_type.0.clone(), game.clone());
                 imported.push(game);
             }

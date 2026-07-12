@@ -75,18 +75,28 @@ pub struct TemplateList {
     pub templates: Vec<TemplateSummary>,
     #[serde(default)]
     pub next_before: Option<i64>,
+    /// Rowid tiebreaker for the composite cursor — pass back alongside
+    /// `next_before` so a template sharing the boundary millisecond isn't
+    /// skipped (audit finding; mirrors the audit feed's cursor).
+    #[serde(default)]
+    pub next_before_id: Option<i64>,
 }
 
-/// Browse the gallery (newest first, cursor-paged by `before`).
+/// Browse the gallery (newest first, cursor-paged by the composite
+/// `(before, beforeId)` cursor).
 #[tauri::command(rename_all = "camelCase")]
 pub async fn cloud_templates_list(
     before: Option<i64>,
+    before_id: Option<i64>,
     limit: Option<u32>,
 ) -> Result<TemplateList, api::ApiError> {
     let token = auth::current_token().ok_or_else(unauth)?;
     let mut path = format!("/v1/templates?limit={}", limit.unwrap_or(40));
     if let Some(b) = before {
         path.push_str(&format!("&before={b}"));
+    }
+    if let Some(bid) = before_id {
+        path.push_str(&format!("&beforeId={bid}"));
     }
     api::get(&path, Some(&token)).await
 }

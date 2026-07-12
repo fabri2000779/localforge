@@ -116,6 +116,28 @@ pub fn save_key(key: &[u8; KEY_LEN]) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Wipe this device's cached key material (the DEK + X25519 secret) and the
+/// active-org override. Called on sign-out / account deletion so the NEXT
+/// account on a shared machine can't inherit the previous user's DEK — logout
+/// used to leave `vault-key` intact, and `cloud_sync_key_setup` then republished
+/// it as the new account's sync key, cross-linking their E2E data (audit
+/// finding). Mirrors the mobile client's `clear_local_keys`. Optionally clears
+/// borrowed org DEKs for the given org ids (the keychain can't enumerate).
+pub fn clear_local_keys(borrowed_org_ids: &[String]) {
+    set_active_dek_override(None);
+    if let Ok(e) = entry() {
+        let _ = e.delete_credential();
+    }
+    if let Ok(e) = x25519_entry() {
+        let _ = e.delete_credential();
+    }
+    for org_id in borrowed_org_ids {
+        if let Ok(e) = org_dek_entry(org_id) {
+            let _ = e.delete_credential();
+        }
+    }
+}
+
 // --- X25519 secret (Team key sharing) -------------------------------------
 
 fn x25519_entry() -> Result<keyring_core::Entry, keyring_core::Error> {
@@ -159,22 +181,42 @@ fn save_x25519_sk(sk: &[u8; KEY_LEN]) -> Result<(), String> {
 /// The public key is stable per user; owners seal the org DEK to it.
 async fn ensure_keypair(kek: &[u8; KEY_LEN], token: &str) -> Result<(), super::api::ApiError> {
     use super::api;
-    if load_x25519_sk()
-        .map_err(|e| api::ApiError::Decode(format!("x25519: {e}")))?
-        .is_some()
-    {
+    let local_sk =
+        load_x25519_sk().map_err(|e| api::ApiError::Decode(format!("x25519: {e}")))?;
+    let me = localforge_cloud_client::auth::fetch_me(token).await?;
+
+    if let Some(sk) = local_sk {
+        // We already hold the secret. Ensure the cloud's KEK-wrapped copy is
+        // wrapped with the CURRENT KEK: a passphrase rotation changes the KEK,
+        // and a stale wrapped_x25519_sk made every OTHER device fail to unwrap
+        // it and mint a FRESH keypair — overwriting the published pubkey and
+        // orphaning every existing grant, locking the member out for good
+        // (audit finding). Re-publishing the SAME pubkey with a freshly-wrapped
+        // secret keeps grants valid and only refreshes the wrap.
+        let needs_rewrap = match &me.wrapped_x25519_sk {
+            Some(w) => crypto::unwrap_dek(kek, w).is_err(),
+            None => true,
+        };
+        if needs_rewrap {
+            let pk = crypto::public_from_secret(&sk);
+            let wrapped_sk = crypto::wrap_dek(kek, &sk).map_err(api::ApiError::Decode)?;
+            let pk_b64 = base64::engine::general_purpose::STANDARD.encode(pk);
+            localforge_cloud_client::keys::publish_pubkey(&pk_b64, &wrapped_sk, token).await?;
+        }
         return Ok(());
     }
-    // Try to recover a secret another device already published.
-    let me = localforge_cloud_client::auth::fetch_me(token).await?;
+
+    // No local secret. Recover the one another device published, if it unwraps.
     if let Some(wrapped) = me.wrapped_x25519_sk {
         if let Ok(sk) = crypto::unwrap_dek(kek, &wrapped) {
             save_x25519_sk(&sk).map_err(|e| api::ApiError::Decode(format!("x25519: {e}")))?;
             return Ok(());
         }
-        // Wrapped present but unwrap failed — fall through to mint a fresh
-        // one (the KEK is correct here since the DEK unwrap succeeded; a
-        // mismatch means a legacy/corrupt blob, so replace it).
+        // Wrapped present but unwrap failed. With the re-wrap-on-rotation fix
+        // above this is now rare (a legacy/corrupt blob). Minting a fresh
+        // keypair overwrites the pubkey and orphans grants — the owner's
+        // process_grants re-seals us because cloud_unlock_org_dek DELETEs the
+        // now-unopenable grant, so pending_grants lists us again.
     }
     let (sk, pk) = crypto::generate_keypair();
     let wrapped_sk = crypto::wrap_dek(kek, &sk).map_err(api::ApiError::Decode)?;

@@ -337,6 +337,7 @@ pub async fn cloud_sync_pull(
 pub async fn cloud_rotate_org_dek(
     org_id: String,
     passphrase: String,
+    state: tauri::State<'_, NodeRegistry>,
 ) -> Result<usize, api::ApiError> {
     let token = auth::current_token().ok_or_else(|| api::ApiError::Server {
         status: 401,
@@ -345,6 +346,16 @@ pub async fn cloud_rotate_org_dek(
     })?;
     let current_dek =
         vault::ensure_key().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
+
+    // Everything the org DEK encrypts must move to the new key, not just server
+    // blobs: the backup targets and node configs are encrypted with the SAME
+    // DEK, and leaving them behind made pull_backup_targets/pull_nodes fail to
+    // decrypt after rotation — silently breaking every scheduled backup in the
+    // org until the credentials were re-entered by hand (audit finding). Read
+    // them now, while current_dek is still active, so we can re-push them under
+    // the new key once it's adopted below.
+    let backup_targets_plain = pull_backup_targets().await.unwrap_or_default();
+    let local_nodes: Vec<RemoteNodeForSync> = state.list_remote_for_sync().unwrap_or_default();
 
     // Re-derive the KEK from the passphrase + verify it really unwraps our
     // current DEK (guards a typo from minting a wrap nobody can open).
@@ -440,6 +451,23 @@ pub async fn cloud_rotate_org_dek(
 
     // Adopt the new DEK locally, then re-seal it to the remaining members.
     vault::save_key(&new_dek).map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
+
+    // Re-encrypt the backup targets + node configs under the new DEK, now that
+    // it's active. push_backup_target reads active_dek() (= new_dek); push_nodes
+    // takes the key explicitly. Best-effort: a failure here leaves those blobs
+    // on the old key (recoverable by a manual re-push), but the common case is
+    // handled so scheduled backups keep working across a rotation.
+    for t in &backup_targets_plain {
+        if let Err(e) = push_backup_target(t).await {
+            tracing::warn!("[rotate] re-push backup target {} failed: {:?}", t.id, e);
+        }
+    }
+    if !local_nodes.is_empty() {
+        if let Err(e) = push_nodes(&token, &new_dek, &local_nodes).await {
+            tracing::warn!("[rotate] re-push nodes failed: {:?}", e);
+        }
+    }
+
     let granted = vault::process_grants(&org_id, &token).await?;
     Ok(granted)
 }

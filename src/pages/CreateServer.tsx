@@ -44,7 +44,11 @@ export function CreateServer() {
     if (gameConfig) {
       const defaults: Record<string, string> = {};
       gameConfig.variables
-        .filter((v) => v.user_editable && !v.system_mapping || v.system_mapping === 'none')
+        // Parenthesise like editableVariables below: without it, && binds
+        // tighter than ||, so `system_mapping === 'none'` alone let internal
+        // (user_editable:false) variables leak their default into config
+        // (audit finding).
+        .filter((v) => v.user_editable && (!v.system_mapping || v.system_mapping === 'none'))
         .forEach((v) => {
           defaults[v.env] = v.default;
         });

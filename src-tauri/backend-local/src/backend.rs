@@ -37,6 +37,11 @@ pub struct LocalDockerBackend {
     /// CPU readings are accurate (sysinfo needs two refreshes ~200ms
     /// apart to compute per-CPU deltas).
     system: Arc<RwLock<System>>,
+    /// Server ids with an install currently in flight. Guards against two
+    /// concurrent installs (a double Start, or a relayed cmd racing a local
+    /// one) writing two install containers over the same bind-mount and
+    /// corrupting the server (audit finding).
+    installing: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 impl LocalDockerBackend {
@@ -78,6 +83,7 @@ impl LocalDockerBackend {
             docker,
             data_root,
             system,
+            installing: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         })
     }
 
@@ -373,6 +379,14 @@ impl NodeBackend for LocalDockerBackend {
 
         let memory_mb = request.memory_mb.unwrap_or(game.recommended_ram_mb);
 
+        // game_type is used as a path component under the data root. An imported
+        // / shared game definition could set it to "../../.." or an absolute
+        // path and escape the root — PathBuf::join with ".." or an absolute path
+        // silently walks out (audit finding). Reject anything that isn't a
+        // single, relative, separator-free component before it touches the FS.
+        validate_path_component(&game.game_type.to_string())
+            .map_err(|e| BackendError::invalid(format!("invalid game_type: {e}")))?;
+
         let data_path = persistence::servers_data_root(&self.data_root)
             .join(game.game_type.to_string())
             .join(&server_id);
@@ -636,6 +650,15 @@ impl NodeBackend for LocalDockerBackend {
 
     async fn reset_server_data(&self, id: &str) -> Result<()> {
         let mut server = self.require_server(id)?;
+        // Persist Stopping BEFORE docker stop, exactly like stop_server: the
+        // remove_dir_all below can take longer than a crash-watcher tick, and
+        // without this the watcher saw persisted Running + an exited container,
+        // logged a false crash and could auto-restart the server on top of the
+        // directory being wiped (audit finding).
+        if server.status != ServerStatus::Stopping && server.status != ServerStatus::Stopped {
+            server.status = ServerStatus::Stopping;
+            persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
+        }
         if let Some(container_id) = &server.container_id {
             let _ = self.docker.stop_container(container_id).await;
         }
@@ -652,6 +675,14 @@ impl NodeBackend for LocalDockerBackend {
 
     async fn run_install(&self, id: &str, game: GameConfig) -> Result<InstallStream> {
         let server = self.require_server(id)?;
+
+        // Reject a second install of the same server while one is already in
+        // flight — otherwise two install containers run the script over the same
+        // bind-mount and corrupt it (audit finding). The guard's Drop frees the
+        // slot when the spawned task finishes (or on any early return below).
+        let install_guard = InstallGuard::acquire(&self.installing, id).ok_or_else(|| {
+            BackendError::invalid("an install is already in progress for this server")
+        })?;
 
         // No install script => mark installed and emit a one-shot Done.
         let install_script = match game.install_script.clone() {
@@ -686,6 +717,9 @@ impl NodeBackend for LocalDockerBackend {
         let server_data_path = server.data_path.clone();
 
         tokio::spawn(async move {
+            // Hold the guard for the lifetime of the install; dropped here (on
+            // completion or error) so the server can be installed again.
+            let _guard = install_guard;
             let install_result = run_install_inner(
                 docker,
                 data_root,
@@ -721,15 +755,45 @@ impl NodeBackend for LocalDockerBackend {
                 .await
                 .map_err(BackendError::io)?;
         }
-        let mut file = tokio::fs::File::create(&path)
-            .await
-            .map_err(BackendError::io)?;
-        while let Some(chunk) = body.next().await {
-            let bytes = chunk?;
-            file.write_all(&bytes).await.map_err(BackendError::io)?;
+        // Write to a sibling temp file and rename on success, so a stream that
+        // fails mid-transfer (network drop, read error) can't truncate/destroy
+        // the file the user was overwriting (audit finding). Mirrors the
+        // temp+rename pattern persistence::save_server already uses.
+        let tmp_path = {
+            let mut name = path
+                .file_name()
+                .map(|n| n.to_os_string())
+                .unwrap_or_else(|| std::ffi::OsString::from("upload"));
+            name.push(format!(".tmp-{}", Uuid::new_v4()));
+            path.with_file_name(name)
+        };
+
+        let write_result = async {
+            let mut file = tokio::fs::File::create(&tmp_path)
+                .await
+                .map_err(BackendError::io)?;
+            while let Some(chunk) = body.next().await {
+                let bytes = chunk?;
+                file.write_all(&bytes).await.map_err(BackendError::io)?;
+            }
+            file.flush().await.map_err(BackendError::io)?;
+            Ok::<(), BackendError>(())
         }
-        file.flush().await.map_err(BackendError::io)?;
-        Ok(())
+        .await;
+
+        match write_result {
+            Ok(()) => {
+                tokio::fs::rename(&tmp_path, &path)
+                    .await
+                    .map_err(BackendError::io)?;
+                Ok(())
+            }
+            Err(e) => {
+                // Leave the existing destination untouched; drop the partial temp.
+                let _ = tokio::fs::remove_file(&tmp_path).await;
+                Err(e)
+            }
+        }
     }
 
     async fn file_info(&self, path: &str) -> Result<FileEntry> {
@@ -924,6 +988,67 @@ fn confine_path(data_root: &Path, path: &str) -> Result<PathBuf> {
     Ok(canon)
 }
 
+/// RAII guard for the per-server install in-flight set. `acquire` returns
+/// `None` when an install is already running for the id; otherwise it inserts
+/// the id and removes it again on drop.
+struct InstallGuard {
+    set: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    id: String,
+}
+
+impl InstallGuard {
+    fn acquire(
+        set: &Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+        id: &str,
+    ) -> Option<Self> {
+        let mut guard = set.lock().unwrap_or_else(|p| p.into_inner());
+        if !guard.insert(id.to_string()) {
+            return None; // already installing
+        }
+        Some(Self {
+            set: set.clone(),
+            id: id.to_string(),
+        })
+    }
+}
+
+impl Drop for InstallGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.set.lock() {
+            guard.remove(&self.id);
+        }
+    }
+}
+
+/// Validate that `s` is safe to use as a SINGLE path component under the data
+/// root: non-empty, no path separators, not `.`/`..`, and not an absolute or
+/// drive-qualified path. Guards `create_server` against an imported game
+/// definition whose `game_type` escapes the root via `..` or an absolute path
+/// (audit finding).
+fn validate_path_component(s: &str) -> std::result::Result<(), String> {
+    if s.is_empty() {
+        return Err("must not be empty".into());
+    }
+    if s == "." || s == ".." {
+        return Err("must not be '.' or '..'".into());
+    }
+    if s.contains('/') || s.contains('\\') {
+        return Err("must not contain path separators".into());
+    }
+    // Reject Windows drive prefixes ("C:...") and any other colon usage that a
+    // path could interpret as a stream/drive qualifier.
+    if s.contains(':') {
+        return Err("must not contain ':'".into());
+    }
+    // Belt-and-suspenders: the rendered component must have exactly one
+    // normal path segment.
+    let mut comps = Path::new(s).components();
+    match (comps.next(), comps.next()) {
+        (Some(std::path::Component::Normal(_)), None) => Ok(()),
+        _ => Err("must be a single relative path component".into()),
+    }
+}
+
 fn create_server_data_dir(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path).map_err(BackendError::io)?;
     #[cfg(unix)]
@@ -990,7 +1115,7 @@ async fn run_install_inner(
         let _ = tx_lines.send(Ok(InstallEvent::Log { line }));
     };
 
-    let (exit_code, install_container_id) = docker
+    let run_result = docker
         .run_script(
             &install_image,
             &server_data_path,
@@ -999,8 +1124,27 @@ async fn run_install_inner(
             on_container_created,
             on_output,
         )
-        .await
-        .map_err(BackendError::docker)?;
+        .await;
+
+    let (exit_code, install_container_id) = match run_result {
+        Ok(v) => v,
+        Err(e) => {
+            // The install failed before we got an exit code (pull failed, no
+            // network, start_container errored). Without this the record stayed
+            // Installing forever and any container the helper created before
+            // the error was orphaned with a stale install_container_id (audit
+            // finding). Recover the state: remove the container if one was
+            // created, clear the id, and mark Error.
+            if let Ok(mut srv) = persistence::load_server(&data_root, &server_id) {
+                if let Some(cid) = srv.install_container_id.take() {
+                    let _ = docker.remove_install_container(&cid).await;
+                }
+                srv.status = ServerStatus::Error;
+                let _ = persistence::save_server(&data_root, &srv);
+            }
+            return Err(BackendError::docker(e));
+        }
+    };
 
     // Clean up the install container (best-effort).
     let _ = docker.remove_install_container(&install_container_id).await;

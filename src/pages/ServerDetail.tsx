@@ -29,6 +29,11 @@ type TabType = 'console' | 'files' | 'network' | 'players' | 'backups' | 'schedu
 /** Games whose live roster + moderation the backend currently adapts. */
 const PLAYER_ADMIN_GAMES = new Set(['minecraft-java']);
 
+/** Cap for the in-memory console buffer (mirror of serverStore's). Beyond this
+ *  the oldest lines are dropped so a long-running console doesn't leak memory
+ *  or make every append O(n) (audit finding). */
+const MAX_CONSOLE_LINES = 2000;
+
 export function ServerDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -60,6 +65,15 @@ export function ServerDetail() {
   // The node this detail view is scoped to — so logs/stats/disk/attach hit the
   // RIGHT machine when the active node is a remote agent (not always 'local').
   const activeNodeId = useNodesStore((s) => s.activeNodeId);
+  const activeNode = useNodesStore((s) => s.nodes.find((n) => n.id === s.activeNodeId));
+  // A remote agent node hosts the server elsewhere, so localhost + this
+  // desktop's public IP are wrong. Derive the host from the node's URL and
+  // suppress the (misleading) public IP for remote nodes (audit finding).
+  const isRemoteNode = activeNode?.kind.kind === 'remote';
+  const remoteHost = (() => {
+    if (activeNode?.kind.kind !== 'remote') return null;
+    try { return new URL(activeNode.kind.url).hostname; } catch { return null; }
+  })();
   // Sub-user mode: this server lives on the OWNER's machine, reachable only
   // over the relay. The raw local attach_server / get_server_logs calls would
   // hit OUR Docker (the wrong machine) and silently show no console — route
@@ -150,7 +164,12 @@ export function ServerDetail() {
       try {
         const unlisten = await listen<{ server_id: string; line: string }>('server-log', (event) => {
           if (event.payload.server_id === id) {
-            setLogs((prev) => [...prev, event.payload.line]);
+            // Cap the buffer to the last MAX_CONSOLE_LINES — see serverStore
+            // (audit finding: unbounded growth + O(n) appends on chatty servers).
+            setLogs((prev) => {
+              const next = [...prev, event.payload.line];
+              return next.length > MAX_CONSOLE_LINES ? next.slice(-MAX_CONSOLE_LINES) : next;
+            });
           }
         });
         if (cancelled) {
@@ -374,7 +393,7 @@ export function ServerDetail() {
   }
 
   const handleSendCommand = async () => {
-    if (!command.trim()) return;
+    if (!command.trim() || !canOperate) return;
     const cmd = command.trim();
     setCommandHistory(prev => [...prev.filter(c => c !== cmd), cmd]);
     setHistoryIndex(-1);
@@ -385,7 +404,10 @@ export function ServerDetail() {
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
-      handleSendCommand();
+      // Gate Enter behind canOperate too — the Send button is disabled for
+      // viewers, but Enter bypassed it, echoing a `> cmd` the server rejects
+      // and giving misleading "accepted" feedback (audit finding).
+      if (canOperate) handleSendCommand();
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       if (commandHistory.length > 0) {
@@ -425,12 +447,13 @@ export function ServerDetail() {
 
   const handleRestart = async () => {
     setLogs(['Restarting server...']);
-    try {
-      await stopServer(server.id);
-      await startServer(server.id);
-    } catch (e) {
-      console.error('[restart] failed:', e);
-    }
+    // Only start if the stop actually succeeded. stopServer/startServer swallow
+    // their own errors (the try/catch here was dead code), so a failed stop
+    // used to fall straight through to a start that clobbered the stop's error
+    // and raced a still-running container (audit finding).
+    const stopped = await stopServer(server.id);
+    if (!stopped) return;
+    await startServer(server.id);
   };
 
   const handleDelete = async (deleteData: boolean) => {
@@ -527,8 +550,14 @@ export function ServerDetail() {
   };
 
   const status = statusColors[server.status] || statusColors.stopped;
-  const serverAddress = `localhost:${server.port}`;
-  const publicAddress = publicIP ? `${publicIP}:${server.port}` : '';
+  // For a remote agent node, connections go to the node's host, not localhost /
+  // this desktop's public IP (audit finding).
+  const serverAddress = remoteHost
+    ? `${remoteHost}:${server.port}`
+    : `localhost:${server.port}`;
+  const publicAddress = isRemoteNode
+    ? (remoteHost ? `${remoteHost}:${server.port}` : '')
+    : (publicIP ? `${publicIP}:${server.port}` : '');
 
   return (
     <div className="animate-fade-in">
@@ -730,12 +759,16 @@ export function ServerDetail() {
             </button>
           )}
           
-          <button
-            onClick={() => openFolder(String(server.data_path))}
-            className="btn btn-secondary"
-          >
-            <FolderOpen size={18} /> Open Folder
-          </button>
+          {/* Open Folder opens a path on THIS machine's shell — meaningless for
+              a server whose data dir lives on a remote agent (audit finding). */}
+          {!isRemoteNode && (
+            <button
+              onClick={() => openFolder(String(server.data_path))}
+              className="btn btn-secondary"
+            >
+              <FolderOpen size={18} /> Open Folder
+            </button>
+          )}
 
           <button
             onClick={async () => {

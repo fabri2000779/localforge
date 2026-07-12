@@ -156,25 +156,61 @@ pub async fn get_file_info(
         .map_err(|e| e.to_string())
 }
 
+/// Prompt the user for a host path with the OS SAVE dialog and return their
+/// choice. The destination is chosen in Rust, never taken as a free string from
+/// the frontend — otherwise an XSS'd WebView could invoke a transfer command
+/// with an arbitrary dest and write anywhere on the host (audit finding).
+/// Returns `Ok(None)` if the user cancelled.
+async fn prompt_save_path(app: &AppHandle, suggested_name: &str) -> Option<std::path::PathBuf> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
+    app.dialog()
+        .file()
+        .set_file_name(suggested_name)
+        .save_file(move |path| {
+            let _ = tx.send(path.and_then(|p| p.into_path().ok()));
+        });
+    rx.await.ok().flatten()
+}
+
+/// OS OPEN dialog counterpart — the source of an upload is picked in Rust so a
+/// hostile caller can't exfiltrate an arbitrary host file (audit finding).
+async fn prompt_open_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
+    app.dialog().file().pick_file(move |path| {
+        let _ = tx.send(path.and_then(|p| p.into_path().ok()));
+    });
+    rx.await.ok().flatten()
+}
+
 /// Stream a file from a node (local or remote) onto the user's desktop
-/// filesystem. Emits `file-transfer-progress` events every ~256 KB so
-/// the UI can render a progress bar.
+/// filesystem. The host destination is chosen via the OS save dialog IN RUST
+/// (not a frontend-supplied path — audit finding). Emits
+/// `file-transfer-progress` events every ~256 KB so the UI can render a
+/// progress bar. Returns 0 if the user cancelled the save dialog.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn download_file_to_local(
     transfer_id: String,
     src_path: String,
-    dest_path: String,
+    suggested_name: String,
     node_id: Option<String>,
     app: AppHandle,
     state: State<'_, NodeRegistry>,
 ) -> Result<u64, String> {
     let backend = require_backend(&state, node_id.as_deref()).await?;
+
+    let Some(dest_pathbuf) = prompt_save_path(&app, &suggested_name).await else {
+        return Ok(0); // user cancelled
+    };
+    let dest_path = dest_pathbuf.to_string_lossy().to_string();
+
     let mut stream = backend
         .download_file(&src_path)
         .await
         .map_err(|e| e.to_string())?;
 
-    if let Some(parent) = std::path::Path::new(&dest_path).parent() {
+    if let Some(parent) = dest_pathbuf.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|e| e.to_string())?;
@@ -219,18 +255,50 @@ pub async fn download_file_to_local(
     Ok(bytes_total)
 }
 
-/// Stream a file from the user's desktop filesystem into a node (local
-/// or remote). Emits `file-transfer-progress` events.
+/// Stream a file from the user's desktop filesystem into a node directory. The
+/// host SOURCE is picked via the OS open dialog IN RUST (not a frontend string
+/// — audit finding), and the node destination is `<dest_dir>/<picked file
+/// name>`, still confined by the backend. If a file with that name already
+/// exists on the node, the user is asked to confirm the overwrite (audit
+/// finding). Returns 0 if the user cancelled the picker or the overwrite prompt.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn upload_file_from_local(
     transfer_id: String,
-    src_path: String,
-    dest_path: String,
+    dest_dir: String,
     node_id: Option<String>,
     app: AppHandle,
     state: State<'_, NodeRegistry>,
 ) -> Result<u64, String> {
     let backend = require_backend(&state, node_id.as_deref()).await?;
+
+    let Some(src_pathbuf) = prompt_open_path(&app).await else {
+        return Ok(0); // user cancelled
+    };
+    let src_path = src_pathbuf.to_string_lossy().to_string();
+    let file_name = src_pathbuf
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "upload.bin".to_string());
+    let dest_path = format!("{}/{}", dest_dir.trim_end_matches(['/', '\\']), file_name);
+
+    // Overwrite guard: unlike delete/rename this used to clobber a same-named
+    // file silently with no undo (audit finding). Ask first if it exists.
+    if backend.file_info(&dest_path).await.is_ok() {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        app.dialog()
+            .message(format!("\"{file_name}\" already exists here. Overwrite it?"))
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Overwrite".into(),
+                "Cancel".into(),
+            ))
+            .show(move |ok| {
+                let _ = tx.send(ok);
+            });
+        if !rx.await.unwrap_or(false) {
+            return Ok(0); // user declined the overwrite
+        }
+    }
 
     let file = tokio::fs::File::open(&src_path)
         .await

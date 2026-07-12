@@ -11,6 +11,49 @@ import {
   Clock, Plus, Trash2, Loader2, Power, PowerOff, RotateCcw, Terminal, Megaphone, Archive, Check, X,
 } from 'lucide-react';
 
+/**
+ * Validate a standard 5-field cron expression per-field so the UI rejects
+ * out-of-range values (`0 25 * * *`) and garbage (`a b c d e`) instead of
+ * saving a schedule that shows "On" but never fires. Accepts `*`, single
+ * values, `a-b` ranges, `a,b,c` lists, and `* / n` / `a-b / n` steps within
+ * each field's bounds. Deliberately conservative — matches the numeric ranges
+ * croner accepts on the host (min 0-59, hour 0-23, dom 1-31, month 1-12,
+ * dow 0-7).
+ */
+function isValidCron(expr: string): boolean {
+  const fields = expr.trim().split(/\s+/);
+  if (fields.length !== 5) return false;
+  const bounds: Array<[number, number]> = [
+    [0, 59], // minute
+    [0, 23], // hour
+    [1, 31], // day of month
+    [1, 12], // month
+    [0, 7],  // day of week (0 and 7 both = Sunday)
+  ];
+  const fieldOk = (field: string, [min, max]: [number, number]): boolean => {
+    return field.split(',').every((part) => {
+      if (part === '') return false;
+      const [range, stepStr] = part.split('/');
+      if (stepStr !== undefined) {
+        const step = Number(stepStr);
+        if (!Number.isInteger(step) || step <= 0) return false;
+      }
+      if (range === '*') return true;
+      const inRange = (n: string): boolean => {
+        if (!/^\d+$/.test(n)) return false;
+        const v = Number(n);
+        return v >= min && v <= max;
+      };
+      if (range.includes('-')) {
+        const [a, b] = range.split('-');
+        return inRange(a ?? '') && inRange(b ?? '') && Number(a) <= Number(b);
+      }
+      return inRange(range);
+    });
+  };
+  return fields.every((f, i) => fieldOk(f, bounds[i]!));
+}
+
 // Wire shape of core::ScheduleAction. NB: the Rust enum's rename_all =
 // "camelCase" renames only the VARIANT TAGS — struct-variant FIELDS stay
 // snake_case. Sending camelCase fields here made serde silently drop the
@@ -232,7 +275,11 @@ function ScheduleForm({
   }
 
   const needsText = kind === 'command' || kind === 'broadcast';
-  const cronValid = cron.trim().split(/\s+/).length === 5;
+  // Validate each field's RANGE, not just "5 fields" — the old check accepted
+  // `0 25 * * *` (hour 25) or `a b c d e`, which the scheduler then silently
+  // skipped as unparseable, so the schedule showed "On" but never fired (audit
+  // finding).
+  const cronValid = isValidCron(cron);
   const valid =
     cronValid &&
     (kind !== 'backup' ? true : (targets?.length ?? 0) > 0 && targetId.length > 0) &&

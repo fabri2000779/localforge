@@ -15,7 +15,7 @@
 import { useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useAuthStore, roleAtLeast, type OrgRole } from '../stores/authStore';
+import { roleAtLeast, type OrgRole } from '../stores/authStore';
 import { useServerStore } from '../stores/serverStore';
 
 interface RelayCmd {
@@ -58,7 +58,11 @@ const CMD_MAP: Record<string, { tauri: string; minRole: OrgRole; argTransform?: 
   'server.delete_backup':  { tauri: 'cloud_delete_backup',  minRole: 'admin',    argTransform: (c) => ({ serverId: c.target, key: c.args?.key, nodeId: c.args?.nodeId ?? 'local', targetId: c.args?.targetId ?? null }) },
   // Schedules (no secret).
   'server.upsert_schedule':{ tauri: 'upsert_schedule',      minRole: 'operator', argTransform: (c) => ({ schedule: c.args?.schedule, nodeId: c.args?.nodeId ?? 'local' }) },
-  'server.delete_schedule':{ tauri: 'delete_schedule',      minRole: 'operator', argTransform: (c) => ({ id: c.args?.schedule_id, nodeId: c.args?.nodeId ?? 'local' }) },
+  // Pass the scope-checked target so Rust can verify the schedule belongs to it
+  // before deleting — the relay guards `target` by scope, but the delete keyed
+  // off schedule_id alone let a scoped member delete another server's schedule
+  // (audit finding).
+  'server.delete_schedule':{ tauri: 'delete_schedule',      minRole: 'operator', argTransform: (c) => ({ id: c.args?.schedule_id, serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
 };
 
 /**
@@ -67,13 +71,17 @@ const CMD_MAP: Record<string, { tauri: string; minRole: OrgRole; argTransform?: 
  * never see this code path.
  */
 export function RelayCommandExecutor() {
-  const me = useAuthStore((s) => s.me);
-
   useEffect(() => {
     // We don't gate on `me` here — the cmd events only arrive when the
     // relay WS is connected, which itself requires auth. If the user
-    // signs out the relay loop stops emitting, so nothing fires.
+    // signs out the relay loop stops emitting, so nothing fires. The effect
+    // runs ONCE ([] deps): it used to depend on `me`, which is never read in
+    // the body but churned this listener on every /me refresh — and if the
+    // deps changed before listen() resolved, the cleanup ran with
+    // unlisten===null and the late-resolving listener leaked forever,
+    // double-executing every relay cmd (audit finding).
     let unlisten: (() => void) | null = null;
+    let cancelled = false;
     listen<RelayCmd>('cloud://relay-cmd', async (event) => {
       const msg = event.payload;
       // ---------------------------------------------------------------------
@@ -239,10 +247,18 @@ export function RelayCommandExecutor() {
       } catch (e) {
         respond(msg, { success: false, error: String(e) });
       }
-    }).then((fn) => { unlisten = fn; });
+    }).then((fn) => {
+      // If cleanup already ran while listen() was in flight, drop the listener
+      // the moment it resolves instead of leaking it.
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
 
-    return () => { if (unlisten) unlisten(); };
-  }, [me]);
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   return null;
 }

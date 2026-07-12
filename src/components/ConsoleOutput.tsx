@@ -136,7 +136,10 @@ interface ConsoleLineProps {
   index: number;
 }
 
-export function ConsoleLine({ line, index }: ConsoleLineProps) {
+// Memoised: on a chatty server (10-30 lines/s) each new line re-rendered every
+// prior line and re-ran parseAnsi over all of them — O(n) work per line (audit
+// finding). line+index are stable per row, so memo makes appends O(1).
+export const ConsoleLine = React.memo(function ConsoleLine({ line, index }: ConsoleLineProps) {
   const hasAnsi = /\x1b\[|\u001b\[/.test(line);
   
   let segments: TextSegment[];
@@ -182,7 +185,7 @@ export function ConsoleLine({ line, index }: ConsoleLineProps) {
       </span>
     </div>
   );
-}
+});
 
 interface ConsoleOutputProps {
   logs: string[];

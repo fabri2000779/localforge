@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-shell';
-import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
 import {
   Folder,
@@ -211,31 +210,28 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
   }, []);
 
   const handleUpload = async () => {
-    const picked = await openDialog({ multiple: false });
-    if (!picked || typeof picked !== 'string') return;
-
-    const fileName = picked.split(/[/\\]/).pop() ?? 'upload.bin';
-    const destPath = `${currentPath.replace(/[/\\]+$/, '')}/${fileName}`;
+    // The OS file picker + the overwrite confirm now live in Rust: the host
+    // source path is never a free string from this WebView, which used to let a
+    // compromised frontend read any file on disk (audit finding). A cancelled
+    // pick / declined overwrite returns 0 bytes.
     const id = crypto.randomUUID();
-
     setTransfers((prev) => ({
       ...prev,
       [id]: {
         direction: 'upload',
-        path: destPath,
+        path: currentPath,
         bytes: 0,
-        label: fileName,
+        label: 'Uploading…',
       },
     }));
 
     try {
-      await invoke<number>('upload_file_from_local', {
+      const bytes = await invoke<number>('upload_file_from_local', {
         transferId: id,
-        srcPath: picked,
-        destPath,
+        destDir: currentPath,
         nodeId: activeNodeId,
       });
-      loadDirectory(currentPath);
+      if (bytes > 0) loadDirectory(currentPath); // 0 ⇒ user cancelled
     } catch (e) {
       setError(`Upload failed: ${e}`);
     } finally {
@@ -247,15 +243,14 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
   };
 
   const handleDownload = async (entry: FileEntry) => {
-    const destPath = await saveDialog({ defaultPath: entry.name });
-    if (!destPath || typeof destPath !== 'string') return;
-
+    // The OS save dialog now runs in Rust — the host destination is chosen
+    // there, not passed as a string from this WebView (audit finding).
     const id = crypto.randomUUID();
     setTransfers((prev) => ({
       ...prev,
       [id]: {
         direction: 'download',
-        path: destPath,
+        path: entry.name,
         bytes: 0,
         totalBytes: entry.size,
         label: entry.name,
@@ -266,7 +261,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
       await invoke<number>('download_file_to_local', {
         transferId: id,
         srcPath: entry.path,
-        destPath,
+        suggestedName: entry.name,
         nodeId: activeNodeId,
       });
     } catch (e) {
@@ -279,20 +274,30 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     }
   };
 
+  // Monotonic navigation token. Every loadDirectory bumps it; a slower response
+  // (or the 3s auto-refresh) that resolves after the user navigated is dropped,
+  // so the table never shows one directory's entries under another's path
+  // (audit finding). With rapid double-clicks, the last NAVIGATION wins, not
+  // the last response to resolve.
+  const navGenRef = useRef(0);
+
   // Load directory contents
   const loadDirectory = useCallback(async (path: string) => {
     setLoading(true);
     setError(null);
     setSelectedItems(new Set());
-    
+    const gen = ++navGenRef.current;
+
     try {
       const result = await invoke<DirectoryContents>('list_directory', { path, nodeId: activeNodeId });
+      if (gen !== navGenRef.current) return; // superseded by a newer navigation
       setContents(result);
       setCurrentPath(path);
     } catch (e) {
+      if (gen !== navGenRef.current) return;
       setError(String(e));
     } finally {
-      setLoading(false);
+      if (gen === navGenRef.current) setLoading(false);
     }
   }, [activeNodeId]);
 
@@ -306,8 +311,12 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     const interval = setInterval(() => {
       if (!editingFile && !renameDialog && !newItemDialog && !deleteConfirm) {
         // Silent refresh - don't show loading state
+        const gen = navGenRef.current;
         invoke<DirectoryContents>('list_directory', { path: currentPath, nodeId: activeNodeId })
           .then(result => {
+            // Drop a refresh whose directory the user navigated away from while
+            // it was in flight (audit finding).
+            if (gen !== navGenRef.current) return;
             // Only update if entries changed (compare by JSON)
             const currentEntries = JSON.stringify(contents?.entries.map(e => ({ name: e.name, size: e.size, modified: e.modified })));
             const newEntries = JSON.stringify(result.entries.map(e => ({ name: e.name, size: e.size, modified: e.modified })));

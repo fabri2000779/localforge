@@ -17,6 +17,13 @@ interface DockerState {
 
 const currentNodeId = () => useNodesStore.getState().activeNodeId;
 
+/// Monotonic token for status checks. A dead remote node's check_docker_status
+/// can hang for seconds; after the user switches to a healthy node, that stale
+/// rejection used to overwrite the good status with {available:false} and gate
+/// the whole UI behind "Docker Required" (audit finding). A newer check / node
+/// switch bumps this and the stale resolution self-drops.
+let checkGeneration = 0;
+
 export const useDockerStore = create<DockerState>((set) => ({
   status: null,
   info: null,
@@ -24,12 +31,16 @@ export const useDockerStore = create<DockerState>((set) => ({
 
   checkStatus: async () => {
     set({ isChecking: true });
+    const gen = ++checkGeneration;
+    const nodeAtStart = currentNodeId();
     try {
       const status = await invoke<DockerStatus>('check_docker_status', {
-        nodeId: currentNodeId(),
+        nodeId: nodeAtStart,
       });
+      if (gen !== checkGeneration || nodeAtStart !== currentNodeId()) return;
       set({ status, isChecking: false });
     } catch (error) {
+      if (gen !== checkGeneration || nodeAtStart !== currentNodeId()) return;
       set({
         status: {
           available: false,

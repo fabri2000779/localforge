@@ -36,7 +36,11 @@ pub fn set_active_org(org_id: Option<String>) {
     *g = org_id.filter(|s| !s.trim().is_empty());
 }
 
-fn active_org() -> Option<String> {
+/// The org the client is currently pointed at (the `X-LocalForge-Org` header
+/// value). Public so producers like the audit log can stamp the SAME org into
+/// their request body, instead of the cloud falling back to the caller's
+/// primary membership (audit finding: sub-user actions landed in the wrong feed).
+pub fn active_org() -> Option<String> {
     active_org_cell()
         .read()
         .unwrap_or_else(|e| e.into_inner())

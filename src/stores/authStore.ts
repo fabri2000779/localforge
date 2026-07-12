@@ -176,6 +176,15 @@ let relayOrg: string | null = null;
  *  runs its own pull once the pivot completes, so nothing is missed. */
 let orgSwitchInFlight = false;
 
+/** Monotonic epoch bumped every time the active org pivots (setCurrentOrg /
+ *  fetchOrgs). `syncPull` captures it before its invoke and discards the result
+ *  if the epoch moved while the pull was in flight — otherwise a slow pull
+ *  started under org A lands after a switch to org B and overwrites the visible
+ *  list with A's servers under currentOrgId=B (audit finding). The boolean
+ *  `orgSwitchInFlight` only blocks STARTING a pull; it can't invalidate one
+ *  already running, and two rapid switches reopen its window. */
+let syncEpoch = 0;
+
 /** Pivot the Rust-side active org and the decryption DEK together so the HTTP
  *  active-org header can never disagree with the key the pull/push uses.
  *  DEK FIRST: `cloud_unlock_org_dek` doesn't depend on the header, and
@@ -339,6 +348,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       lastSyncResult: null,
       lastSyncedAt: null,
       syncKeyStatus: null,
+      // Clear org state too — leaving it meant a signed-out sub-user still read
+      // as isSubUser (empty server list, actions routed through a stopped
+      // relay) until an app restart, and the next account's signed-in handler
+      // ran ensureRelay against the previous account's orgs (audit finding).
+      orgs: [],
+      currentOrgId: null,
+      currentRole: null,
     });
   },
 
@@ -418,8 +434,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // Skip while an org switch is mid-pivot — a pull here would run against a
     // half-applied org+DEK pair. setCurrentOrg pulls once the pivot completes.
     if (orgSwitchInFlight) return null;
+    const epochAtStart = syncEpoch;
     try {
       const r = await invoke<RemoteServer[]>('cloud_sync_pull');
+      // Discard a pull that resolved after the active org pivoted — its rows
+      // belong to the previous org and would be shown under the new one.
+      if (epochAtStart !== syncEpoch) return null;
       // Patch the cached SyncResult so the UI's "remote servers" list
       // updates on relay-driven pulls too.
       const prev = get().lastSyncResult;
@@ -431,6 +451,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       });
       return r;
     } catch (e) {
+      if (epochAtStart !== syncEpoch) return null;
       set({ error: asErr(e) });
       return null;
     }
@@ -488,11 +509,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ orgs, currentOrgId: current, currentRole: role });
       // Pin the Rust active-org header + unlock the right DEK for the active
       // org BEFORE the relay / any pull, so a borrowed org decrypts on restart
-      // (previously you had to manually re-switch to re-unlock its DEK).
+      // (previously you had to manually re-switch to re-unlock its DEK). Bump
+      // the sync epoch first so any pull started under the old scope is
+      // invalidated and this pivot's own pull is the authoritative one.
+      syncEpoch++;
       if (current) await applyOrgScope(current, cur?.isOwner ?? false);
       // Now that we know the active org, make sure the relay is pointed at
       // it (rather than the primary-org fallback used at startup).
       get().ensureRelay();
+      // Materialise the remote server list for a sub-user on startup. fetchOrgs
+      // restores the borrowed org + DEK but used to never pull, so a sub-user
+      // reopening the app saw "no servers shared with you" until the owner
+      // pushed a change (audit finding). Owners pull too — harmless (their list
+      // comes from local Docker) and keeps the cached SyncResult warm.
+      void get().syncPull();
       // Owner side: seal the org DEK to any member who's published a key but
       // isn't granted yet, so teammates can decrypt our org's servers. 403s
       // (not owner) are swallowed inside the command.
@@ -514,6 +544,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // pivoted (applyOrgScope does DEK-then-header), so a pull/push can't run
     // against a half-applied org+key pair. The switch then pulls once itself.
     orgSwitchInFlight = true;
+    syncEpoch++;
     void (async () => {
       await applyOrgScope(orgId, o.isOwner);
       orgSwitchInFlight = false;
@@ -556,7 +587,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const target = orgId ?? '__primary__';
     if (target === relayOrg) return; // already connected there
     relayOrg = target;
-    void invoke('cloud_relay_start', { orgId }).catch(() => {});
+    // Revert on failure: cloud_relay_start can reject before the Rust reconnect
+    // loop starts (unauthenticated, or fetch_org_id failing when orgId is
+    // omitted). Leaving relayOrg pinned made every later ensureRelay compute
+    // the same target and early-return "already connected there", so the relay
+    // stayed dead for the whole session (audit finding).
+    void invoke('cloud_relay_start', { orgId }).catch(() => {
+      if (relayOrg === target) relayOrg = null;
+    });
   },
 
   exportData: async () => {

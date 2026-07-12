@@ -211,9 +211,18 @@ pub async fn cloud_relay_start(
                 Ok((mut ws, _)) => {
                     backoff.reset();
                     let _ = app_for_loop.emit("cloud://relay-connected", ());
-                    // Pump frames until close. We multiplex three things:
-                    // 1. cancellation, 2. inbound WS frames, 3. outbound
-                    // messages enqueued by Tauri commands.
+                    // App-level keepalive. Cloudflare drops idle WebSockets at
+                    // ~5 min and the promised server-side ping was never
+                    // implemented; the DO's setWebSocketAutoResponse expects the
+                    // CLIENT to send `{"type":"ping"}` (audit finding). Without
+                    // it a quiet org's socket churned every few minutes, losing
+                    // events in the gap. The agent already does this at 30s.
+                    let mut ping = tokio::time::interval(Duration::from_secs(30));
+                    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    ping.tick().await; // consume the immediate first tick
+                    // Pump frames until close. We multiplex four things:
+                    // 1. cancellation, 2. outbound messages enqueued by Tauri
+                    // commands, 3. inbound WS frames, 4. the keepalive ping.
                     loop {
                         tokio::select! {
                             biased;
@@ -249,10 +258,23 @@ pub async fn cloud_relay_start(
                                     break;
                                 }
                                 None => break,
+                            },
+                            _ = ping.tick() => {
+                                if ws.send(Message::Text("{\"type\":\"ping\"}".to_string().into())).await.is_err() {
+                                    tracing::warn!("[relay] keepalive send failed; reconnecting");
+                                    break;
+                                }
                             }
                         }
                     }
                     let _ = app_for_loop.emit("cloud://relay-disconnected", ());
+                    // Discard any commands queued during this now-dead connection.
+                    // Draining here (rather than flushing them on reconnect)
+                    // stops a burst of stale, possibly-duplicated cmds — a
+                    // minute-late `stop` reverting a fresh `start`, or three
+                    // queued restarts — landing on the owner's live servers when
+                    // the socket comes back (audit finding).
+                    while out_rx.try_recv().is_ok() {}
                 }
                 Err(e) => {
                     tracing::warn!("[relay] connect failed: {}", e);
@@ -295,12 +317,12 @@ async fn handle_text(
         if first || changed {
             // Reset the seq tracker too — a new epoch starts at 1.
             *last_seq = None;
-            // Trigger a pull so any events we missed are recovered.
-            if let Some(state) = app.try_state::<crate::backend::NodeRegistry>() {
-                if let Err(e) = sync::cloud_sync_pull(state).await {
-                    tracing::debug!("[relay] post-epoch pull failed: {:?}", e);
-                }
-            }
+            // Recover any events we missed. Emit `cloud://sync-changed` so the
+            // JS store actually re-pulls + repaints — the previous Rust-side
+            // `cloud_sync_pull` here was a pure function whose result was thrown
+            // away, so the sub-user's list stayed stale until the next event
+            // (audit finding). The JS handler owns the pull.
+            let _ = app.emit("cloud://sync-changed", ());
         }
     }
 
@@ -311,9 +333,9 @@ async fn handle_text(
         if let Some(prev) = last_seq {
             if seq > *prev + 1 {
                 tracing::warn!("[relay] seq gap: {} → {} (missed {})", prev, seq, seq - *prev - 1);
-                if let Some(state) = app.try_state::<crate::backend::NodeRegistry>() {
-                    let _ = sync::cloud_sync_pull(state).await;
-                }
+                // Same as the epoch path: signal the JS store to re-pull, rather
+                // than pulling here and discarding the result (audit finding).
+                let _ = app.emit("cloud://sync-changed", ());
             }
         }
         *last_seq = Some(seq);

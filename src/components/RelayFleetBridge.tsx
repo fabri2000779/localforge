@@ -74,9 +74,15 @@ export function RelayFleetBridge() {
     void nodes.fetchMachines();
 
     const unsubs: Array<() => void> = [];
+    // Guard the async listen() resolutions against a cleanup that fires first
+    // (org switch bumps [enabled, currentOrgId]); otherwise a late push leaks a
+    // listener bound to the previous org (audit finding, same class as the
+    // relay cmd/log bridges).
+    let cancelled = false;
+    const track = (u: () => void) => { if (cancelled) u(); else unsubs.push(u); };
     listen('cloud://relay-connected', () => {
       void useNodesStore.getState().fetchMachines();
-    }).then((u) => unsubs.push(u));
+    }).then(track);
     listen('cloud://relay-presence', () => {
       void useNodesStore.getState().fetchMachines();
       // A member just (re)joined — if we own the active org, seal any newly
@@ -85,7 +91,7 @@ export function RelayFleetBridge() {
       if (currentOrgId) {
         void invoke('cloud_process_grants', { orgId: currentOrgId }).catch(() => {});
       }
-    }).then((u) => unsubs.push(u));
+    }).then(track);
     listen<RelaySnapshotEvent>('cloud://relay-event', (event) => {
       const msg = event.payload;
       if (!msg) return;
@@ -125,9 +131,10 @@ export function RelayFleetBridge() {
       if (msg.kind === 'server.state_changed' && typeof msg.target === 'string') {
         applyStateChanged(msg.target, msg.status ?? 'stopped');
       }
-    }).then((u) => unsubs.push(u));
+    }).then(track);
 
     return () => {
+      cancelled = true;
       for (const u of unsubs) u();
     };
   }, [enabled, currentOrgId]);
