@@ -1,9 +1,4 @@
-//! HTTP router and handlers.
-//!
-//! Every endpoint just delegates to the `NodeBackend` trait, which means
-//! the agent is essentially a thin protocol shim — bug fixes in the
-//! local Docker logic land in `localforge-backend-local` once and serve
-//! both the desktop and the agent.
+//! HTTP router and handlers; every endpoint delegates to the `NodeBackend` trait.
 
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -29,11 +24,9 @@ pub struct AppState {
     pub token: String,
     /// Path to agent.toml — `POST /link` persists the cloud link here.
     pub config_path: std::path::PathBuf,
-    /// Data root — where the provisioned S3 backup target is stored so the
-    /// agent can run relay-triggered backups without the secret on the wire.
+    /// Where the provisioned backup targets live, for relay-triggered backups.
     pub data_root: std::path::PathBuf,
-    /// Set once the relay client is running, so `POST /link` doesn't spawn a
-    /// second connection loop.
+    /// Set once the relay client runs, so `POST /link` doesn't spawn a second loop.
     pub relay_started: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -58,18 +51,12 @@ pub fn router(state: AppState) -> Router {
         .route("/servers/{id}/stream", get(stream_logs))
         .route("/servers/{id}/install/stream", get(install_stream))
         .route("/servers/{id}/reset-data", post(reset_server_data))
-        // backups (BYO S3) — the target (incl. secret) travels in the body over
-        // this already-TLS'd channel. POST for list/delete too, since they
-        // carry the target body.
+        // Backups: the target (incl. secret) travels in the body over TLS, so list/delete are POST too.
         .route("/servers/{id}/backup", post(backup_now))
         .route("/servers/{id}/backups/list", post(backups_list))
         .route("/servers/{id}/restore", post(restore_backup))
         .route("/servers/{id}/backups/delete", post(delete_backup))
-        // S3 target provisioning: the desktop pushes the full named list here
-        // over direct HTTPS so the agent can run relay-triggered backups itself.
-        // The PUT replaces the stored list atomically. 64 KiB is generous for
-        // an org's entire target list; explicit limit avoids relying on axum's
-        // implicit 2 MiB default.
+        // The desktop pushes the full target list here over direct HTTPS; 64 KiB is plenty.
         .route("/backup-targets", put(set_backup_targets))
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
         // scheduled actions
@@ -98,16 +85,13 @@ pub fn router(state: AppState) -> Router {
         ));
 
     Router::new()
-        // /v1/health is public — used by the desktop to test reachability
-        // before sending the token.
+        // Public: the desktop probes reachability before sending the token.
         .route("/v1/health", get(health))
         .nest("/v1", protected)
         .with_state(state)
 }
 
-// ===========================================================================
 // Health
-// ===========================================================================
 
 #[derive(Serialize)]
 struct Health {
@@ -122,9 +106,7 @@ async fn health() -> Json<Health> {
     })
 }
 
-// ===========================================================================
 // Helpers
-// ===========================================================================
 
 #[derive(Debug)]
 struct ApiError {
@@ -156,9 +138,7 @@ fn map_err(e: localforge_core::BackendError) -> ApiError {
     }
 }
 
-// ===========================================================================
 // Info + server endpoints
-// ===========================================================================
 
 async fn get_info(State(s): State<AppState>) -> Result<Json<DockerInfo>, ApiError> {
     s.backend.docker_info().await.map(Json).map_err(map_err)
@@ -170,9 +150,7 @@ async fn get_node_stats(State(s): State<AppState>) -> Result<Json<NodeStats>, Ap
 
 #[derive(Deserialize)]
 struct LinkBody {
-    /// One-time enrollment blob (base64url) issued by the cloud's
-    /// `POST /v1/nodes`. The desktop pushes it here over the existing HTTPS
-    /// session so the operator doesn't have to paste anything on the VPS.
+    /// One-time enrollment blob (base64url) from the cloud's `POST /v1/nodes`.
     blob: String,
 }
 
@@ -188,9 +166,7 @@ async fn link_node(
         .map_err(|e| ApiError { status: StatusCode::BAD_REQUEST, message: format!("malformed blob: {e}") })?;
     crate::config::save_cloud_link(&s.config_path, link.clone())
         .map_err(|e| ApiError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string() })?;
-    // Connect now without a restart. swap() returns the prior value: only the
-    // first link spawns a loop. (A re-link with a new token applies on next
-    // restart — fine, re-linking is rare.)
+    // Connect now without a restart; only the first link spawns a loop (a re-link applies on restart).
     if !s.relay_started.swap(true, std::sync::atomic::Ordering::SeqCst) {
         crate::relay::spawn(s.backend.clone(), link, s.data_root.clone());
     }
@@ -242,11 +218,23 @@ async fn update_server_config(
         .map_err(map_err)
 }
 
+#[derive(Deserialize)]
+struct DeleteQuery {
+    /// `?keep_data=true` removes the container and record but leaves the world directory.
+    #[serde(default)]
+    keep_data: bool,
+}
+
 async fn delete_server(
     State(s): State<AppState>,
     Path(id): Path<String>,
+    Query(q): Query<DeleteQuery>,
 ) -> Result<StatusCode, ApiError> {
-    s.backend.delete_server(&id).await.map_err(map_err)?;
+    if q.keep_data {
+        s.backend.delete_server_keep_data(&id).await.map_err(map_err)?;
+    } else {
+        s.backend.delete_server(&id).await.map_err(map_err)?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -494,9 +482,7 @@ async fn set_backup_targets(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ===========================================================================
 // Log streaming via WebSocket
-// ===========================================================================
 
 async fn stream_logs(
     State(s): State<AppState>,
@@ -537,9 +523,7 @@ async fn handle_log_socket(mut socket: WebSocket, state: AppState, server_id: St
     }
 }
 
-// ===========================================================================
 // Install streaming via WebSocket
-// ===========================================================================
 
 async fn install_stream(
     State(s): State<AppState>,
@@ -621,9 +605,7 @@ async fn handle_install_socket(mut socket: WebSocket, state: AppState, server_id
     let _ = socket.close().await;
 }
 
-// ===========================================================================
 // File system endpoints
-// ===========================================================================
 
 #[derive(Deserialize)]
 struct PathQuery {

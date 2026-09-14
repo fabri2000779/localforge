@@ -1,15 +1,5 @@
-/**
- * Helpers that abstract "am I the owner of the active org, or a sub-user?"
- *
- *   useIsSubUser()   — boolean. True when the active org is someone else's.
- *   useDisplayedServers() — returns either local Docker servers (owner)
- *                          or decrypted cloud-synced servers (sub-user).
- *   useCanAct(action) — per-role permission check for UI gating.
- *
- * The store-level server actions consult `routeServerAction()` to decide
- * whether to call the Tauri command locally or push a `cmd` through the
- * relay; the UI doesn't have to care.
- */
+/** Owner vs sub-user helpers: `useIsSubUser`, `useDisplayedServers`, `useCanAct`, and the relay
+ *  routing used by the server store. */
 import { invoke } from '@tauri-apps/api/core';
 import { useMemo } from 'react';
 import { useAuthStore, roleAtLeast, type OrgRole } from '../stores/authStore';
@@ -24,7 +14,6 @@ export interface ServerMachine {
   machineId: string;
   /** Human label — the machine's name, falling back to a short id. */
   machineName: string;
-  /** 'desktop' | 'agent' | 'unknown' — drives the icon. */
   machineKind: 'desktop' | 'agent' | 'unknown';
 }
 
@@ -47,8 +36,7 @@ export type ActionKind =
   | 'org.invite'
   | 'org.remove_member';
 
-/** Minimum role required to perform an action. Mirrors the cloud-side
- *  role map in `apps/api/src/relay.ts` so the two never drift. */
+/** Minimum role per action; mirrors the cloud's role map in relay.ts. */
 const MIN_ROLE: Record<ActionKind, OrgRole> = {
   'server.start':         'operator',
   'server.stop':          'operator',
@@ -61,15 +49,7 @@ const MIN_ROLE: Record<ActionKind, OrgRole> = {
   'org.remove_member':    'admin',
 };
 
-/**
- * Can the caller perform `action` in the active org? Returns true when:
- *   - Not signed in (local-only mode — anything goes)
- *   - Signed in as owner of the active org
- *   - Signed in as a member with sufficient role
- *
- * Use in the UI to hide / disable buttons. Defense-in-depth — the
- * server still enforces this regardless.
- */
+/** Whether the caller may perform `action` in the active org (true when signed out or owner). UI gating only. */
 export function useCanAct(action: ActionKind): boolean {
   return useAuthStore((s) => {
     if (!s.me) return true; // local-only mode
@@ -80,43 +60,25 @@ export function useCanAct(action: ActionKind): boolean {
   });
 }
 
-/**
- * The list of servers the UI should render right now.
- *   - Owner of the active org → the local Docker server list.
- *   - Sub-user → the decrypted cloud-synced server list (read-only
- *     view of the OWNER's machine).
- * Servers from the cloud that didn't decrypt are surfaced with a
- * `name + decryptError` so the user knows something's missing without
- * us silently hiding it.
- */
+/** Servers to render: local Docker for an owner; decrypted cloud-synced servers for a sub-user. */
 export function useDisplayedServers(): Server[] {
   const local = useServerStore((s) => s.servers);
   const isSubUser = useIsSubUser();
-  // Select the STABLE `lastSyncResult` reference, not a derived array.
-  // Returning `s.lastSyncResult?.remote ?? []` from the selector minted a
-  // brand-new `[]` every render whenever there was no sync result (i.e.
-  // for any owner), so useSyncExternalStore saw an ever-changing snapshot
-  // and React aborted with "Maximum update depth exceeded" (#185). The
-  // `?? []` now happens inside the memo, off the selector path.
+  // Select the STABLE lastSyncResult reference; a derived `?? []` in the selector caused an update loop (#185).
   const lastSyncResult = useAuthStore((s) => s.lastSyncResult);
-  // Live, cross-machine status from relay discovery (RelayFleetBridge).
-  // Replaces the old hardcoded 'stopped' placeholder so a sub-user sees
-  // real Running / Stopped / Starting badges, identical to the mobile app.
+  // Live cross-machine status from relay discovery.
   const statuses = useFleetStore((s) => s.statuses);
 
   return useMemo(() => {
     if (!isSubUser) return local;
-    // Map decrypted remote to a Server-shaped object so the existing
-    // ServerCard / list components render unchanged. Fields we don't
-    // know about server-side go to safe defaults.
+    // Map decrypted remote rows to the Server shape so existing components render unchanged.
     return (lastSyncResult?.remote ?? [])
       .filter((r) => r.decrypted)
       .map<Server>((r) => ({
         id: r.decrypted!.id,
         name: r.decrypted!.name,
         game_type: r.decrypted!.game_type as Server['game_type'],
-        // Live status from discovery; fall back to 'stopped' until the
-        // hosting machine's snapshot lands (or if it's offline).
+        // 'stopped' until the hosting machine's snapshot lands.
         status: (statuses[r.decrypted!.id] ?? 'stopped') as Server['status'],
         container_id: null,
         port: r.decrypted!.port,
@@ -130,19 +92,7 @@ export function useDisplayedServers(): Server[] {
   }, [isSubUser, local, lastSyncResult, statuses]);
 }
 
-/**
- * Per-server machine attribution for the displayed servers — drives the
- * "group by machine" chips + the little machine label on each card.
- *
- * For a sub-user, the synced server config carries the real `node_id`
- * (the owner's machine that hosts it), which we resolve against the cloud
- * fleet (`cloudMachines`) for a friendly name + kind. The owner's own
- * local servers all live on THIS machine, so they collapse to a single
- * group (and the UI then hides the chips — nothing to switch between).
- *
- * Returns a record keyed by server id. Servers we can't attribute are
- * simply absent (the UI treats them as "no machine label").
- */
+/** Per-server machine attribution (id, name, kind) for the displayed servers; unattributable servers are absent. */
 export function useServerMachineInfo(): Record<string, ServerMachine> {
   const isSubUser = useIsSubUser();
   const lastSyncResult = useAuthStore((s) => s.lastSyncResult);
@@ -186,32 +136,15 @@ export function useServerMachineInfo(): Record<string, ServerMachine> {
   }, [isSubUser, lastSyncResult, cloudMachines, thisMachine, localServers, serverMachine]);
 }
 
-/**
- * Pure route probe — answers "would a server action go over the relay right
- * now?" WITHOUT sending anything. Callers that only need to pick a code path
- * (attach/detach, delete guards) must use THIS, not routeServerAction: the
- * audit found serverStore calling routeServerAction with placeholder actions
- * "just to know the route", which actually fired real server.start/stop cmds
- * at the owner's machine.
- */
+/** Pure route probe: would a server action go over the relay? Sends nothing (unlike routeServerAction). */
 export function isRelayRouted(): boolean {
   const auth = useAuthStore.getState();
   const cur = auth.orgs.find((o) => o.id === auth.currentOrgId);
   return cur ? !cur.isOwner : false;
 }
 
-/**
- * Route a server action to either the local Tauri command (owner mode)
- * or a relay `cmd` message (sub-user mode). Mutates nothing in the
- * stores directly — callers wrap their own optimistic updates.
- *
- * NOT a probe: in sub-user mode this SENDS the cmd. Use `isRelayRouted()`
- * when you only need to know which path you're on.
- *
- * The relay path is fire-and-forget; the owner's RelayCommandExecutor
- * processes the cmd and broadcasts a `cmd_result` event that the UI
- * listens to (see useRelayCmdResult hook).
- */
+/** Route a server action: local Tauri command (owner) or a relay `cmd` (sub-user, fire-and-forget;
+ *  the owner's executor answers with a `cmd_result` event). NOT a probe. */
 export async function routeServerAction(
   action: ActionKind,
   payload: Record<string, unknown>,
@@ -219,17 +152,13 @@ export async function routeServerAction(
   if (!isRelayRouted()) return { via: 'local' };
   const auth = useAuthStore.getState();
 
-  // Look up the server's node_id from the decrypted sync result so the
-  // owner's RelayCommandExecutor knows whether to hit local Docker or
-  // a remote agent. Defaults to "local" if we don't have it (server
-  // pushed before v0.1.13 has no node_id stamp).
+  // The synced config carries the hosting node_id so the owner's executor routes correctly ("local" if absent).
   const remote = auth.lastSyncResult?.remote ?? [];
   const serverId = payload.serverId as string | undefined;
   const target = remote.find((r) => r.id === serverId);
   const nodeId = (target?.decrypted as { node_id?: string } | undefined)?.node_id ?? 'local';
 
-  // Relay path. We invent a request id so the cmd_result event can be
-  // correlated back to a UI optimistic state.
+  // The request id correlates the cmd_result event back to the UI.
   const requestId =
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
       ? crypto.randomUUID()

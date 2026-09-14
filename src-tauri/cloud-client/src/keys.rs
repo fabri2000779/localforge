@@ -1,12 +1,5 @@
-//! Team key-sharing HTTP surface — sealed org-DEK grants.
-//!
-//! Pairs with the `vault` sealed-box primitives + cloud migration 0009. The
-//! flow: every user publishes an X25519 public key (`publish_pubkey`); an org
-//! owner finds members who still need access (`pending_grants`), seals their
-//! DEK to each member's pubkey (`vault::seal_to`) and uploads it
-//! (`put_grant`); a member fetches their sealed grant (`my_grant`) and opens
-//! it (`vault::open_sealed`). Platform-agnostic — the consuming app supplies
-//! the bearer and does the crypto with the locally-held secret.
+//! Team key sharing: users publish an X25519 pubkey, the owner seals the org DEK to
+//! each pending member (`put_grant`), members fetch and open their own grant.
 
 use serde::{Deserialize, Serialize};
 
@@ -19,8 +12,7 @@ struct PubkeyBody<'a> {
     wrapped_x25519_sk: &'a str,
 }
 
-/// Publish (or refresh) the caller's X25519 keypair: the public key + the
-/// KEK-wrapped secret (so the user's other devices recover it).
+/// Publish the caller's X25519 pubkey plus the KEK-wrapped secret (for their other devices).
 pub async fn publish_pubkey(pubkey: &str, wrapped_sk: &str, bearer: &str) -> Result<(), ApiError> {
     let _: serde_json::Value = api::post(
         "/v1/account/pubkey",
@@ -42,8 +34,7 @@ pub struct PendingGrant {
     pub pubkey: String,
 }
 
-/// Members of `org_id` who have a published pubkey but no grant yet.
-/// Owner-only server-side; the owner's client seals to each and `put_grant`s.
+/// Members with a published pubkey but no grant yet (owner-only).
 pub async fn pending_grants(org_id: &str, bearer: &str) -> Result<Vec<PendingGrant>, ApiError> {
     #[derive(Deserialize)]
     struct Resp {
@@ -92,8 +83,7 @@ pub struct Grant {
     pub sealed_epk: String,
 }
 
-/// The caller's own sealed grant for `org_id`, or `None` until the owner has
-/// sealed it (the cloud returns 404).
+/// The caller's sealed grant for `org_id`, or `None` (404) until the owner seals one.
 pub async fn my_grant(org_id: &str, bearer: &str) -> Result<Option<Grant>, ApiError> {
     match api::get::<Grant>(&format!("/v1/orgs/{org_id}/grant"), Some(bearer)).await {
         Ok(g) => Ok(Some(g)),

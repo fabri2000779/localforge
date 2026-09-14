@@ -1,10 +1,4 @@
-//! Desktop billing glue.
-//!
-//! Stripe Checkout + Customer Portal sessions are built by the cloud
-//! API; we POST and get back a URL. The pure HTTP + plan validation
-//! lives in `localforge-cloud-client::billing`; what stays here is
-//! the desktop bit — opening the returned URL in the user's default
-//! browser via `tauri-plugin-opener`.
+//! Stripe Checkout / Portal: fetch the URL via cloud-client and open it in the browser.
 
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;

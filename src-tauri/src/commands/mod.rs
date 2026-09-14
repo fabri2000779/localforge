@@ -1,4 +1,4 @@
-// Commands module - Tauri command handlers
+//! Tauri command handlers.
 
 pub mod backups;
 pub mod crash;
@@ -16,9 +16,7 @@ use crate::backend::{DynBackend, NodeRegistry};
 use localforge_core::NodeId;
 use tauri::State;
 
-/// Resolve the requested node's backend, or "local" if the caller didn't
-/// specify one. Used by every node-scoped command — keeps the Tauri
-/// handler bodies down to a single line of routing.
+/// The requested node's backend ("local" when unspecified).
 pub(crate) async fn require_backend(
     state: &State<'_, NodeRegistry>,
     node_id: Option<&str>,

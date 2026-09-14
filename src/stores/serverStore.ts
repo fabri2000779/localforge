@@ -1,9 +1,4 @@
-// Server store using Zustand.
-//
-// Every Tauri invoke that touches a Docker daemon takes a `nodeId`
-// argument (defaulting to "local" on the Rust side). We always read the
-// active node id from nodesStore so switching nodes in the sidebar
-// automatically scopes every subsequent action to the new node.
+// Server store. Every Docker-touching invoke takes the active node id from nodesStore at call time.
 
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
@@ -23,9 +18,7 @@ interface LogEvent {
   line: string;
 }
 
-/// Cap for in-memory console buffers. Beyond this the oldest lines are dropped
-/// — a running server streams indefinitely and an unbounded array both leaks
-/// memory and makes every append O(n) (audit finding).
+// Cap for in-memory console buffers (oldest lines dropped).
 const MAX_CONSOLE_LINES = 2000;
 
 interface ContainerStats {
@@ -70,58 +63,41 @@ interface ServerState {
   clearLogs: () => void;
 }
 
-/// Read the currently-active node id from nodesStore at the moment of
-/// the invoke. We don't subscribe — each call gets a fresh value so
-/// switching nodes mid-flight doesn't strand stale calls.
+// Read at invoke time (not subscribed) so a node switch mid-flight can't strand stale calls.
 const currentNodeId = () => useNodesStore.getState().activeNodeId;
 
-/// Monotonic token for attach/detach ordering — see attachToServer.
+// Monotonic token for attach/detach ordering (see attachToServer).
 let attachGeneration = 0;
 
-/// Monotonic token for list fetches. `fetchServers` reads the active node at
-/// invoke time, but a slow response from a previous node used to land after a
-/// node switch and overwrite the new node's list with stale rows (audit
-/// finding). Any node switch / newer fetch bumps this; a stale resolution
-/// whose captured token no longer matches self-drops.
+// Monotonic token: a slow list from a previous node must not overwrite the current node's list.
 let fetchGeneration = 0;
 
-/// Fire-and-forget push of the local servers to the cloud after a
-/// config-changing mutation (create / config edit / delete), so the new
-/// state lands on the user's other devices and the mobile app without a
-/// manual "Sync now". Best-effort: `cloud_sync_now` rejects when the user
-/// isn't signed in or hasn't set up sync — we swallow that. It only ever
-/// pushes the LOCAL node's servers (see cloud::sync), so it's safe to call
-/// regardless of which node is active.
+// Best-effort push of the LOCAL node's servers after a config-changing mutation; rejects when signed out.
 function autoSyncToCloud() {
   void invoke('cloud_sync_now').catch(() => {
     /* not signed in / sync not set up — nothing to push */
   });
 }
 
-/// The newest crash-journal event timestamp (ms) we've already pushed for. We
-/// poll the host crash JOURNAL rather than the server status, because an
-/// auto-restart flips Running→Crashed→Running inside a single crash-watcher
-/// tick (~1s) — a 10s status poll almost always misses that window, whereas the
-/// journal records every event. Seeded on the first read so crashes that
-/// predate the app opening never re-alert.
+// Tombstone a deleted server in the cloud (the push only upserts what still exists). Best-effort.
+export function tombstoneInCloud(serverId: string) {
+  void invoke('cloud_sync_delete_server', { serverId }).catch(() => {
+    /* not signed in / never synced — nothing to tombstone */
+  });
+}
+
+// Newest crash-journal ts already pushed; seeded on first read so pre-existing crashes never re-alert.
 let lastCrashEventTs: number | null = null;
 
-// Wire shape of core::CrashEvent — #[serde(rename_all = "camelCase")], so the
-// fields arrive camelCase (a snake_case `server_id` here silently read
-// undefined and killed every crash push; audit finding).
+// Wire shape of core::CrashEvent (camelCase).
 interface CrashJournalEvent {
   ts: number;
   serverId: string;
-  /// 'crashed' | 'restarted' | 'backoff' (CrashEventKind, kebab-case).
+  /** 'crashed' | 'restarted' | 'backoff' */
   kind: string;
 }
 
-/// Fire a cloud crash push for any NEW 'crashed' / 'backoff' event in the host
-/// journal (we skip 'restarted' — an auto-recovery needs no alert). The cloud
-/// fans the ID-only push out to the org's members' phones (handy for teammates
-/// without this desktop open); it's credential-gated + best-effort, and
-/// `cloud_push_notify` no-ops when the user isn't signed in. Reads the LOCAL
-/// node's journal regardless of the active node — remote agents own theirs.
+// Push a cloud crash alert for each NEW 'crashed'/'backoff' journal event ('restarted' needs none).
 async function checkCrashJournal() {
   let events: CrashJournalEvent[];
   try {
@@ -135,14 +111,13 @@ async function checkCrashJournal() {
   if (events.length === 0) return;
   const newest = events.reduce((m, e) => Math.max(m, e.ts), 0);
   if (lastCrashEventTs === null) {
-    lastCrashEventTs = newest; // baseline only — don't alert for pre-existing events
+    lastCrashEventTs = newest;
     return;
   }
   for (const e of events) {
     if (e.ts > lastCrashEventTs && (e.kind === 'crashed' || e.kind === 'backoff')) {
       void invoke('cloud_push_notify', { serverId: e.serverId, kind: e.kind }).catch((err) => {
-        // Not-signed-in / no-team is the normal case — but keep it visible in
-        // dev tools so an arg-shape regression can't hide again.
+        // Not-signed-in is the normal case; keep it visible in dev tools.
         console.debug('[push] cloud_push_notify skipped:', err);
       });
     }
@@ -169,9 +144,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
       const servers = await invoke<Server[]>('list_servers', {
         nodeId: nodeAtStart,
       });
-      // Drop a response that resolved after the user switched nodes (or a
-      // newer fetch started) — otherwise the previous node's list clobbers the
-      // current one for up to a full poll interval (audit finding).
+      // Drop a response that resolved after a node switch or a newer fetch.
       if (gen !== fetchGeneration || nodeAtStart !== currentNodeId()) return;
       set({ servers, isLoading: false });
       void checkCrashJournal();
@@ -225,9 +198,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
         get().startStatsPolling(serverId);
         await get().fetchServers();
       }
-      // Sub-user mode: cmd is fire-and-forget through the relay. The
-      // owner's RelayCommandExecutor runs `start_server` locally and
-      // broadcasts an `event` we'll surface as a toast in a future tier.
+      // Sub-user mode: the cmd went through the relay; the owner's executor runs it.
       emitAudit('server.start', serverId);
       set({ isLoading: false });
     } catch (error) {
@@ -254,9 +225,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
       set({ isLoading: false });
       return true;
     } catch (error) {
-      // Return the outcome so callers like handleRestart can abort the start
-      // when the stop failed, instead of racing a start onto a still-running
-      // container and clobbering this error (audit finding).
+      // Return the outcome so a restart can abort when the stop failed.
       set({ error: String(error), isLoading: false });
       return false;
     }
@@ -266,11 +235,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       if (isRelayRouted()) {
-        // Sub-user mode: ship the delete to the owner's machine as a relay
-        // cmd (their executor runs delete_server, admin-gated). None of the
-        // local calls below apply — the old unconditional detachFromServer
-        // here fired a stray server.stop at the owner's LIVE server before
-        // the local delete failed (audit finding).
+        // Sub-user mode: relay the delete to the owner's machine; nothing local applies.
         await routeServerAction('server.delete', { serverId, deleteData });
         emitAudit('server.delete', serverId, { deleteData });
         const selected = get().selectedServer;
@@ -289,6 +254,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
       const selected = get().selectedServer;
       if (selected?.id === serverId) set({ selectedServer: null });
       await get().fetchServers();
+      tombstoneInCloud(serverId);
       autoSyncToCloud();
       set({ isLoading: false });
     } catch (error) {
@@ -299,11 +265,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
   updateServerConfig: async (serverId, config) => {
     try {
       if (isRelayRouted()) {
-        // Sub-user (admin) editing an owner's server: the server lives on the
-        // owner's Docker, not ours. Ship the config change over the relay
-        // instead of invoking the local command, which would fail with a
-        // "server not found" (audit finding). server.update_config is
-        // admin-gated cloud-side.
+        // Sub-user (admin): the server lives on the owner's Docker; relay the change.
         await routeServerAction('server.update_config', { serverId, config });
         emitAudit('server.update_config', serverId);
         return true;
@@ -331,9 +293,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
     set({ isLoading: true, error: null, logs: [] });
     try {
       if (isRelayRouted()) {
-        // Sub-user: relay the reinstall to the owner's machine. The old path
-        // called attachToServer first, which fired a stray server.start at
-        // the owner before the local invoke failed (audit finding).
+        // Sub-user: relay the reinstall to the owner's machine.
         await routeServerAction('server.reinstall', { serverId });
         set({ isLoading: false });
         return;
@@ -355,8 +315,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
     set({ isLoading: true, error: null, logs: [] });
     try {
       if (isRelayRouted()) {
-        // No relay cmd exists for a game update — surface that honestly
-        // instead of firing stray cmds + a doomed local invoke.
+        // No relay cmd exists for a game update; say so instead of firing a doomed local invoke.
         set({
           error: "Updating the game image runs on the owner's machine — ask the owner to run it.",
           isLoading: false,
@@ -401,9 +360,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
           nodeId: currentNodeId(),
         });
       }
-      // Truncate the command in metadata — full text could contain
-      // sensitive paths / args. The audit's purpose is "Bob ran a
-      // console cmd at 12:34", not auditable transcript.
+      // Truncate the command in metadata; the full text could carry sensitive args.
       emitAudit('server.send_command', serverId, {
         command_preview: command.slice(0, 60),
       });
@@ -446,21 +403,13 @@ export const useServerStore = create<ServerState>((set, get) => ({
       logUnlisten();
       set({ logUnlisten: null });
     }
-    // Generation guard: `listen()` resolves asynchronously, so a detach (or a
-    // second attach) racing in before it lands used to leak an orphaned
-    // listener that doubled every log line (audit finding). Any newer
-    // attach/detach bumps the generation and the stale resolution self-drops.
+    // Generation guard: a detach/attach racing a pending listen() must not leak a duplicate listener.
     const gen = ++attachGeneration;
 
     try {
-      // The xterm listener subscribes to local `server-log` Tauri events
-      // regardless of who emitted them. In sub-user mode, the
-      // RelayLogBridge re-emits relay `console_line` events as local
-      // `server-log` events, so this single listener feeds both modes.
+      // One listener for both modes: RelayLogBridge re-emits relay console lines as `server-log`.
       const unlisten = await listen<LogEvent>('server-log', (event) => {
         if (event.payload.server_id === serverId) {
-          // Cap the buffer — an unbounded array grew without limit on a chatty
-          // server and every append copied the whole thing (audit finding).
           set((state) => {
             const next = [...state.logs, event.payload.line];
             return { logs: next.length > MAX_CONSOLE_LINES ? next.slice(-MAX_CONSOLE_LINES) : next };
@@ -474,12 +423,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
 
       set({ logUnlisten: unlisten, isStreaming: true });
 
-      // Route the actual "start the stream" call. Owner: local Tauri command
-      // kicks Docker's log reader. Sub-user: relay cmd asks the owner's
-      // RelayCommandExecutor to do the same on their hardware, and the
-      // owner's RelayLogBridge forwards each line. Pure probe — the old
-      // routeServerAction('server.start') call here actually STARTED the
-      // owner's server in sub-user mode (audit finding).
+      // Owner: start Docker's log reader locally. Sub-user: ask the owner's executor over the relay.
       if (!isRelayRouted()) {
         await invoke('attach_server', {
           serverId,
@@ -509,8 +453,6 @@ export const useServerStore = create<ServerState>((set, get) => ({
       set({ logUnlisten: null, isStreaming: false });
     }
     try {
-      // Pure probe — the old routeServerAction('server.stop') call here
-      // actually STOPPED the owner's server in sub-user mode (audit finding).
       if (!isRelayRouted()) {
         await invoke('detach_server', { serverId });
       } else {
@@ -550,9 +492,7 @@ export const useServerStore = create<ServerState>((set, get) => ({
   clearLogs: () => set({ logs: [] }),
 }));
 
-// Re-fetch the server list whenever the active node changes so the UI
-// always reflects the servers on the node the user is currently looking
-// at. Detach any active log stream first — it belongs to the old node.
+// Re-fetch when the active node changes; the old node's log stream is detached first.
 let lastActive = useNodesStore.getState().activeNodeId;
 useNodesStore.subscribe((state) => {
   if (state.activeNodeId !== lastActive) {

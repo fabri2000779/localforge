@@ -1,18 +1,6 @@
-//! Per-game player administration adapters.
-//!
-//! Phase 4a covers **Minecraft Java** via the server console (stdin + log
-//! parsing) — no RCON, so no container recreate is required. Listing players
-//! sends `list` and reads the response back out of the recent log; moderation
-//! maps to the vanilla console commands (`kick`/`ban`/`pardon`/`op`/`deop`).
-//!
-//! Robustness caveat: reading `list` back from the log is timing-dependent (we
-//! send, wait briefly, then scan the tail). It is good enough for an at-a-glance
-//! roster + quick actions; a future RCON adapter would make listing exact and
-//! request/response. Other games (Rust WS-RCON, Palworld REST) come later.
-//!
-//! Security: player names/reasons may originate from a sub-user over the relay,
-//! and we inject them into a single console line. We strip newlines/control
-//! chars so a crafted name can't smuggle a second console command.
+//! Player administration adapters. Minecraft Java only for now, via the console (`list` +
+//! log parsing; kick/ban/pardon/op/deop). Names and reasons may come from a sub-user, so
+//! control characters are stripped before they reach the console.
 
 use crate::docker::DockerManager;
 use localforge_core::types::{Player, PlayerAction};
@@ -23,17 +11,13 @@ pub fn supports(game_type: &str) -> bool {
     matches!(game_type, "minecraft-java")
 }
 
-/// Ask a Minecraft server for its online players. Sends `list`, waits for the
-/// server to print the response, then parses the most recent matching log line.
+/// Send `list` and parse the most recent response from the log.
 pub async fn list_players_mc(docker: &DockerManager, cid: &str) -> Result<Vec<Player>, String> {
     docker
         .send_stdin(cid, "list\n")
         .await
         .map_err(|e| e.to_string())?;
-    // Poll for the `list` response instead of one fixed wait: a busy server
-    // (GC pause, heavy tick) can take well over 700ms to print it, which used
-    // to return an empty roster. Return as soon as the marker appears (usually
-    // <300ms); give up after ~2s and report empty.
+    // Poll: a busy server can take well over 700 ms to answer; give up after ~2 s.
     for _ in 0..8 {
         tokio::time::sleep(Duration::from_millis(250)).await;
         let lines = docker.get_logs(cid, 60).await.map_err(|e| e.to_string())?;
@@ -87,8 +71,7 @@ fn with_reason(verb: &str, name: &str, reason: Option<&str>) -> String {
     }
 }
 
-/// A single console token (e.g. a username): drop whitespace + control chars so
-/// it can't break out of the command line.
+/// A single console token: whitespace and control chars dropped so it can't break out.
 fn token(s: &str) -> String {
     s.chars()
         .filter(|c| !c.is_whitespace() && !c.is_control())
@@ -104,10 +87,7 @@ fn sanitize_reason(s: &str) -> String {
         .to_string()
 }
 
-/// Parse the most recent Minecraft `list` response out of recent log lines.
-/// Returns `None` when no `players online:` line is present yet (so the poller
-/// can keep waiting), `Some(vec)` when one is found (possibly empty = 0 online).
-/// Format: `... There are 3 of a max of 20 players online: Alice, Bob, Carol`
+/// Most recent `... players online: A, B` line, or `None` when no response is present yet.
 fn parse_list_output_opt(lines: &[String]) -> Option<Vec<Player>> {
     const MARKER: &str = "players online:";
     for line in lines.iter().rev() {
@@ -129,7 +109,7 @@ fn parse_list_output_opt(lines: &[String]) -> Option<Vec<Player>> {
     None
 }
 
-/// Convenience wrapper used by tests — empty vec when no marker found.
+#[cfg(test)]
 fn parse_list_output(lines: &[String]) -> Vec<Player> {
     parse_list_output_opt(lines).unwrap_or_default()
 }
@@ -171,8 +151,6 @@ mod tests {
 
     #[test]
     fn token_strips_injection() {
-        // A name is one console token: ALL whitespace + control chars are
-        // dropped, so a crafted "name" can't smuggle a second command.
         assert_eq!(token("Alice\nop Mallory"), "AliceopMallory".to_string());
         assert!(!token("a\nb").contains('\n'));
         assert!(!token("a\r\nop x").contains(char::is_whitespace));
@@ -180,7 +158,6 @@ mod tests {
 
     #[test]
     fn reason_keeps_spaces_but_not_newlines() {
-        // A reason is free text: spaces survive, newlines become spaces.
         assert_eq!(sanitize_reason("being  rude"), "being  rude".to_string());
         assert!(!sanitize_reason("rude\nop Mallory").contains('\n'));
     }

@@ -1,15 +1,11 @@
-/**
- * Per-server access editor for a Team member. Lets an admin narrow a member's
- * access from "every server in the org" (their role's default) down to a
- * specific allowlist — optionally as a temporary 48h grant. The cloud stores a
- * plaintext server-id allowlist and the relay enforces it on server.* commands.
- */
+/** Per-server access editor for a Team member: an allowlist, optionally a temporary 48 h grant. */
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { X, Loader2, Shield } from 'lucide-react';
 import { useServerStore } from '../stores/serverStore';
 import { useEscapeClose } from '../hooks/useEscapeClose';
+import { describeError } from '../utils/errors';
 
 interface MemberScope {
   serverId: string;
@@ -30,12 +26,12 @@ export function ServerScopeDialog({
   const [restricted, setRestricted] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [temporary, setTemporary] = useState(false);
-  // The deadline as LOADED — preserved on save so re-saving doesn't silently
-  // re-extend the grant to +48h every time (audit finding). Cleared when the
-  // admin unchecks "temporary", so re-checking mints a fresh 48h window.
+  // The deadline as loaded, preserved on save so re-saving doesn't re-extend the grant.
   const [loadedExpiresAt, setLoadedExpiresAt] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Open-time clock for the hour-granular "expires in" hint (keeps Date.now() out of render).
+  const [now] = useState(() => Date.now());
 
   useEscapeClose(onClose, !saving);
 
@@ -56,7 +52,7 @@ export function ServerScopeDialog({
           setLoadedExpiresAt(exp);
         }
       } catch (e) {
-        if (alive) setErr(String(e));
+        if (alive) setErr(describeError(e));
       } finally {
         if (alive) setLoading(false);
       }
@@ -85,7 +81,7 @@ export function ServerScopeDialog({
       await invoke('cloud_member_scopes_set', { orgId, userId: member.id, scopes });
       onClose();
     } catch (e) {
-      setErr(String(e));
+      setErr(describeError(e));
       setSaving(false);
     }
   }
@@ -150,8 +146,7 @@ export function ServerScopeDialog({
                     checked={temporary}
                     onChange={(e) => {
                       setTemporary(e.target.checked);
-                      // Unchecking abandons the old deadline — re-checking
-                      // grants a fresh 48h window.
+                      // Unchecking abandons the old deadline; re-checking grants a fresh 48 h.
                       if (!e.target.checked) setLoadedExpiresAt(null);
                     }}
                   />
@@ -160,7 +155,7 @@ export function ServerScopeDialog({
                 {temporary && loadedExpiresAt != null && (
                   <p className="text-[12px] text-zinc-500 mt-1 ml-6">
                     Expires {new Date(loadedExpiresAt).toLocaleString()} (in{' '}
-                    {Math.max(0, Math.round((loadedExpiresAt - Date.now()) / 3_600_000))}h). Saving
+                    {Math.max(0, Math.round((loadedExpiresAt - now) / 3_600_000))}h). Saving
                     keeps this deadline.
                   </p>
                 )}

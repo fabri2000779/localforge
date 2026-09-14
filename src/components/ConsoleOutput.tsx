@@ -1,4 +1,4 @@
-// ANSI color code parser for console output
+// Console output with ANSI colour parsing.
 
 import React from 'react';
 
@@ -44,11 +44,9 @@ interface TextSegment {
   underline?: boolean;
 }
 
-// Parse ANSI escape sequences
 function parseAnsi(input: string): TextSegment[] {
   const segments: TextSegment[] = [];
   
-  // Match ANSI escape sequences
   const ansiRegex = /\x1b\[([0-9;]*)m|\u001b\[([0-9;]*)m/g;
   
   let lastIndex = 0;
@@ -114,7 +112,6 @@ function parseAnsi(input: string): TextSegment[] {
   return segments.length > 0 ? segments : [{ text: input, classes: [] }];
 }
 
-// Detect log level and return appropriate styling
 function getLogLevelStyle(line: string): { className: string; lineClass: string } {
   const lowerLine = line.toLowerCase();
   
@@ -136,10 +133,8 @@ interface ConsoleLineProps {
   index: number;
 }
 
-// Memoised: on a chatty server (10-30 lines/s) each new line re-rendered every
-// prior line and re-ran parseAnsi over all of them — O(n) work per line (audit
-// finding). line+index are stable per row, so memo makes appends O(1).
-export const ConsoleLine = React.memo(function ConsoleLine({ line, index }: ConsoleLineProps) {
+// Memoised: appends must not re-run parseAnsi over every prior line.
+const ConsoleLine = React.memo(function ConsoleLine({ line, index }: ConsoleLineProps) {
   const hasAnsi = /\x1b\[|\u001b\[/.test(line);
   
   let segments: TextSegment[];
@@ -153,7 +148,6 @@ export const ConsoleLine = React.memo(function ConsoleLine({ line, index }: Cons
     segments = [{ text: line, classes: style.className ? [style.className] : [] }];
   }
   
-  // Check if this is a user command echo
   const isCommand = line.startsWith('> ');
   if (isCommand) {
     lineClass = 'bg-sky-950/20 border-l-sky-500';

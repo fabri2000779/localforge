@@ -4,6 +4,7 @@ import {
   Package, Settings, ChevronDown, ChevronUp, Copy, Check,
   RotateCcw, ExternalLink, FolderOpen, FileCode, ArrowRight, Store
 } from 'lucide-react';
+import { appAlert, appConfirm } from '../stores/dialogStore';
 import { useGamesStore } from '../stores/gamesStore';
 import { GameConfig, DEFAULT_GAME_CONFIG, Variable, PortConfig, ConfigFile, SystemMapping, FieldType, ConfigFileFormat } from '../types';
 import { open } from '@tauri-apps/plugin-shell';
@@ -60,7 +61,7 @@ export function GamesPage() {
   const handleSave = async () => {
     if (!editingGame) return;
     if (!editingGame.game_type || !editingGame.name || !editingGame.docker_image) {
-      alert('Please fill in Game ID, Name, and Docker Image');
+      await appAlert({ title: 'Missing fields', message: 'Please fill in Game ID, Name, and Docker Image.' });
       return;
     }
     const success = await addGame(editingGame);
@@ -78,9 +79,8 @@ export function GamesPage() {
   const handleDelete = async (gameType: string) => {
     const game = games.find(g => g.game_type === gameType);
     if (!game?.is_custom) return;
-    if (confirm('Delete this custom game definition?')) {
-      await deleteGame(gameType);
-    }
+    const ok = await appConfirm({ title: 'Delete this custom game definition?', confirmLabel: 'Delete', danger: true });
+    if (ok) await deleteGame(gameType);
   };
 
   const handleExport = async (gameType: string) => {
@@ -111,9 +111,8 @@ export function GamesPage() {
   };
 
   const handleReset = async () => {
-    if (confirm('Reset all games to defaults?')) {
-      await resetToDefaults();
-    }
+    const ok = await appConfirm({ title: 'Reset all games to defaults?', confirmLabel: 'Reset', danger: true });
+    if (ok) await resetToDefaults();
   };
 
   const handleOpenConfigFolder = async () => {
@@ -155,7 +154,10 @@ export function GamesPage() {
   const addPort = () => {
     if (!newPortContainer.trim() || !editingGame) return;
     const portNum = parseInt(newPortContainer);
-    if (isNaN(portNum) || portNum < 1 || portNum > 65535) { alert('Invalid port number'); return; }
+    if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+      void appAlert({ title: 'Invalid port number', message: 'Use a value between 1 and 65535.' });
+      return;
+    }
     const newPort: PortConfig = { 
       container_port: portNum, 
       protocol: newPortProtocol, 
@@ -243,7 +245,7 @@ export function GamesPage() {
     updateEditingGame({ config_files: newFiles });
   };
 
-  // Get variables that can be mapped to ports (port-type or number-type with PORT in name)
+  // Variables that can be mapped to ports.
   const getPortMappedVariables = () => {
     if (!editingGame) return [];
     return editingGame.variables.filter(v => 
@@ -704,7 +706,6 @@ export function GamesPage() {
   );
 }
 
-// Editable config variable row component
 interface ConfigVarRowProps {
   configKey: string;
   configValue: string;
@@ -716,7 +717,6 @@ function ConfigVarRow({ configKey, configValue, onUpdate, onRemove }: ConfigVarR
   const [key, setKey] = useState(configKey);
   const [value, setValue] = useState(configValue);
 
-  // Update parent when blur
   const handleKeyBlur = () => {
     if (key !== configKey || value !== configValue) {
       onUpdate(key, value);

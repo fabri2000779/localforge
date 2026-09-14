@@ -1,26 +1,5 @@
-/**
- * Owner/sub-user-side fleet discovery. Mount once at the app root.
- *
- * When the user is signed in on a paid plan (so the relay is connected),
- * this bridge:
- *   1. Enumerates the org's machines (`cloud_list_machines`) + learns which
- *      one is THIS desktop (`get_this_machine`).
- *   2. Sends a `state.snapshot` cmd tagged `disc:<machineId>` to every
- *      ONLINE machine that isn't us — the relay routes it to that exact
- *      executor (agent socket, or the specific desktop by device id).
- *   3. Records each reply (and any live `server.state_changed` broadcast)
- *      in `fleetStore`, so the Servers UI can render live badges + machine
- *      grouping for servers we can't reach with a direct Docker connection.
- *
- * We deliberately DON'T probe our own machine: the relay excludes the
- * sender from event broadcasts, so a self-probe never echoes back. Our own
- * servers' status comes from the serverStore (authoritative, direct) — see
- * `useFleetServers`.
- *
- * Re-probes on relay (re)connect and whenever the online set changes
- * (presence events refresh the machine list). Cheap: one tiny cmd per
- * online machine, only when membership actually changes.
- */
+/** Fleet discovery (mount once): probes every online machine but ours with a `state.snapshot` cmd
+ *  tagged `disc:<machineId>` and records replies + live state changes in fleetStore. */
 import { useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -58,26 +37,20 @@ export function RelayFleetBridge() {
 
   const enabled = !!meId && plan !== null && plan !== 'free';
 
-  // Set up the relay event plumbing whenever we're enabled / the active org
-  // changes. Refetch the fleet on connect + presence so the online set the
-  // probe loop reads stays current.
+  // Relay event plumbing per enabled/active-org change.
   useEffect(() => {
     const { clear } = useFleetStore.getState();
     if (!enabled) {
       clear();
       return;
     }
-    // Fresh org context — drop stale statuses from the previous org.
     clear();
     const nodes = useNodesStore.getState();
     void nodes.fetchThisMachine();
     void nodes.fetchMachines();
 
     const unsubs: Array<() => void> = [];
-    // Guard the async listen() resolutions against a cleanup that fires first
-    // (org switch bumps [enabled, currentOrgId]); otherwise a late push leaks a
-    // listener bound to the previous org (audit finding, same class as the
-    // relay cmd/log bridges).
+    // `cancelled` guards listen() resolutions that land after cleanup.
     let cancelled = false;
     const track = (u: () => void) => { if (cancelled) u(); else unsubs.push(u); };
     listen('cloud://relay-connected', () => {
@@ -85,9 +58,7 @@ export function RelayFleetBridge() {
     }).then(track);
     listen('cloud://relay-presence', () => {
       void useNodesStore.getState().fetchMachines();
-      // A member just (re)joined — if we own the active org, seal any newly
-      // pending members so they can decrypt right away. No-op (403) if we're
-      // not the owner.
+      // A member (re)joined: seal pending grants if we own the org (403 otherwise).
       if (currentOrgId) {
         void invoke('cloud_process_grants', { orgId: currentOrgId }).catch(() => {});
       }
@@ -95,22 +66,18 @@ export function RelayFleetBridge() {
     listen<RelaySnapshotEvent>('cloud://relay-event', (event) => {
       const msg = event.payload;
       if (!msg) return;
-      // The org DEK was rotated (a member was removed). Our cached key is now
-      // stale, so re-acquire the current one for the active org.
+      // The org DEK was rotated: re-acquire the current key.
       if (msg.kind === 'dek_rotated') {
         const auth = useAuthStore.getState();
         const cur = auth.orgs.find((o) => o.id === auth.currentOrgId);
         if (!cur) return;
         if (!cur.isOwner) {
-          // Member: re-open the fresh grant (cloud_unlock_org_dek prefers the
-          // cloud grant, so it picks up the rotated DEK) + re-pull.
+          // Member: re-open the fresh grant and re-pull.
           void invoke('cloud_unlock_org_dek', { orgId: cur.id })
             .then(() => auth.syncPull())
             .catch(() => {});
         } else {
-          // Owner's OTHER device: our local DEK may be stale. Re-pull; if the
-          // new blobs don't decrypt, prompt a re-unlock. The device that
-          // rotated holds the new key (and is excluded from this broadcast).
+          // Owner's other device: re-pull; if nothing decrypts, prompt a re-unlock.
           void auth
             .syncPull()
             .then((remote) => {
@@ -139,8 +106,7 @@ export function RelayFleetBridge() {
     };
   }, [enabled, currentOrgId]);
 
-  // The online machines worth probing — everything except us (self-probes
-  // never echo back; our own status comes from the serverStore).
+  // Online machines worth probing (never ourselves; self-probes don't echo).
   const targetKey = useMemo(() => {
     if (!enabled) return '';
     return cloudMachines
@@ -150,8 +116,7 @@ export function RelayFleetBridge() {
       .join(',');
   }, [enabled, cloudMachines, thisMachine]);
 
-  // Probe whenever that set changes (initial load, a machine comes/goes
-  // online, org switch). Empty key = nothing to do.
+  // Re-probe whenever that set changes.
   useEffect(() => {
     if (!targetKey) return;
     for (const id of targetKey.split(',')) probe(id);

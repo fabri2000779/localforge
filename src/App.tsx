@@ -24,6 +24,7 @@ import { MachineNameDialog } from './components/MachineNameDialog';
 import { SyncKeyDialog } from './components/SyncKeyDialog';
 import { UpdateChecker } from './components/UpdateChecker';
 import { OnboardingWizard } from './components/OnboardingWizard';
+import { AppDialog } from './components/AppDialog';
 import './App.css';
 
 function App() {
@@ -36,11 +37,8 @@ function App() {
   useEffect(() => {
     checkStatus();
     fetchGames();
-    // Auth is optional — try to re-hydrate from the OS keychain, but
-    // never block the rest of the app on it.
+    // Auth is optional; never block the app on it.
     void hydrateAuth();
-    // Subscribe to the OAuth deep-link events so the modal closes
-    // automatically when the user signs in via their browser.
     let unsubscribe: (() => void) | null = null;
     subscribeToAuthEvents().then((fn) => { unsubscribe = fn; });
     return () => { if (unsubscribe) unsubscribe(); };
@@ -54,17 +52,8 @@ function App() {
     }
   }, [status?.running, fetchServers]);
 
-  // Wrap EVERY render path in BrowserRouter — TitleBar's AccountChip
-  // calls useNavigate, which throws (silent blank screen in React 19
-  // prod) when rendered outside a Router context. Pre-Phase-5 the
-  // DockerRequired return didn't need a Router; today it does.
-  // The Sidebar (and its NodeSelector) is ALWAYS mounted — when the active
-  // node is unreachable we show the gate only in the content area, never
-  // full-screen. Otherwise switching to an offline remote node would hide
-  // the switcher and trap the user with no way back (dockerStore re-checks
-  // on activeNodeId change, so switching back to a live node clears it).
-  // Relay bridges target the LOCAL node, so they run regardless of which
-  // node is active in the UI.
+  // Always inside BrowserRouter (TitleBar uses useNavigate) with the Sidebar always mounted, so an
+  // unreachable active node gates only the content area and the node switcher stays reachable.
   const activeDown = status != null && !status.running;
   return (
     <BrowserRouter>
@@ -101,6 +90,7 @@ function App() {
         <MachineNameDialog />
         <OnboardingWizard />
         <UpdateChecker />
+        <AppDialog />
       </div>
     </BrowserRouter>
   );

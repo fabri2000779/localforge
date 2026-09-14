@@ -1,12 +1,6 @@
 import { useEffect } from 'react';
 
-/**
- * Close a modal on Escape. Shared by every dialog in the app so keyboard
- * users aren't trapped (audit finding: no dialog closed on Escape).
- *
- * `enabled` lets a modal opt out while a nested confirm is up or an async
- * action is in flight.
- */
+/** Close a modal on Escape; `enabled` lets a dialog opt out during nested confirms or async work. */
 export function useEscapeClose(onClose: () => void, enabled = true) {
   useEffect(() => {
     if (!enabled) return;

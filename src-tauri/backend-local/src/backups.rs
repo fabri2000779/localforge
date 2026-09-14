@@ -1,16 +1,4 @@
-//! Bring-your-own-S3 backups.
-//!
-//! Archive a server's data dir (tar + gzip) and ship it to the user's own
-//! S3-compatible bucket; list / restore / delete. Runs ON THE HOST, so both
-//! the desktop and the headless agent get it for free (it's part of
-//! `LocalDockerBackend`). No OpenSSL — `rust-s3` with the rustls feature, matching
-//! the workspace's single TLS stack.
-//!
-//! v1 archives the data dir as-is (a live snapshot). For a perfectly consistent
-//! backup the UI recommends stopping the server first; a Minecraft `save-off` /
-//! `save-all flush` / `save-on` fence is a documented follow-up. Restore always
-//! stops the server and moves the current data aside before extracting, so a
-//! failed restore never destroys the existing world.
+//! Bring-your-own-S3 backups (tar+gzip via rust-s3/rustls), run on the host by `LocalDockerBackend`.
 
 use std::path::{Path, PathBuf};
 
@@ -25,13 +13,8 @@ fn server_prefix(server_id: &str) -> String {
     format!("localforge/{server_id}/")
 }
 
-/// Reject any object key that is not within this server's backup prefix.
-///
-/// Restore/delete keys arrive from the client — and on the agent from a
-/// possibly lower-privileged caller who only has rights to *this* server.
-/// Without this guard a crafted key (e.g. another server's prefix, or any
-/// object in a BYO bucket) could be read or deleted using the host's S3
-/// credentials. Confine every mutating/reading op to `localforge/<id>/`.
+/// Keys arrive from clients (on the agent, possibly a lower-privileged one): confine every
+/// op to `localforge/<id>/` so no other object in the bucket can be read or deleted.
 fn ensure_key_in_prefix(server_id: &str, key: &str) -> Result<()> {
     let prefix = server_prefix(server_id);
     if key.starts_with(&prefix) {
@@ -47,8 +30,7 @@ fn s3_err<E: std::fmt::Display>(e: E) -> BackendError {
     BackendError::Other(format!("s3: {e}"))
 }
 
-/// Build an S3 client for the user's destination. Path-style for MinIO and many
-/// S3-compatible providers; virtual-hosted (the default) for AWS.
+/// S3 client for the target; path-style for MinIO-like providers, virtual-hosted for AWS.
 fn bucket_for(target: &BackupTarget) -> Result<Bucket> {
     let region = Region::Custom {
         region: target.region.clone(),
@@ -71,9 +53,7 @@ fn bucket_for(target: &BackupTarget) -> Result<Bucket> {
     Ok(*bucket)
 }
 
-// ---------------------------------------------------------------------------
-// Archive helpers (blocking; run via spawn_blocking)
-// ---------------------------------------------------------------------------
+// Archive helpers (blocking; run via spawn_blocking).
 
 fn archive_dir(src_dir: &Path) -> Result<PathBuf> {
     use flate2::write::GzEncoder;
@@ -85,8 +65,7 @@ fn archive_dir(src_dir: &Path) -> Result<PathBuf> {
     let file = std::fs::File::create(&tmp).map_err(BackendError::io)?;
     let enc = GzEncoder::new(file, Compression::default());
     let mut builder = tar::Builder::new(enc);
-    // Archive the dir CONTENTS at the archive root, so extraction lands the
-    // files directly back into the (recreated) data dir.
+    // Archive the dir CONTENTS at the root so extraction lands directly in the data dir.
     builder
         .append_dir_all(".", src_dir)
         .map_err(BackendError::io)?;
@@ -104,12 +83,7 @@ fn extract_into(archive: &Path, dest_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Public ops (called from the NodeBackend impl)
-// ---------------------------------------------------------------------------
-
-/// Archive `data_path` and stream it to the bucket under the server's prefix.
-/// Returns the object key written.
+/// Archive `data_path` and upload it under the server's prefix; returns the object key.
 pub async fn upload(target: &BackupTarget, server_id: &str, data_path: &Path) -> Result<String> {
     let src = data_path.to_path_buf();
     let tmp = tokio::task::spawn_blocking(move || archive_dir(&src))
@@ -122,7 +96,7 @@ pub async fn upload(target: &BackupTarget, server_id: &str, data_path: &Path) ->
     let bucket = bucket_for(target)?;
     let mut reader = tokio::fs::File::open(&tmp).await.map_err(BackendError::io)?;
     let put = bucket.put_object_stream(&mut reader, &key).await;
-    let _ = tokio::fs::remove_file(&tmp).await; // best-effort cleanup
+    let _ = tokio::fs::remove_file(&tmp).await;
     put.map_err(s3_err)?;
     Ok(key)
 }
@@ -151,37 +125,43 @@ pub async fn list(target: &BackupTarget, server_id: &str) -> Result<Vec<BackupEn
     Ok(out)
 }
 
-/// Download `key` and extract it over `dest_dir`. The caller has already
-/// stopped the server and moved the old data aside.
-pub async fn download_extract(
+/// Download `key` to a temp file (validating the prefix first) so a restore can swap
+/// directories only once the bytes are on disk. The caller deletes the file.
+pub async fn download_archive(
     target: &BackupTarget,
     server_id: &str,
     key: &str,
-    dest_dir: &Path,
-) -> Result<()> {
+) -> Result<PathBuf> {
     ensure_key_in_prefix(server_id, key)?;
     let bucket = bucket_for(target)?;
     let tmp = std::env::temp_dir().join(format!(
         "localforge-restore-{}.tar.gz",
         uuid::Uuid::new_v4()
     ));
-    {
+    let res = async {
         let mut out = tokio::fs::File::create(&tmp).await.map_err(BackendError::io)?;
-        // Stream S3 → file so a multi-GB world isn't buffered in RAM (the
-        // upload side streams too, via put_object_stream).
+        // Stream to disk so a multi-GB world isn't buffered in RAM.
         bucket
             .get_object_to_writer(key, &mut out)
             .await
             .map_err(s3_err)?;
-        out.flush().await.map_err(BackendError::io)?;
+        out.flush().await.map_err(BackendError::io)
     }
-    let archive = tmp.clone();
+    .await;
+    if let Err(e) = res {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e);
+    }
+    Ok(tmp)
+}
+
+/// Extract a downloaded archive into `dest_dir` on a blocking thread; the archive is kept.
+pub async fn extract_archive(archive: &Path, dest_dir: &Path) -> Result<()> {
+    let archive = archive.to_path_buf();
     let dest = dest_dir.to_path_buf();
-    let res = tokio::task::spawn_blocking(move || extract_into(&archive, &dest))
+    tokio::task::spawn_blocking(move || extract_into(&archive, &dest))
         .await
-        .map_err(BackendError::other)?;
-    let _ = tokio::fs::remove_file(&tmp).await;
-    res
+        .map_err(BackendError::other)?
 }
 
 /// Delete a backup object from the bucket.

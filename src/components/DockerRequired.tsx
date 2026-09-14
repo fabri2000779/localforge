@@ -8,9 +8,7 @@ interface Props {
 }
 
 export function DockerRequired({ status, onRetry }: Props) {
-  // Distinguish "the user's local Docker is down" (a real Docker problem)
-  // from "the selected REMOTE node is unreachable" (not a Docker problem —
-  // they just need to switch back to a live machine in the sidebar).
+  // Local Docker down vs. an unreachable REMOTE node (just switch back to a live machine).
   const { nodes, activeNodeId } = useNodesStore();
   const active = nodes.find((n) => n.id === activeNodeId);
   const isRemote = active?.kind.kind === 'remote';

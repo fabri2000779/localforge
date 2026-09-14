@@ -1,22 +1,5 @@
-/**
- * Owner-side cross-machine server aggregation.
- *
- * The desktop already holds a live connection to every node it's paired
- * with — the local Docker daemon plus any remote agents added through the
- * Nodes page. So for the OWNER we can build a single unified server list
- * across all of them WITHOUT touching the cloud relay: just `list_servers`
- * per node, tagged with which machine it came from. Status is live (it's a
- * direct Docker read), and acting on a server targets its own node.
- *
- * This is what makes the desktop Servers screen match the mobile app's
- * group-by-machine view for the common case (you, the account owner, with
- * a desktop + an agent or two). Sub-users go through a different path
- * (`useDisplayedServers` + relay discovery) since they have no direct
- * connection to the owner's machines.
- *
- * Polls every 10s and whenever the node set changes; cheap because these
- * are local IPC calls, not Worker requests.
- */
+/** Owner-side unified server list across every paired node (local Docker + agents) via direct
+ *  `list_servers` calls; polls every 10 s. Sub-users use `useDisplayedServers` + relay discovery. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useNodesStore } from '../stores/nodesStore';
@@ -24,8 +7,7 @@ import type { Server } from '../types';
 
 export interface FleetEntry {
   server: Server;
-  /** The node id used to route actions + open the detail view. Matches the
-   *  ids in nodesStore (`'local'` or a remote's id). */
+  /** Node id used to route actions and open the detail view. */
   machineId: string;
   machineName: string;
   machineKind: 'local' | 'agent';
@@ -46,16 +28,14 @@ export function useOwnerFleet(enabled: boolean): {
   const fetchAll = useCallback(async () => {
     const myReq = ++reqIdRef.current;
     setLoading(true);
-    // Patch each node's list as it resolves rather than awaiting all of
-    // them: an offline remote's `list_servers` can hang on its request
-    // timeout, and we don't want one dead node to stall the whole view.
+    // Patch each node as it resolves so one dead node can't stall the view.
     await Promise.allSettled(
       nodes.map(async (n) => {
         let servers: Server[] = [];
         try {
           servers = await invoke<Server[]>('list_servers', { nodeId: n.id });
         } catch {
-          servers = []; // offline / unreachable — nothing this round
+          servers = [];
         }
         if (myReq === reqIdRef.current) {
           setByNode((prev) => ({ ...prev, [n.id]: servers }));
@@ -63,8 +43,7 @@ export function useOwnerFleet(enabled: boolean): {
       }),
     );
     if (myReq === reqIdRef.current) {
-      // Drop cached entries for nodes that no longer exist (a remote was
-      // unpaired) so byNode can't grow unbounded across the app's lifetime.
+      // Drop entries for unpaired nodes so byNode can't grow unbounded.
       const liveIds = new Set(nodes.map((n) => n.id));
       setByNode((prev) => {
         const next: Record<string, Server[]> = {};

@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { Play, Square, Trash2, Network, ArrowRight, Cloud, Server as ServerIcon } from 'lucide-react';
 import type { Server } from '../types';
+import { appConfirm } from '../stores/dialogStore';
 import { useServerStore } from '../stores/serverStore';
 import { useGamesStore } from '../stores/gamesStore';
 import { findGameConfig } from '../utils/gameTypes';
@@ -8,18 +9,12 @@ import { GameIcon } from './GameIcon';
 
 interface Props {
   server: Server;
-  /** When the visible servers span more than one machine, the card shows
-   *  which machine hosts this one. Undefined → no label (single-machine
-   *  view, e.g. a solo owner). */
+  /** Hosting machine label when the visible servers span several machines. */
   machineLabel?: string;
   machineKind?: 'desktop' | 'agent' | 'local' | 'unknown';
-  /** Override the "open detail" behaviour. The cross-machine fleet view
-   *  uses this to first switch the active node to the server's machine so
-   *  the detail screen resolves it. Default: navigate to /servers/:id. */
+  /** Override "open detail" (the fleet view switches the active node first). */
   onOpen?: () => void;
-  /** Override start/stop/delete so they target the server's OWN node rather
-   *  than the globally-active one. Default: the serverStore actions (which
-   *  act on the active node / relay-route for sub-users). */
+  /** Override start/stop/delete to target the server's own node. */
   onAction?: (action: 'start' | 'stop' | 'delete') => void;
 }
 
@@ -69,16 +64,16 @@ export function ServerCard({ server, machineLabel, machineKind, onOpen, onAction
 
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (
-      confirm(
-        `Delete server "${server.name}"? Your world data will be preserved.`,
-      )
-    ) {
-      if (onAction) onAction('delete');
-      // Pass deleteData:false so the delete honours the dialog's promise to
-      // preserve the world data — the store default is true (audit finding).
-      else await deleteServer(server.id, false);
-    }
+    const ok = await appConfirm({
+      title: `Delete server "${server.name}"?`,
+      message: 'Your world data will be preserved on disk.',
+      confirmLabel: 'Delete server',
+      danger: true,
+    });
+    if (!ok) return;
+    if (onAction) onAction('delete');
+    // deleteData:false honours the dialog's promise to keep the world data.
+    else await deleteServer(server.id, false);
   };
 
   return (

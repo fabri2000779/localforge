@@ -1,12 +1,4 @@
-/**
- * Fire-and-forget audit event emitter. The Rust side decides whether
- * to actually send (no-op when signed-out) so we don't have to check
- * auth state here.
- *
- * Used by the server lifecycle actions in serverStore. Adding new
- * actions: just call emitAudit(action, target, metadata) — the cloud
- * side validates the action against a fixed allowlist.
- */
+/** Fire-and-forget audit emitter; the Rust side no-ops when signed out. */
 import { invoke } from '@tauri-apps/api/core';
 
 export type AuditAction =

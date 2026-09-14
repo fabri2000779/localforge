@@ -1,12 +1,5 @@
-//! Cert-pinning rustls verifier.
-//!
-//! The agent ships with a self-signed certificate generated at install
-//! time; the desktop trusts it solely because its SHA-256 fingerprint
-//! matches what was copy-pasted into the "Add Node" form. We bypass the
-//! whole chain-of-trust verification — the fingerprint *is* the trust
-//! anchor — but still validate that the cert actually presents the
-//! expected key (no MITM can fake the fingerprint without breaking
-//! SHA-256).
+//! rustls verifier that pins the agent's self-signed cert by SHA-256 fingerprint; the
+//! fingerprint is the trust anchor, so chain validation is skipped.
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvider};
@@ -19,8 +12,7 @@ use std::sync::Arc;
 pub struct PinnedFingerprint(String);
 
 impl PinnedFingerprint {
-    /// Parse a fingerprint in any of the common shapes:
-    ///   `SHA256:AB:CD:...`  /  `ab:cd:...`  /  `abcd...`
+    /// Accepts `SHA256:AB:CD:…`, `ab:cd:…` or bare hex.
     pub fn parse(input: &str) -> Result<Self, FingerprintError> {
         let cleaned: String = input
             .trim()
@@ -34,10 +26,6 @@ impl PinnedFingerprint {
             return Err(FingerprintError::InvalidFormat);
         }
         Ok(Self(lower))
-    }
-
-    pub fn as_hex(&self) -> &str {
-        &self.0
     }
 }
 

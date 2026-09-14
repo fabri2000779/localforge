@@ -1,12 +1,4 @@
-/**
- * Server-level backup OPERATIONS.
- *
- * Storage configuration (which S3 bucket / credentials) lives in
- * Settings → Backup Storage. Here the user just picks WHICH of the org's
- * configured targets to use, then runs backups, restores, and deletes.
- *
- * If no storage is configured at all, an inline CTA links to Settings.
- */
+/** Per-server backup operations; storage targets are configured in Settings → Backup Storage. */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useNavigate } from 'react-router-dom';
@@ -14,6 +6,8 @@ import {
   Archive, HardDriveDownload, RotateCcw, Trash2, Loader2,
   AlertTriangle, ChevronDown, Settings,
 } from 'lucide-react';
+import { appConfirm } from '../stores/dialogStore';
+import { describeError } from '../utils/errors';
 
 interface OrgBackupTargetView {
   id: string;
@@ -49,8 +43,7 @@ export function BackupsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
 
   const [targets, setTargets] = useState<OrgBackupTargetView[] | null>(null); // null = loading
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Mirror of selectedId readable synchronously inside async list responses, so
-  // a stale list can tell it's for a target the user already switched away from.
+  // Sync mirror of selectedId so a stale list response can detect a target switch.
   const selectedIdRef = useRef<string | null>(null);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [listing, setListing] = useState(false);
@@ -58,16 +51,15 @@ export function BackupsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
-  // ── load targets ─────────────────────────────────────────────────────────
+  // load targets
 
   const loadTargets = useCallback(async () => {
     try {
       const list = await invoke<OrgBackupTargetView[]>('cloud_pull_backup_targets');
       setTargets(list);
-      // Functional update: only set default selection if nothing is selected
-      // yet — avoids re-triggering this callback on every selection change.
+      // Functional update: only default the selection when nothing is selected yet.
       setSelectedId((prev) => prev ?? list[0]?.id ?? null);
-    } catch (e) {
+    } catch {
       // Fall back to locally cached list on cloud error.
       try {
         const list = await invoke<OrgBackupTargetView[]>('cloud_list_backup_targets');
@@ -77,11 +69,11 @@ export function BackupsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
         setTargets([]);
       }
     }
-  }, []); // no selectedId dep — functional setSelectedId handles the default
+  }, []);
 
   useEffect(() => { void loadTargets(); }, [loadTargets]);
 
-  // ── backup list ───────────────────────────────────────────────────────────
+  // backup list
 
   const refreshList = useCallback(async () => {
     if (!selectedId) return;
@@ -91,28 +83,25 @@ export function BackupsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
       const list = await invoke<BackupEntry[]>('cloud_list_backups', {
         serverId, nodeId, targetId: selectedId,
       });
-      // Drop a list that resolved after the target changed — otherwise it
-      // populates rows whose keys belong to a DIFFERENT bucket (audit finding).
+      // Drop a list that resolved after the target changed.
       if (targetAtStart !== selectedIdRef.current) return;
       setBackups(list);
     } catch (e) {
       if (targetAtStart !== selectedIdRef.current) return;
-      setErr(String(e));
+      setErr(describeError(e));
     } finally {
       setListing(false);
     }
   }, [serverId, nodeId, selectedId]);
 
-  // Clear the previous bucket's rows the instant the target changes, so a
-  // Restore/Delete can't fire with a stale key against the new target while
-  // the new list loads (audit finding).
+  // Clear the previous bucket's rows the instant the target changes.
   useEffect(() => {
     selectedIdRef.current = selectedId;
     setBackups([]);
     if (selectedId) void refreshList();
   }, [refreshList, selectedId]);
 
-  // ── actions ───────────────────────────────────────────────────────────────
+  // actions
 
   async function backupNow() {
     setBusy('backup'); setErr(null); setNote(null);
@@ -120,31 +109,42 @@ export function BackupsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
       await invoke('cloud_backup_now', { serverId, nodeId, targetId: selectedId });
       setNote('Backup uploaded successfully.');
       await refreshList();
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setErr(describeError(e)); }
     finally { setBusy(null); }
   }
 
   async function restore(key: string) {
-    if (!confirm('Restore this backup? The server will be stopped and its current data moved aside before the backup is extracted.')) return;
+    const ok = await appConfirm({
+      title: 'Restore this backup?',
+      message: 'The server will be stopped and its current data moved aside before the backup is extracted.',
+      confirmLabel: 'Restore',
+    });
+    if (!ok) return;
     setBusy(`restore:${key}`); setErr(null); setNote(null);
     try {
       await invoke('cloud_restore_backup', { serverId, key, nodeId, targetId: selectedId });
       setNote('Restored. Start the server to load the restored data.');
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setErr(describeError(e)); }
     finally { setBusy(null); }
   }
 
   async function del(key: string) {
-    if (!confirm('Delete this backup from the bucket? This cannot be undone.')) return;
+    const ok = await appConfirm({
+      title: 'Delete this backup from the bucket?',
+      message: 'This cannot be undone.',
+      confirmLabel: 'Delete backup',
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(`del:${key}`); setErr(null); setNote(null);
     try {
       await invoke('cloud_delete_backup', { serverId, key, nodeId, targetId: selectedId });
       setBackups((b) => b.filter((x) => x.key !== key));
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setErr(describeError(e)); }
     finally { setBusy(null); }
   }
 
-  // ── render ────────────────────────────────────────────────────────────────
+  // render
 
   if (targets === null) {
     return (

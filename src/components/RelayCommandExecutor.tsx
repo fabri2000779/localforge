@@ -1,22 +1,11 @@
-/**
- * Owner-side hook that listens for `cloud://relay-cmd` events emitted
- * by the relay WS loop, dispatches them to local Tauri commands, and
- * sends an `event` response back through the relay so the originating
- * sub-user sees their UI update.
- *
- * The relay already enforces role-vs-cmd at the wire level so by the
- * time we get here the caller has at least the required role. We
- * double-check defensively anyway.
- *
- * Failure semantics: any thrown error from the Tauri command becomes
- * `{ kind: 'cmd_result', request_id, success: false, error: <msg> }`
- * so the sub-user gets a clean failure, not a silent hang.
- */
+/** Owner-side executor for `cloud://relay-cmd`: runs the mapped Tauri command and replies with a
+ *  `cmd_result` event (errors become `{ success: false, error }`). Roles are re-checked defensively. */
 import { useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { roleAtLeast, type OrgRole } from '../stores/authStore';
-import { useServerStore } from '../stores/serverStore';
+import { tombstoneInCloud, useServerStore } from '../stores/serverStore';
+import { describeError } from '../utils/errors';
 
 interface RelayCmd {
   type: 'cmd';
@@ -27,78 +16,40 @@ interface RelayCmd {
   by?: { user_id: string; role: OrgRole };
 }
 
-// Map relay cmds → local Tauri commands. Keep this in sync with the
-// server-side role map in apps/api/src/relay.ts so the two layers
-// don't drift. Anything not in this list is rejected.
-//
-// All `argTransform`s read `c.args.nodeId` so the cmd routes to the
-// right Docker host (local vs remote agent). nodeId defaults to
-// "local" on the receiving side when missing — backwards-compat for
-// v0.1.12 clients that didn't stamp it.
+// Relay cmd → Tauri command map; keep in sync with the role map in apps/api/src/relay.ts.
+// `nodeId` routes to the right Docker host and defaults to "local".
 const CMD_MAP: Record<string, { tauri: string; minRole: OrgRole; argTransform?: (cmd: RelayCmd) => Record<string, unknown> }> = {
   'server.start':         { tauri: 'start_server',  minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
   'server.stop':          { tauri: 'stop_server',   minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
   'server.send_command':  { tauri: 'send_command',  minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local', command: c.args?.command }) },
-  // attach / detach drive the log-stream lifecycle on the owner's
-  // machine. A sub-user opening ServerDetail sends attach so the
-  // owner's Rust starts emitting server-log events, which the
-  // RelayLogBridge forwards as console_line events the sub-user picks
-  // up.
+  // attach/detach drive the owner's log stream; RelayLogBridge forwards lines to the sub-user.
   'server.attach':        { tauri: 'attach_server', minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
   'server.detach':        { tauri: 'detach_server', minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
   'server.update_config': { tauri: 'update_server_config', minRole: 'admin', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local', config: c.args?.config }) },
   'server.delete':        { tauri: 'delete_server', minRole: 'admin',    argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local', deleteData: c.args?.deleteData ?? false }) },
   'server.reinstall':     { tauri: 'reinstall_server', minRole: 'admin', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
-  // Backups: the desktop resolves its own S3 creds from the keychain (the
-  // secret never crosses the relay — the cmd carries only ids/keys).
-  // targetId routes to the specific S3 target; if the mobile didn't set one
-  // (older client), None → first configured target (the Rust default).
+  // Backups: the S3 secret never crosses the relay; targetId defaults to the first configured target.
   'server.backup_now':     { tauri: 'cloud_backup_now',     minRole: 'operator', argTransform: (c) => ({ serverId: c.target, nodeId: c.args?.nodeId ?? 'local', targetId: c.args?.targetId ?? null }) },
   'server.restore_backup': { tauri: 'cloud_restore_backup', minRole: 'admin',    argTransform: (c) => ({ serverId: c.target, key: c.args?.key, nodeId: c.args?.nodeId ?? 'local', targetId: c.args?.targetId ?? null }) },
   'server.delete_backup':  { tauri: 'cloud_delete_backup',  minRole: 'admin',    argTransform: (c) => ({ serverId: c.target, key: c.args?.key, nodeId: c.args?.nodeId ?? 'local', targetId: c.args?.targetId ?? null }) },
   // Schedules (no secret).
   'server.upsert_schedule':{ tauri: 'upsert_schedule',      minRole: 'operator', argTransform: (c) => ({ schedule: c.args?.schedule, nodeId: c.args?.nodeId ?? 'local' }) },
-  // Pass the scope-checked target so Rust can verify the schedule belongs to it
-  // before deleting — the relay guards `target` by scope, but the delete keyed
-  // off schedule_id alone let a scoped member delete another server's schedule
-  // (audit finding).
+  // Pass the scope-checked target so Rust verifies the schedule belongs to it.
   'server.delete_schedule':{ tauri: 'delete_schedule',      minRole: 'operator', argTransform: (c) => ({ id: c.args?.schedule_id, serverId: c.target, nodeId: c.args?.nodeId ?? 'local' }) },
 };
 
-/**
- * Mount once at the app root. Only the OWNER of an org will receive
- * cmd messages (the relay only forwards member→owner). Sub-users
- * never see this code path.
- */
+/** Mount once at the app root; only the org owner receives cmd messages. */
 export function RelayCommandExecutor() {
   useEffect(() => {
-    // We don't gate on `me` here — the cmd events only arrive when the
-    // relay WS is connected, which itself requires auth. If the user
-    // signs out the relay loop stops emitting, so nothing fires. The effect
-    // runs ONCE ([] deps): it used to depend on `me`, which is never read in
-    // the body but churned this listener on every /me refresh — and if the
-    // deps changed before listen() resolved, the cleanup ran with
-    // unlisten===null and the late-resolving listener leaked forever,
-    // double-executing every relay cmd (audit finding).
+    // Runs once ([] deps): cmds only arrive while the authed relay is connected. `cancelled` guards
+    // a listen() that resolves after cleanup.
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     listen<RelayCmd>('cloud://relay-cmd', async (event) => {
       const msg = event.payload;
-      // ---------------------------------------------------------------------
-      // state.snapshot — read-only enumeration of every server we know
-      // about, with current status. Driven by the mobile companion on
-      // relay connect + pull-to-refresh so it can render per-row badges
-      // without fetching the encrypted blob. Doesn't dispatch through
-      // CMD_MAP because the response isn't a cmd_result — it's its own
-      // event kind that carries the full list inline.
-      // ---------------------------------------------------------------------
+      // state.snapshot: every server with status, for the mobile's row badges (replies with its own event kind).
       if (msg.cmd === 'state.snapshot') {
-        // Report the LOCAL node's servers — those are what get cloud-synced
-        // and therefore what the mobile lists. Reading serverStore here would
-        // report the ACTIVE node instead, so when the desktop is switched to
-        // a remote/VPS node the mobile's local servers lose their status
-        // badges. (Agent-node servers get their status from the agent itself,
-        // which the mobile queries directly over the relay.)
+        // Report the LOCAL node's servers (those are what get synced), whichever node is active.
         type SnapServer = { id: string; status: string; container_id?: string | null };
         let servers: SnapServer[];
         try {
@@ -123,14 +74,7 @@ export function RelayCommandExecutor() {
         }
         return;
       }
-      // ---------------------------------------------------------------------
-      // server.logs — return the recent console backlog (last N lines) so a
-      // freshly-opened mobile console isn't blank until the next live line
-      // arrives. The desktop UI populates its console the same way (a direct
-      // get_server_logs call on open); the relay had no equivalent, so a
-      // sub-user/mobile only ever saw lines emitted AFTER it attached. Reply
-      // with its own event kind (logs_snapshot), not a cmd_result.
-      // ---------------------------------------------------------------------
+      // server.logs: recent console backlog so a freshly opened mobile console isn't blank.
       if (msg.cmd === 'server.logs') {
         try {
           const res = await invoke<{ logs: string[] }>('get_server_logs', {
@@ -151,12 +95,7 @@ export function RelayCommandExecutor() {
         }
         return;
       }
-      // ---------------------------------------------------------------------
-      // server.stats — one-shot container resource usage (CPU% + memory),
-      // polled by the mobile while viewing a running server. Reuses the
-      // existing get_server_stats command; replies with a stats_snapshot
-      // event carrying the raw ContainerStats.
-      // ---------------------------------------------------------------------
+      // server.stats: one-shot container usage for the mobile.
       if (msg.cmd === 'server.stats') {
         try {
           const stats = await invoke('get_server_stats', {
@@ -176,12 +115,7 @@ export function RelayCommandExecutor() {
         }
         return;
       }
-      // ---------------------------------------------------------------------
-      // server.backups_list / server.schedules_list — read-only lists the
-      // mobile renders. Like server.logs, they reply with their own event
-      // kind carrying the data inline (not a cmd_result). On failure we send a
-      // cmd_result error so the mobile's spinner resolves instead of hanging.
-      // ---------------------------------------------------------------------
+      // backups_list / schedules_list: read-only lists; a cmd_result error resolves the mobile's spinner.
       if (msg.cmd === 'server.backups_list') {
         try {
           const backups = await invoke('cloud_list_backups', {
@@ -193,7 +127,7 @@ export function RelayCommandExecutor() {
             payload: { kind: 'backups_snapshot', request_id: msg.request_id, target: msg.target, backups },
           });
         } catch (e) {
-          respond(msg, { success: false, error: String(e) });
+          respond(msg, { success: false, error: describeError(e) });
         }
         return;
       }
@@ -207,16 +141,11 @@ export function RelayCommandExecutor() {
             payload: { kind: 'schedules_snapshot', request_id: msg.request_id, target: msg.target, schedules },
           });
         } catch (e) {
-          respond(msg, { success: false, error: String(e) });
+          respond(msg, { success: false, error: describeError(e) });
         }
         return;
       }
-      // ---------------------------------------------------------------------
-      // server.restart — a REAL restart (stop then start). There is no single
-      // `restart_server` Tauri command, and mapping restart→stop_server (as we
-      // used to) silently left the server stopped. Sequence the two existing
-      // commands so a mobile/sub-user "Restart" actually brings it back up.
-      // ---------------------------------------------------------------------
+      // server.restart: a real stop-then-start (there is no single restart command).
       if (msg.cmd === 'server.restart') {
         if (!roleAtLeast(msg.by?.role ?? null, 'operator')) {
           return respond(msg, { success: false, error: 'forbidden' });
@@ -227,7 +156,7 @@ export function RelayCommandExecutor() {
           await invoke('start_server', { serverId: msg.target, nodeId });
           respond(msg, { success: true });
         } catch (e) {
-          respond(msg, { success: false, error: String(e) });
+          respond(msg, { success: false, error: describeError(e) });
         }
         return;
       }
@@ -235,8 +164,7 @@ export function RelayCommandExecutor() {
       if (!handler) {
         return respond(msg, { success: false, error: `unknown_cmd:${msg.cmd}` });
       }
-      // Defense in depth — the relay already enforced this, but a
-      // misconfigured cloud version could in theory let something through.
+      // Defense in depth; the relay already enforced the role.
       if (!roleAtLeast(msg.by?.role ?? null, handler.minRole)) {
         return respond(msg, { success: false, error: 'forbidden' });
       }
@@ -244,12 +172,11 @@ export function RelayCommandExecutor() {
         const args = handler.argTransform ? handler.argTransform(msg) : {};
         await invoke(handler.tauri, args);
         respond(msg, { success: true });
+        afterMutatingCmd(msg);
       } catch (e) {
-        respond(msg, { success: false, error: String(e) });
+        respond(msg, { success: false, error: describeError(e) });
       }
     }).then((fn) => {
-      // If cleanup already ran while listen() was in flight, drop the listener
-      // the moment it resolves instead of leaking it.
       if (cancelled) fn();
       else unlisten = fn;
     });
@@ -261,6 +188,18 @@ export function RelayCommandExecutor() {
   }, []);
 
   return null;
+}
+
+/** Relayed cmds that change a server's definition bypass serverStore: mirror its refresh + cloud sync
+ *  (and tombstone on delete) so other devices don't keep a stale or ghost server. */
+const MUTATING_CMDS = new Set(['server.update_config', 'server.reinstall', 'server.delete']);
+function afterMutatingCmd(msg: RelayCmd): void {
+  if (!MUTATING_CMDS.has(msg.cmd)) return;
+  if (msg.cmd === 'server.delete' && msg.target) tombstoneInCloud(msg.target);
+  void useServerStore.getState().fetchServers();
+  void invoke('cloud_sync_now').catch(() => {
+    /* not signed in / sync not set up — nothing to push */
+  });
 }
 
 async function respond(

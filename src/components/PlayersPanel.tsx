@@ -1,16 +1,9 @@
-/**
- * Players tab — live roster + quick moderation for the active server.
- *
- * Reads/acts through the active node's backend (`list_players` / `player_action`)
- * — local Docker or an agent over HTTPS; the cloud is never involved. Only shown
- * for games we adapt (currently Minecraft Java, via the server console).
- *
- * Listing is best-effort: the host sends `list` and reads the response back from
- * the log, so the roster reflects the last sample (auto-refreshes every 30s).
- */
-import { useCallback, useEffect, useRef, useState } from 'react';
+/** Players tab: live roster + moderation via the active node's backend (Minecraft Java only). */
+import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Users, Loader2, RotateCcw, UserX, Ban, ShieldCheck, ShieldOff, Gavel } from 'lucide-react';
+import { appPrompt } from '../stores/dialogStore';
+import { describeError } from '../utils/errors';
 
 interface Player {
   name: string;
@@ -27,26 +20,25 @@ export function PlayersPanel({ serverId, nodeId }: { serverId: string; nodeId: s
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // `${name}:${kind}`
   const [name, setName] = useState('');
-  const firstLoad = useRef(true);
+  // State (not a ref): it's read in render.
+  const [firstLoad, setFirstLoad] = useState(true);
 
   const refresh = useCallback(async () => {
     setErr(null);
     try {
       setPlayers(await invoke<Player[]>('list_players', { serverId, nodeId }));
     } catch (e) {
-      setErr(String(e));
+      setErr(describeError(e));
     } finally {
       setLoading(false);
-      firstLoad.current = false;
+      setFirstLoad(false);
     }
   }, [serverId, nodeId]);
 
   useEffect(() => {
     setLoading(true);
     void refresh();
-    // Listing sends `list` to the console (which echoes into the log), so keep
-    // the cadence gentle to avoid spamming the Console tab. A future RCON
-    // adapter would poll out-of-band and could refresh more often.
+    // `list` echoes into the console log, so keep the cadence gentle.
     const t = setInterval(() => void refresh(), 30_000);
     return () => clearInterval(t);
   }, [refresh]);
@@ -56,7 +48,13 @@ export function PlayersPanel({ serverId, nodeId }: { serverId: string; nodeId: s
     if (!who) return;
     let reason: string | undefined;
     if (askReason) {
-      const r = window.prompt(`Reason for ${kind} on "${who}" (optional):`);
+      const r = await appPrompt({
+        title: `${kind === 'kick' ? 'Kick' : 'Ban'} ${who}`,
+        label: 'Reason shown to the player (optional)',
+        confirmLabel: kind === 'kick' ? 'Kick' : 'Ban',
+        danger: true,
+        allowEmpty: true,
+      });
       if (r === null) return; // cancelled
       reason = r.trim() || undefined;
     }
@@ -71,7 +69,7 @@ export function PlayersPanel({ serverId, nodeId }: { serverId: string; nodeId: s
       // Let the server apply it, then refresh the roster.
       window.setTimeout(() => void refresh(), 600);
     } catch (e) {
-      setErr(String(e));
+      setErr(describeError(e));
     } finally {
       setBusy(null);
     }
@@ -96,7 +94,7 @@ export function PlayersPanel({ serverId, nodeId }: { serverId: string; nodeId: s
 
       {err && <div className="text-sm text-red-300 px-1 break-all">{err}</div>}
 
-      {loading && firstLoad.current ? (
+      {loading && firstLoad ? (
         <div className="card flex items-center gap-2 text-zinc-400 py-8 justify-center"><Loader2 size={16} className="animate-spin" /> Loading…</div>
       ) : players.length === 0 ? (
         <div className="card text-center text-zinc-500 py-8 text-sm">

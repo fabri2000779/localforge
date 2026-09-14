@@ -1,13 +1,9 @@
-/**
- * Team activity feed — surfaces the org's audit log ("who did what, where,
- * when"). Reads GET /v1/audit via the cloud_audit_list command. Team-plan +
- * admin only (the cloud enforces; a 402 here shows the upgrade hint). The feed
- * is metadata only — no server config or secrets — so it's E2E-safe.
- */
+/** Team activity feed (org audit log; Team plan, admin only, metadata only). */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Activity, Loader2, RefreshCw, Lock } from 'lucide-react';
 import { useServerStore } from '../stores/serverStore';
+import { describeError } from '../utils/errors';
 
 interface AuditEntry {
   actorUserId: string | null;
@@ -36,9 +32,7 @@ const ACTION_LABEL: Record<string, string> = {
 function describe(e: AuditEntry, serverName?: string): string {
   const verb = ACTION_LABEL[e.action] ?? e.action;
   if (!e.target) return verb;
-  // Resolve the target to a server NAME when we know it — raw UUIDs made the
-  // feed unreadable (audit finding). Unknown ids (deleted servers, other
-  // nodes) fall back to a short id; the full id lives in the hover title.
+  // Resolve the target to a server name; unknown ids fall back to a short id.
   return `${verb} ${serverName ?? `${e.target.slice(0, 8)}…`}`;
 }
 
@@ -54,7 +48,6 @@ function ago(ts: number): string {
 }
 
 export function ActivityPanel() {
-  // Local server inventory for target-id → name resolution in the feed.
   const servers = useServerStore((s) => s.servers);
   const serverNames = useMemo(
     () => new Map(servers.map((s) => [s.id, s.name] as const)),
@@ -82,12 +75,10 @@ export function ActivityPanel() {
           : null,
       );
     } catch (e) {
-      const s = String(e);
+      const s = describeError(e);
       if (s.includes('plan_required') || s.includes('402')) setNeedsTeam(true);
       else setErr(s);
-      // Only wipe on a FIRST-page failure — a failed "Load older" keeps the
-      // already-loaded feed + cursor so the user can just retry (audit
-      // finding: pagination errors blanked the whole panel).
+      // Only wipe on a first-page failure; a failed "Load older" keeps the loaded feed.
       if (!before) setEntries([]);
     } finally {
       setLoading(false);

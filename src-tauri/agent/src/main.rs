@@ -1,18 +1,5 @@
-//! LocalForge agent — a small HTTPS daemon that exposes the
-//! [`NodeBackend`] contract so the desktop app can drive a remote VPS
-//! as if it were a local Docker host.
-//!
-//! Layout:
-//!   - `config`  — agent.toml load/save + first-run defaults
-//!   - `tls`     — rustls + self-signed cert generation
-//!   - `auth`    — bearer-token middleware
-//!   - `routes`  — axum router that maps HTTP/WS onto the trait
-//!
-//! Run modes:
-//!   - `localforge-agent install` — generate token + self-signed TLS cert,
-//!     write `/etc/localforge/agent.toml`, print pairing data, exit
-//!   - `localforge-agent serve`   — load config and start the HTTPS server
-//!   - `localforge-agent`          — same as `serve` (the default)
+//! LocalForge agent: an HTTPS daemon exposing the [`NodeBackend`] contract so the desktop can
+//! drive a remote VPS. Subcommands: `install`, `serve` (default), `link`.
 
 use clap::{Parser, Subcommand};
 use localforge_backend_local::LocalDockerBackend;
@@ -93,13 +80,8 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
 
-    // rustls 0.23 can't auto-select a crypto provider when BOTH `ring` (our
-    // HTTPS server) and `aws-lc-rs` (pulled transitively by the relay's
-    // tokio-tungstenite) end up in the dependency tree. Install ring as the
-    // process default before ANY TLS work — otherwise building the server's
-    // ServerConfig (or a relay ClientConfig) panics with "Could not
-    // automatically determine the process-level CryptoProvider". Idempotent;
-    // ignore the Err if something already installed one.
+    // Both ring (HTTPS server) and aws-lc-rs (via tokio-tungstenite) are in the tree, so rustls
+    // can't auto-pick a provider; install ring before any TLS work. Idempotent.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let cli = Cli::parse();
@@ -138,12 +120,7 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("malformed enrollment blob: {}", e))?;
             let node_id = link.node_id.clone();
             config::save_cloud_link(&config_path, link)?;
-            // Best-effort: bounce the systemd service so the agent picks up
-            // the cloud link and connects to the relay right away — the user
-            // shouldn't have to run a second command. Writing the 0600 config
-            // above already required root, so `systemctl` will have the
-            // privileges it needs. If we're not under systemd (foreground /
-            // WSL without systemd), fall back to printing instructions.
+            // Best-effort restart so the agent connects right away; writing the config already needed root.
             let restarted = std::process::Command::new("systemctl")
                 .args(["restart", "localforge-agent"])
                 .status()
@@ -181,9 +158,7 @@ async fn serve(config_path: &std::path::Path) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("local backend unreachable: {}", e))?;
     let backend: Arc<dyn NodeBackend> = Arc::new(backend);
 
-    // Start the host scheduler so cron actions fire 24/7 (the agent runs
-    // headless as a service — this is the intended home for schedules). Backup
-    // schedules resolve their target id against the provisioned target file.
+    // Schedules run 24/7 here; backup schedules resolve targets from the provisioned file.
     let sched_data_root = cfg.data_root.clone();
     let resolver: localforge_backend_local::BackupTargetResolver =
         Arc::new(move |id| crate::backup_target::find(&sched_data_root, id));
@@ -199,10 +174,7 @@ async fn serve(config_path: &std::path::Path) -> anyhow::Result<()> {
         relay_started: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
-    // If this agent has been linked to a cloud org, start the relay client
-    // alongside the HTTPS server so mobile / another desktop can drive it
-    // with the owner's desktop offline. Un-linked agents skip this entirely
-    // (standalone, no cloud).
+    // Linked agents also run the relay client so mobile/another desktop can drive them.
     if let Some(link) = cfg.cloud.clone() {
         tracing::info!(
             "cloud link present (node {} / org {}); starting relay client",

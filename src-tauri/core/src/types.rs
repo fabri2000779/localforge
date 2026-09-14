@@ -1,15 +1,10 @@
-//! Pure data types shared between the desktop app and the agent.
-//!
-//! Anything serialisable that crosses a process boundary (Tauri IPC, agent
-//! REST API, settings on disk) lives here.
+//! Serialisable types shared by the desktop app and the agent.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-// ---------------------------------------------------------------------------
 // Game types
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(transparent)]
@@ -165,9 +160,7 @@ pub enum ConfigFileFormat {
     Ini,
 }
 
-// ---------------------------------------------------------------------------
 // Server types
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Server {
@@ -185,9 +178,7 @@ pub struct Server {
     pub installed: bool,
     #[serde(default)]
     pub install_container_id: Option<String>,
-    /// What the host crash-watcher does if this server's container exits
-    /// unexpectedly. Defaults (via serde) to [`RestartPolicy::OnCrash`] for
-    /// servers persisted before this field existed.
+    /// Crash-watcher behaviour on an unexpected container exit (defaults to `OnCrash`).
     #[serde(default)]
     pub restart_policy: RestartPolicy,
 }
@@ -201,13 +192,11 @@ pub enum ServerStatus {
     Running,
     Stopping,
     Error,
-    /// The container exited unexpectedly while we believed it was running —
-    /// set by the host crash-watcher (distinct from a user-initiated Stop).
+    /// Exited unexpectedly while believed running (set by the crash-watcher).
     Crashed,
 }
 
-/// What the host crash-watcher does when a server's container exits
-/// unexpectedly (i.e. while the persisted state was `Running`).
+/// Crash-watcher behaviour when a `Running` server's container exits unexpectedly.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum RestartPolicy {
@@ -220,8 +209,7 @@ pub enum RestartPolicy {
     Always,
 }
 
-/// One entry in a server's host-side crash journal. Metadata only — no secrets
-/// or config — so it's safe to surface in the UI and to notify on.
+/// Crash-journal entry; metadata only, safe to show and notify on.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CrashEvent {
@@ -246,9 +234,7 @@ pub enum CrashEventKind {
     Backoff,
 }
 
-/// Outbound alert destination. The host POSTs to these directly when a server
-/// event fires (e.g. a crash) — the URL is stored host-side and never reaches
-/// the cloud, so even a Discord/Slack token stays on the user's machine.
+/// Alert destination; the host POSTs directly, so the webhook URL never reaches the cloud.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum WebhookKind {
@@ -273,8 +259,7 @@ pub struct WebhookConfig {
 }
 
 impl WebhookConfig {
-    /// Non-secret projection for the frontend — the URL is masked so the token
-    /// never leaves the Rust side once saved.
+    /// Non-secret projection for the frontend (URL masked).
     pub fn view(&self) -> WebhookConfigView {
         WebhookConfigView {
             id: self.id.clone(),
@@ -333,9 +318,7 @@ pub struct LogEvent {
     pub line: String,
 }
 
-// ---------------------------------------------------------------------------
 // Docker / node telemetry
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DockerStatus {
@@ -361,19 +344,14 @@ pub struct ContainerStats {
     pub memory_usage_mb: f64,
     pub memory_limit_mb: f64,
     pub memory_percent: f64,
-    /// Cumulative bytes received/sent across the container's interfaces.
-    /// `#[serde(default)]` so an older agent's response (no net fields) still
-    /// deserializes. The metrics sampler stores these; the chart derives a rate
-    /// from the delta between samples. (Kept snake_case like the rest of this
-    /// struct — the live-stats UI already reads it.)
+    /// Cumulative bytes; `default` so older agents (no net fields) still deserialize.
     #[serde(default)]
     pub net_rx_bytes: u64,
     #[serde(default)]
     pub net_tx_bytes: u64,
 }
 
-/// One sampled point of a server's metrics history (stored host-side as
-/// append-only JSONL under `~/LocalForge/metrics/`, never synced to the cloud).
+/// One sample of a server's metrics history (host-side JSONL, never synced).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetricPoint {
@@ -390,14 +368,12 @@ pub struct MetricPoint {
 #[serde(rename_all = "camelCase")]
 pub struct Player {
     pub name: String,
-    /// Stable id when the game reports one (e.g. Minecraft UUID, Steam ID).
-    /// Many games' console `list` output gives only names, so this is optional.
+    /// Stable id when the game reports one; console `list` output often has only names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
 }
 
-/// A moderation action against a player. Internally tagged so it travels as
-/// `{ "kind": "kick", "name": "...", "reason": "..." }` over the wire.
+/// Moderation action, tagged as `{ "kind": "kick", "name", "reason" }` on the wire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum PlayerAction {
@@ -422,10 +398,7 @@ pub enum PlayerAction {
     },
 }
 
-/// Host-level metrics for a node — surfaces the underlying VPS health
-/// (CPU/RAM/disk pressure) rather than just Docker's view of itself.
-/// Disk numbers correspond to the filesystem that holds the configured
-/// data_root.
+/// Host-level metrics; disk numbers refer to the filesystem holding data_root.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeStats {
     pub cpu_percent: f32,
@@ -437,24 +410,17 @@ pub struct NodeStats {
     pub disk_used_bytes: u64,
     pub disk_total_bytes: u64,
     pub uptime_secs: u64,
-    /// 1-minute load average. `None` on Windows where load-avg isn't a
-    /// thing the kernel exposes.
+    /// 1-minute load average (`None` on Windows).
     pub load_avg_1m: Option<f64>,
 }
 
-// ---------------------------------------------------------------------------
 // Backups (bring-your-own S3-compatible bucket)
-// ---------------------------------------------------------------------------
 
-/// A user-supplied S3-compatible backup destination (R2, B2, Wasabi, MinIO,
-/// DO Spaces…). `secret_key` is sensitive — it lives in the OS keychain
-/// (desktop) / a 0600 file (agent) and is NEVER returned to the frontend in a
-/// listing (see [`BackupTargetView`]).
+/// User-supplied S3-compatible destination; `secret_key` never reaches the frontend (see [`BackupTargetView`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupTarget {
-    /// S3 endpoint URL, e.g. `https://<acct>.r2.cloudflarestorage.com`. Empty
-    /// string = AWS S3 default for the region.
+    /// Endpoint URL; empty means the AWS S3 default for the region.
     pub endpoint: String,
     pub region: String,
     pub bucket: String,
@@ -489,10 +455,7 @@ pub struct BackupTargetView {
     pub path_style: bool,
 }
 
-/// A named S3 backup destination belonging to an org. `id` is a stable
-/// client-generated UUID; `name` is the user's label ("Production S3", …).
-/// The org stores a list of these; any device in the org decrypts + caches
-/// them with the org DEK, and relay backup cmds reference one by `targetId`.
+/// Named org backup destination; `id` is a stable client UUID that relay backup cmds reference.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrgBackupTarget {
@@ -522,20 +485,15 @@ pub struct OrgBackupTargetView {
     pub credentials: BackupTargetView,
 }
 
-// ---------------------------------------------------------------------------
 // Scheduled actions
-// ---------------------------------------------------------------------------
 
-/// A cron-scheduled action against a server. Stored host-side
-/// (`~/LocalForge/schedules.json`) and fired by the host's scheduler loop, so
-/// it works on the desktop (while open) and 24/7 on an agent (headless).
+/// Cron-scheduled action, stored and fired host-side (desktop while open, agent 24/7).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Schedule {
     pub id: String,
     pub server_id: String,
-    /// Standard 5-field cron expression (`min hour dom month dow`), evaluated
-    /// in the host's LOCAL time.
+    /// 5-field cron expression evaluated in the host's local time.
     pub cron: String,
     pub action: ScheduleAction,
     #[serde(default = "default_true")]
@@ -559,17 +517,8 @@ pub enum ScheduleAction {
     Command { command: String },
     /// Announce a message in-game (Minecraft `say`; other games vary).
     Broadcast { message: String },
-    /// Archive the server's data dir and upload it to a configured S3 backup
-    /// target. `target_id` selects which named target (None = the first/default
-    /// one). The host scheduler resolves the id to credentials at fire time —
-    /// from the desktop keychain or, on a headless agent, the provisioned
-    /// target file — so the secret never has to live in the schedule itself.
-    ///
-    /// Optional retention: after a successful upload the scheduler prunes the
-    /// server's objects in the bucket. `keep_last` is a floor (never deletes the
-    /// N most recent); `max_age_days` deletes anything older than that. With both
-    /// set, the N newest are always kept and older-than-max beyond them are
-    /// pruned. With neither set, nothing is pruned.
+    /// Back up to the named target (`None` = first). Retention: the `keep_last` newest are always
+    /// kept; `max_age_days` prunes older objects beyond them.
     Backup {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target_id: Option<String>,
@@ -586,15 +535,12 @@ pub enum ScheduleAction {
 pub struct BackupEntry {
     /// Full S3 object key, e.g. `localforge/<serverId>/2026-05-29T10-00-00Z.tar.gz`.
     pub key: String,
-    /// Object size in bytes.
     pub size: u64,
     /// Unix ms of the object's last-modified time (≈ when the backup ran).
     pub created_at: i64,
 }
 
-// ---------------------------------------------------------------------------
 // File manager types
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {
@@ -613,16 +559,9 @@ pub struct DirectoryContents {
     pub entries: Vec<FileEntry>,
 }
 
-// ---------------------------------------------------------------------------
 // Install pipeline events
-// ---------------------------------------------------------------------------
 
-/// Streamed event emitted while a server's install script runs. The
-/// agent serialises these over its install WebSocket and the desktop's
-/// run_install Tauri command fans them out: `Log` lines become
-/// `server-log` Tauri events, `OAuthUrl` opens the user's local
-/// browser, and `Done` signals end-of-install with the script's exit
-/// code.
+/// Event streamed while an install script runs: a log line, an OAuth URL to open, or `Done` with the exit code.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InstallEvent {

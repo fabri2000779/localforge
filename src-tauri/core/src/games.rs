@@ -6,15 +6,6 @@ use crate::types::{
 };
 use std::collections::HashMap;
 
-#[allow(dead_code)]
-pub fn resolve_startup(startup: &str, variables: &HashMap<String, String>) -> String {
-    let mut result = startup.to_string();
-    for (key, value) in variables {
-        result = result.replace(&format!("{{{{{}}}}}", key), value);
-    }
-    result
-}
-
 // Build environment variables from game variables and server settings
 pub fn build_env_vars(
     game: &GameConfig,

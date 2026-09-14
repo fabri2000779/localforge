@@ -1,12 +1,10 @@
-// Games manager - handles custom game definitions
+//! Built-in and user-authored (custom) game definitions.
 
 use localforge_core::{get_builtin_games, GameConfig, GameType};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// A game id is used verbatim as a directory name under the server data root.
-/// Only allow a single, separator-free, non-traversal component so an imported
-/// game definition can't write outside the root (audit finding).
+/// A game id is a directory name under the data root: single, separator-free, non-traversal.
 fn is_safe_game_id(id: &str) -> bool {
     !id.is_empty()
         && id != "."
@@ -42,12 +40,10 @@ impl GamesManager {
     }
 
     fn load_all_games(&mut self) {
-        // Load built-in games
         for game in get_builtin_games() {
             self.builtin_games.insert(game.game_type.0.clone(), game);
         }
 
-        // Load custom games
         if let Ok(content) = std::fs::read_to_string(&self.custom_games_path) {
             if let Ok(custom_games) = serde_json::from_str::<Vec<GameConfig>>(&content) {
                 for game in custom_games {
@@ -60,19 +56,16 @@ impl GamesManager {
     pub fn get_all_games(&self) -> Vec<GameConfig> {
         let mut games: Vec<GameConfig> = Vec::new();
         
-        // Add built-in games (unless overridden by custom)
         for (id, game) in &self.builtin_games {
             if !self.custom_games.contains_key(id) {
                 games.push(game.clone());
             }
         }
         
-        // Add all custom games (including overrides)
         for game in self.custom_games.values() {
             games.push(game.clone());
         }
         
-        // Sort: built-in first, then custom, alphabetically
         games.sort_by(|a, b| {
             match (a.is_custom, b.is_custom) {
                 (false, true) => std::cmp::Ordering::Less,
@@ -100,14 +93,12 @@ impl GamesManager {
             return Err("Docker image cannot be empty".to_string());
         }
 
-        // Always mark as custom when adding
         game.is_custom = true;
         self.custom_games.insert(game.game_type.0.clone(), game);
         self.save_custom_games()
     }
 
     pub fn update_game(&mut self, mut game: GameConfig) -> Result<(), String> {
-        // Check if game exists (in either built-in or custom)
         let exists = self.builtin_games.contains_key(&game.game_type.0) 
             || self.custom_games.contains_key(&game.game_type.0);
         
@@ -122,9 +113,7 @@ impl GamesManager {
     }
 
     pub fn delete_game(&mut self, game_type: &GameType) -> Result<(), String> {
-        // Can only delete from custom games
         if !self.custom_games.contains_key(&game_type.0) {
-            // If it's a built-in game without custom override, can't delete
             if self.builtin_games.contains_key(&game_type.0) {
                 return Err("Cannot delete built-in games. Edit it to create an override, or reset to defaults.".to_string());
             }
@@ -136,7 +125,6 @@ impl GamesManager {
     }
 
     pub fn export_game(&self, game_type: &GameType) -> Result<String, String> {
-        // Try custom first, then built-in
         let game = self.custom_games.get(&game_type.0)
             .or_else(|| self.builtin_games.get(&game_type.0))
             .ok_or("Game not found")?;
@@ -152,16 +140,12 @@ impl GamesManager {
         let mut game: GameConfig = serde_json::from_str(json)
             .map_err(|e| format!("Invalid JSON: {}", e))?;
         
-        // Mark as custom
         game.is_custom = true;
         
-        // Validate
         if game.game_type.0.is_empty() {
             return Err("Game ID cannot be empty".to_string());
         }
-        // game_type becomes a directory name under the data root; reject
-        // separators / traversal so an imported definition can't escape it
-        // (audit finding — matches backend-local's validate_path_component).
+        // game_type becomes a directory name under the data root.
         if !is_safe_game_id(&game.game_type.0) {
             return Err(
                 "Game ID must be a single path component (no '/', '\\', '..', or ':')".to_string(),
@@ -202,7 +186,6 @@ impl GamesManager {
         let content = serde_json::to_string_pretty(&custom_games)
             .map_err(|e| e.to_string())?;
 
-        // Ensure directory exists
         if let Some(parent) = self.custom_games_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -212,10 +195,8 @@ impl GamesManager {
     }
 
     pub fn reset_to_defaults(&mut self) -> Result<(), String> {
-        // Clear all custom games
         self.custom_games.clear();
 
-        // Delete custom games file
         if self.custom_games_path.exists() {
             std::fs::remove_file(&self.custom_games_path).ok();
         }

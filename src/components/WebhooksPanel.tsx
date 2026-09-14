@@ -1,12 +1,9 @@
-/**
- * Alerts — outbound webhooks (Discord / Slack / custom) the host POSTs to when
- * one of its servers crashes (or crash-loops). The full URL stays Rust-side on
- * this machine; the UI only ever sees a redacted hint, and the cloud never sees
- * it at all. Host-local: these fire for THIS desktop's own servers.
- */
+/** Crash alert webhooks (Discord / Slack / custom) for this desktop's servers; the URL stays Rust-side. */
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Webhook, Plus, Trash2, Loader2, Check, X, Send, Power, PowerOff } from 'lucide-react';
+import { appConfirm } from '../stores/dialogStore';
+import { describeError } from '../utils/errors';
 
 type WebhookKind = 'discord' | 'slack' | 'generic';
 
@@ -36,7 +33,7 @@ export function WebhooksPanel() {
     try {
       setHooks(await invoke<WebhookView[]>('list_webhooks'));
     } catch (e) {
-      setErr(String(e));
+      setErr(describeError(e));
       setHooks([]);
     }
   }, []);
@@ -46,13 +43,14 @@ export function WebhooksPanel() {
   }, [refresh]);
 
   async function remove(id: string) {
-    if (!confirm('Delete this alert webhook?')) return;
+    const ok = await appConfirm({ title: 'Delete this alert webhook?', confirmLabel: 'Delete', danger: true });
+    if (!ok) return;
     setBusy(id);
     try {
       await invoke('remove_webhook', { id });
       await refresh();
     } catch (e) {
-      setErr(String(e));
+      setErr(describeError(e));
     } finally {
       setBusy(null);
     }
@@ -64,7 +62,7 @@ export function WebhooksPanel() {
       await invoke('set_webhook_enabled', { id: h.id, enabled: !h.enabled });
       await refresh();
     } catch (e) {
-      setErr(String(e));
+      setErr(describeError(e));
     } finally {
       setBusy(null);
     }
@@ -176,7 +174,7 @@ function AddWebhookForm({ onSaved, onCancel }: { onSaved: () => void; onCancel: 
       await invoke('add_webhook', { name: name.trim(), kind, url: url.trim() });
       onSaved();
     } catch (e) {
-      setErr(String(e));
+      setErr(describeError(e));
     } finally {
       setSaving(false);
     }

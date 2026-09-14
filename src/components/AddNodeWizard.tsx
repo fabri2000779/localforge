@@ -13,6 +13,7 @@ import {
   AlertCircle,
   CheckCircle2,
 } from 'lucide-react';
+import { describeError } from '../utils/errors';
 
 interface Props {
   isOpen: boolean;
@@ -66,8 +67,7 @@ export function AddNodeWizard({ isOpen, onClose, onComplete }: Props) {
     }
   }, [isOpen]);
 
-  // Compute the install commands (both OS variants) whenever the user
-  // lands on step 2.
+  // Compute the install commands when the user lands on step 2.
   useEffect(() => {
     if (step !== 'install') return;
     installCommand({
@@ -108,7 +108,7 @@ export function AddNodeWizard({ isOpen, onClose, onComplete }: Props) {
       });
       setProbeInfo(info);
     } catch (e) {
-      setPairError(String(e));
+      setPairError(describeError(e));
     } finally {
       setIsTesting(false);
     }
@@ -126,7 +126,7 @@ export function AddNodeWizard({ isOpen, onClose, onComplete }: Props) {
       });
       setStep('done');
     } catch (e) {
-      setPairError(String(e));
+      setPairError(describeError(e));
     } finally {
       setIsSaving(false);
     }
@@ -261,9 +261,7 @@ export function AddNodeWizard({ isOpen, onClose, onComplete }: Props) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Sub-components
-// ---------------------------------------------------------------------------
 
 function StepIndicator({ current }: { current: Step }) {
   const order: Step[] = ['configure', 'install', 'pair', 'done'];

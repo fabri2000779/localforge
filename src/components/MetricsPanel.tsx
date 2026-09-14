@@ -1,13 +1,8 @@
-/**
- * Metrics tab — local CPU/RAM/network history for a server.
- *
- * Reads the host's local time-series (`query_metrics`); the cloud is never
- * involved. Hand-rolled SVG charts (no chart dependency). Network is shown as a
- * rate derived from the delta between cumulative samples.
- */
+/** Metrics tab: local CPU/RAM/network history via `query_metrics`, hand-rolled SVG charts. */
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Activity, Loader2, RotateCcw, Cpu, MemoryStick, Wifi } from 'lucide-react';
+import { describeError } from '../utils/errors';
 
 interface MetricPoint {
   ts: number;
@@ -79,7 +74,7 @@ export function MetricsPanel({ serverId, nodeId }: { serverId: string; nodeId: s
     try {
       const since = Date.now() - range.ms;
       setPoints(await invoke<MetricPoint[]>('query_metrics', { serverId, sinceMs: since, nodeId }));
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setErr(describeError(e)); }
     finally { setLoading(false); }
   }, [serverId, nodeId, range]);
 

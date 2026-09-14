@@ -1,9 +1,5 @@
-//! On-disk agent configuration: `/etc/localforge/agent.toml` (by default).
-//!
-//! The file holds the bearer token, TLS material (PEM, inline so a single
-//! file is sufficient), bind address, port, and data root. `install` is
-//! the one-shot bootstrap that generates a fresh token + self-signed
-//! cert and writes the file.
+//! Agent configuration file (`/etc/localforge/agent.toml` by default): token, inline TLS
+//! PEM, bind/port, data root and the optional cloud link.
 
 use crate::tls;
 use serde::{Deserialize, Serialize};
@@ -15,31 +11,24 @@ pub struct Config {
     /// Hex-encoded bearer token required on every request.
     pub token: String,
 
-    /// Address to bind to (e.g. `0.0.0.0`).
     pub bind: String,
 
-    /// TCP port to listen on.
     pub port: u16,
 
     /// Path under which servers/, config/ etc. live on the agent host.
     pub data_root: PathBuf,
 
-    /// PEM-encoded TLS certificate.
     pub tls_cert_pem: String,
 
     /// PEM-encoded TLS private key (PKCS#8).
     pub tls_key_pem: String,
 
-    /// Optional cloud-relay link. Present only when the agent has been
-    /// enrolled (`localforge-agent link <blob>` or desktop auto-provision).
-    /// Absent = standalone HTTPS only, no cloud — the default, so an
-    /// account-less install is completely unaffected.
+    /// Cloud-relay link, present only once enrolled. Absent means standalone HTTPS only.
     #[serde(default)]
     pub cloud: Option<CloudLink>,
 }
 
-/// Credential + addressing for the agent's direct relay connection. The raw
-/// `node_token` lives only here (and hashed in the cloud's `nodes` table).
+/// Relay credentials; the raw `node_token` lives only here (hashed in the cloud).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudLink {
     pub api_origin: String,
@@ -48,8 +37,7 @@ pub struct CloudLink {
     pub node_token: String,
 }
 
-/// Persist a cloud-relay link into an existing agent config. Used by the
-/// `link` CLI subcommand and the desktop auto-provision endpoint (`POST /link`).
+/// Persist a cloud link (`link` CLI subcommand and the desktop's `POST /link`).
 pub fn save_cloud_link(config_path: &Path, link: CloudLink) -> anyhow::Result<()> {
     let mut cfg = Config::load(config_path)?;
     cfg.cloud = Some(link);
@@ -74,14 +62,24 @@ impl Config {
             std::fs::create_dir_all(parent)?;
         }
         let body = toml::to_string_pretty(self)?;
-        std::fs::write(path, body)?;
-        // Best-effort tighten permissions to 0600 on Unix (the file holds
-        // a token + private key).
+        // Create 0600 from the start on Unix: the file holds the token and the TLS private key.
         #[cfg(unix)]
         {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(path)?;
+            f.write_all(body.as_bytes())?;
+            // Tighten an existing file that predates this too.
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
         }
+        #[cfg(not(unix))]
+        std::fs::write(path, body)?;
         Ok(())
     }
 }
@@ -91,9 +89,7 @@ pub struct InstallOutcome {
     pub bind: String,
     pub port: u16,
     pub token: String,
-    /// `None` when the operator brought their own CA-signed cert
-    /// (typically Let's Encrypt) — the desktop falls back to WebPKI
-    /// roots and doesn't need fingerprint pinning.
+    /// `None` when the operator brought a CA-signed cert (no pinning needed).
     pub fingerprint: Option<String>,
 }
 
@@ -129,15 +125,12 @@ pub struct InstallOptions<'a> {
     pub data_root: &'a Path,
     pub bind: &'a str,
     pub port: u16,
-    /// Path to an existing PEM-encoded cert (Let's Encrypt fullchain,
-    /// Cloudflare origin cert, etc.). When `Some`, `key_pem_path` must
-    /// also be provided. When `None`, a self-signed cert is generated.
+    /// Existing PEM cert (e.g. Let's Encrypt fullchain); requires `key_pem_path`. `None` generates a self-signed one.
     pub cert_pem_path: Option<&'a Path>,
     pub key_pem_path: Option<&'a Path>,
 }
 
 pub fn install(opts: InstallOptions<'_>) -> anyhow::Result<InstallOutcome> {
-    // Token: 32 random hex chars prefixed for easy recognition.
     let raw = Uuid::new_v4().simple().to_string();
     let token = format!("lf_agent_{}", raw);
 

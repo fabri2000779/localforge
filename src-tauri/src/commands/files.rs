@@ -1,19 +1,15 @@
-//! File-manager Tauri commands. Thin wrappers delegating to the active
-//! [`NodeBackend`] (picked by `nodeId`) so file ops on local and remote
-//! nodes share one path.
+//! File-manager commands routed through the active [`NodeBackend`].
 
 use crate::backend::NodeRegistry;
 use crate::commands::require_backend;
 use bytes::Bytes;
 use futures_util::stream::StreamExt;
-use localforge_core::{BackendError, DirectoryContents, FileEntry};
+use localforge_core::{BackendError, DirectoryContents};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::AsyncWriteExt;
 
-/// Emitted periodically while a chunked file transfer is running so the
-/// UI can show a progress bar. `id` is a caller-chosen handle so the UI
-/// can correlate the events with a specific transfer dialog.
+/// Progress event for chunked transfers; `id` correlates with the UI's transfer dialog.
 #[derive(Debug, Clone, Serialize)]
 struct TransferProgress {
     id: String,
@@ -143,24 +139,8 @@ pub async fn copy_path(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command(rename_all = "camelCase")]
-pub async fn get_file_info(
-    path: String,
-    node_id: Option<String>,
-    state: State<'_, NodeRegistry>,
-) -> Result<FileEntry, String> {
-    require_backend(&state, node_id.as_deref())
-        .await?
-        .file_info(&path)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Prompt the user for a host path with the OS SAVE dialog and return their
-/// choice. The destination is chosen in Rust, never taken as a free string from
-/// the frontend — otherwise an XSS'd WebView could invoke a transfer command
-/// with an arbitrary dest and write anywhere on the host (audit finding).
-/// Returns `Ok(None)` if the user cancelled.
+/// OS save dialog; the destination is chosen in Rust so a hostile frontend can't write anywhere.
+/// `None` on cancel.
 async fn prompt_save_path(app: &AppHandle, suggested_name: &str) -> Option<std::path::PathBuf> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
@@ -173,8 +153,7 @@ async fn prompt_save_path(app: &AppHandle, suggested_name: &str) -> Option<std::
     rx.await.ok().flatten()
 }
 
-/// OS OPEN dialog counterpart — the source of an upload is picked in Rust so a
-/// hostile caller can't exfiltrate an arbitrary host file (audit finding).
+/// OS open dialog; the upload source is chosen in Rust so a hostile frontend can't exfiltrate files.
 async fn prompt_open_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel::<Option<std::path::PathBuf>>();
@@ -184,11 +163,8 @@ async fn prompt_open_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     rx.await.ok().flatten()
 }
 
-/// Stream a file from a node (local or remote) onto the user's desktop
-/// filesystem. The host destination is chosen via the OS save dialog IN RUST
-/// (not a frontend-supplied path — audit finding). Emits
-/// `file-transfer-progress` events every ~256 KB so the UI can render a
-/// progress bar. Returns 0 if the user cancelled the save dialog.
+/// Stream a node file to a desktop path chosen via the save dialog; emits progress every ~256 KB.
+/// Returns 0 on cancel.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn download_file_to_local(
     transfer_id: String,
@@ -201,7 +177,7 @@ pub async fn download_file_to_local(
     let backend = require_backend(&state, node_id.as_deref()).await?;
 
     let Some(dest_pathbuf) = prompt_save_path(&app, &suggested_name).await else {
-        return Ok(0); // user cancelled
+        return Ok(0);
     };
     let dest_path = dest_pathbuf.to_string_lossy().to_string();
 
@@ -255,12 +231,8 @@ pub async fn download_file_to_local(
     Ok(bytes_total)
 }
 
-/// Stream a file from the user's desktop filesystem into a node directory. The
-/// host SOURCE is picked via the OS open dialog IN RUST (not a frontend string
-/// — audit finding), and the node destination is `<dest_dir>/<picked file
-/// name>`, still confined by the backend. If a file with that name already
-/// exists on the node, the user is asked to confirm the overwrite (audit
-/// finding). Returns 0 if the user cancelled the picker or the overwrite prompt.
+/// Stream a desktop file (picked via the open dialog) into `dest_dir` on the node, asking before
+/// overwriting an existing file. Returns 0 on cancel.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn upload_file_from_local(
     transfer_id: String,
@@ -272,7 +244,7 @@ pub async fn upload_file_from_local(
     let backend = require_backend(&state, node_id.as_deref()).await?;
 
     let Some(src_pathbuf) = prompt_open_path(&app).await else {
-        return Ok(0); // user cancelled
+        return Ok(0);
     };
     let src_path = src_pathbuf.to_string_lossy().to_string();
     let file_name = src_pathbuf
@@ -281,8 +253,7 @@ pub async fn upload_file_from_local(
         .unwrap_or_else(|| "upload.bin".to_string());
     let dest_path = format!("{}/{}", dest_dir.trim_end_matches(['/', '\\']), file_name);
 
-    // Overwrite guard: unlike delete/rename this used to clobber a same-named
-    // file silently with no undo (audit finding). Ask first if it exists.
+    // Ask before clobbering an existing file.
     if backend.file_info(&dest_path).await.is_ok() {
         use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
         let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
@@ -296,7 +267,7 @@ pub async fn upload_file_from_local(
                 let _ = tx.send(ok);
             });
         if !rx.await.unwrap_or(false) {
-            return Ok(0); // user declined the overwrite
+            return Ok(0);
         }
     }
 
@@ -309,8 +280,7 @@ pub async fn upload_file_from_local(
         .map(|m| m.len())
         .unwrap_or(0);
 
-    // Wrap the file reader as a Bytes stream and tap each chunk to emit
-    // progress events as data flows through to the backend.
+    // Tap each chunk to emit progress as it flows to the backend.
     let app_for_progress = app.clone();
     let transfer_id_for_progress = transfer_id.clone();
     let dest_for_progress = dest_path.clone();

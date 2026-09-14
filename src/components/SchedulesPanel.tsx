@@ -1,25 +1,13 @@
-/**
- * Schedules tab — cron-scheduled actions for a server.
- *
- * The host's scheduler loop (desktop while open, agent 24/7) fires these. The
- * cron expression is standard 5-field (`min hour dom month dow`) in the host's
- * local time. Actions: restart, run a console command, or broadcast a message.
- */
+/** Schedules tab: 5-field cron actions (local time) fired by the host scheduler. */
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   Clock, Plus, Trash2, Loader2, Power, PowerOff, RotateCcw, Terminal, Megaphone, Archive, Check, X,
 } from 'lucide-react';
+import { appConfirm } from '../stores/dialogStore';
+import { describeError } from '../utils/errors';
 
-/**
- * Validate a standard 5-field cron expression per-field so the UI rejects
- * out-of-range values (`0 25 * * *`) and garbage (`a b c d e`) instead of
- * saving a schedule that shows "On" but never fires. Accepts `*`, single
- * values, `a-b` ranges, `a,b,c` lists, and `* / n` / `a-b / n` steps within
- * each field's bounds. Deliberately conservative — matches the numeric ranges
- * croner accepts on the host (min 0-59, hour 0-23, dom 1-31, month 1-12,
- * dow 0-7).
- */
+/** Per-field validation of a 5-field cron expression (ranges match croner's on the host). */
 function isValidCron(expr: string): boolean {
   const fields = expr.trim().split(/\s+/);
   if (fields.length !== 5) return false;
@@ -54,11 +42,7 @@ function isValidCron(expr: string): boolean {
   return fields.every((f, i) => fieldOk(f, bounds[i]!));
 }
 
-// Wire shape of core::ScheduleAction. NB: the Rust enum's rename_all =
-// "camelCase" renames only the VARIANT TAGS — struct-variant FIELDS stay
-// snake_case. Sending camelCase fields here made serde silently drop the
-// backup target + retention on every schedule created from the UI (audit
-// finding: wrong bucket + unbounded growth).
+// Wire shape of core::ScheduleAction: variant tags are camelCase, struct fields stay snake_case.
 type ScheduleAction =
   | { kind: 'restart' }
   | { kind: 'command'; command: string }
@@ -108,23 +92,20 @@ export function SchedulesPanel({ serverId, nodeId }: { serverId: string; nodeId:
     setLoading(true); setErr(null);
     try {
       setSchedules(await invoke<Schedule[]>('list_schedules', { serverId, nodeId }));
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setErr(describeError(e)); }
     finally { setLoading(false); }
   }, [serverId, nodeId]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  // `busyKey` lets the create form register as 'new' — the form's saving
-  // prop checks busy === 'new', but save() used to set busy to the fresh
-  // UUID, so the flag never matched and a double-click created duplicate
-  // schedules (audit finding).
+  // `busyKey` lets the create form register as 'new' so a double-click can't create duplicates.
   async function save(s: Schedule, busyKey: string = s.id) {
     setBusy(busyKey); setErr(null);
     try {
       await invoke('upsert_schedule', { schedule: s, nodeId });
       await refresh();
       setAdding(false);
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setErr(describeError(e)); }
     finally { setBusy(null); }
   }
 
@@ -133,12 +114,13 @@ export function SchedulesPanel({ serverId, nodeId }: { serverId: string; nodeId:
   }
 
   async function remove(id: string) {
-    if (!confirm('Delete this schedule?')) return;
+    const ok = await appConfirm({ title: 'Delete this schedule?', confirmLabel: 'Delete', danger: true });
+    if (!ok) return;
     setBusy(id); setErr(null);
     try {
       await invoke('delete_schedule', { id, nodeId });
       setSchedules((cur) => cur.filter((x) => x.id !== id));
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setErr(describeError(e)); }
     finally { setBusy(null); }
   }
 
@@ -233,9 +215,7 @@ function ScheduleForm({
   const [keepLast, setKeepLast] = useState<string>('7'); // retention floor (blank = no limit)
   const [maxAgeDays, setMaxAgeDays] = useState<string>(''); // age limit in days (blank = none)
 
-  // Load the org's backup targets so the Backup action can offer a picker. The
-  // local list is enough — ids match what the agent was provisioned with, so a
-  // schedule resolves on whichever host (desktop or agent) actually fires it.
+  // The local target list is enough: ids match what the agent was provisioned with.
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -275,10 +255,7 @@ function ScheduleForm({
   }
 
   const needsText = kind === 'command' || kind === 'broadcast';
-  // Validate each field's RANGE, not just "5 fields" — the old check accepted
-  // `0 25 * * *` (hour 25) or `a b c d e`, which the scheduler then silently
-  // skipped as unparseable, so the schedule showed "On" but never fired (audit
-  // finding).
+  // Validate each field's range, not just the field count.
   const cronValid = isValidCron(cron);
   const valid =
     cronValid &&

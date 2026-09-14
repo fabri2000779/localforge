@@ -1,10 +1,5 @@
-//! Outbound event alerts: host-side webhooks (Discord / Slack / generic).
-//!
-//! Config lives host-side in `<data_root>/webhooks.json`, and the host POSTs to
-//! the endpoints DIRECTLY when an event fires (currently container crashes,
-//! from the crash-watcher). The URL — which for Discord/Slack embeds a secret
-//! token — therefore never leaves the machine, let alone transits the cloud.
-//! Every send is best-effort: a failure is logged, never fatal.
+//! Host-side webhooks (Discord / Slack / generic) stored in `<data_root>/webhooks.json`.
+//! The host POSTs directly, so the (secret-bearing) URL never reaches the cloud. Best-effort.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -59,17 +54,13 @@ fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .user_agent("LocalForge")
-        // Hand reqwest an explicit rustls config (it's built with
-        // `rustls-no-provider`) so it doesn't fall back to the platform
-        // verifier — same approach as the cloud-client/backend-remote crates.
+        // Explicit rustls config (built with `rustls-no-provider`), as in cloud-client/backend-remote.
         .use_preconfigured_tls(webpki_tls_config())
         .build()
         .expect("reqwest client build")
 }
 
-/// rustls config trusting the bundled Mozilla webpki roots. `rustls-no-provider`
-/// means no process-default CryptoProvider is auto-installed, so we install ring
-/// here (idempotent — harmless if the host app already did).
+/// rustls config with the bundled Mozilla roots; installs ring first (idempotent).
 fn webpki_tls_config() -> rustls::ClientConfig {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut roots = rustls::RootCertStore::empty();

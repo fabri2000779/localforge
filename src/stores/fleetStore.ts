@@ -1,34 +1,12 @@
-/**
- * Fleet discovery store — the live, cross-machine status map.
- *
- * The desktop's own servers always have authoritative status from the
- * serverStore (it talks to Docker directly). But servers that live on
- * ANOTHER machine — the owner's second desktop, an enrolled agent, or
- * (for a sub-user) the owner's machines entirely — are only reachable
- * over the cloud relay. `RelayFleetBridge` discovers them by sending a
- * `state.snapshot` cmd to every online machine and recording the reply
- * here, keyed by server id. The Servers UI then reads this map to render
- * live badges + machine grouping without decrypting anything or holding
- * a direct connection.
- *
- * Two inputs feed the store, both arriving as `cloud://relay-event`s:
- *   - `state_snapshot` (reply to our `disc:<machineId>` probe) → seeds the
- *     full per-machine status + the server→machine attribution.
- *   - `server.state_changed` (owner-side live broadcast) → patches one id.
- *
- * Everything is best-effort and self-healing: a machine that drops off the
- * relay simply stops updating; the next reconnect re-probes.
- */
+/** Live cross-machine status map fed by relay `state_snapshot` replies and `server.state_changed`
+ *  events; the Servers UI reads it for badges and machine grouping. Best-effort and self-healing. */
 import { create } from 'zustand';
 import type { Server } from '../types';
 
 export type FleetStatus = Server['status'];
 
-/** Coerce whatever string the relay sent into our canonical status enum.
- *  Unknown values collapse to a safe default so the UI never renders a
- *  broken badge. 'crashed' passes through — it's a canonical status the UI
- *  renders distinctly (flattening it to 'error' hid crashes on remote nodes). */
-export function coerceStatus(raw: unknown): FleetStatus {
+/** Coerce a relay status string to the canonical enum ('crashed' passes through). */
+function coerceStatus(raw: unknown): FleetStatus {
   switch (raw) {
     case 'running':
     case 'stopped':
@@ -46,12 +24,10 @@ export function coerceStatus(raw: unknown): FleetStatus {
 interface FleetState {
   /** serverId → live status, across every reachable machine. */
   statuses: Record<string, FleetStatus>;
-  /** serverId → the machine id (cloud node id) it was discovered on. A
-   *  cross-check / fallback for the synced `node_id`; both should agree. */
+  /** serverId → machine id (cloud node id) it was discovered on. */
   serverMachine: Record<string, string>;
 
-  /** Apply a `state_snapshot` reply. When `machineId` is set (the reply to
-   *  a `disc:<id>` probe) we also attribute each server to that machine. */
+  /** Apply a `state_snapshot` reply; with `machineId` also attribute each server to it. */
   applySnapshot: (
     machineId: string | null,
     servers: Array<{ id: string; status?: string }>,

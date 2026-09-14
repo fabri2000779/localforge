@@ -1,23 +1,8 @@
-//! Cloud relay WebSocket client.
-//!
-//! Stays connected to `wss://api.localforge.gg/v1/relay/<orgId>` for as
-//! long as the user is signed in and on a paid plan. Surfaces three
-//! interesting things to the UI via Tauri events:
-//!
-//!   `cloud://relay-connected`        connected (re-)established
-//!   `cloud://relay-disconnected`     dropped, will retry
-//!   `cloud://sync-changed`           someone else pushed; auto-pulls
-//!
-//! Reconnect contract (see localforge-cloud/apps/api/src/relay.ts):
-//!   - Exponential backoff with jitter: 250ms → 30s, capped, ±20%.
-//!   - Every server message carries `epoch` + `seq`.
-//!     If epoch changes between connections → the DO restarted →
-//!     we refetch state.
-//!   - We never surface "Disconnected" to the UI inside a single
-//!     backoff cycle (under ~30s) — the user shouldn't notice deploys.
+//! Relay WebSocket client: connects to the org's relay DO with jittered backoff, forwards
+//! frames to the React layer as `cloud://relay-*` events, and detects epoch/seq gaps.
 
 use futures_util::{SinkExt, StreamExt};
-use rand::Rng;
+use rand::RngExt;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,10 +10,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 
-use super::{api, auth, sync};
+use super::{api, auth};
 
-/// Top-level shape of every server-emitted message. `kind` is whatever
-/// the server stamped — we route on it.
+/// Every server message; we route on `kind`.
 #[derive(Debug, Deserialize)]
 struct Envelope {
     #[serde(rename = "type")]
@@ -41,17 +25,13 @@ struct Envelope {
     kind: Option<String>,
 }
 
-/// Outbound queue: the React layer can call `cloud_relay_send_cmd` to
-/// push a command to the owner. We keep a tx-handle per active loop so
-/// the loop drains the queue into the WS while it's connected.
+/// Outbound queue drained into the WS while connected.
 type CmdQueue = Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>;
 
 #[derive(Default)]
 pub struct RelayState {
-    /// Cancellation handle for the current loop. Replaced on each
-    /// start_relay call so we never accumulate ghost loops.
+    /// Cancellation handle for the current loop (replaced on each start).
     pub cancel: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    /// Tx end of the outbound message channel.
     pub outbound: CmdQueue,
 }
 
@@ -68,13 +48,7 @@ pub async fn cloud_relay_stop(
     Ok(())
 }
 
-/// Send a `cmd` message through the WS to the relay (which forwards to
-/// the owner). Used by the React layer when a sub-user clicks Start /
-/// Stop / etc. on a server they're not the owner of.
-///
-/// `payload` should be the full message body — `{type:'cmd', cmd:'…',
-/// target:'…', request_id:'…', ...}`. We trust the React layer to put
-/// well-formed JSON in — the relay validates the shape on receipt.
+/// Send a `cmd` frame (full message body from the React layer) to the relay.
 #[tauri::command]
 pub async fn cloud_relay_send_cmd(
     state: tauri::State<'_, Arc<RelayState>>,
@@ -88,9 +62,7 @@ pub async fn cloud_relay_send_cmd(
     tx.send(text).map_err(|_| "relay channel closed".to_string())
 }
 
-/// Owner-side: emit an `event` message to all connected members.
-/// Used when the owner finishes executing a sub-user's command and
-/// wants to broadcast the result.
+/// Owner side: broadcast an `event` frame to connected members.
 #[tauri::command]
 pub async fn cloud_relay_send_event(
     state: tauri::State<'_, Arc<RelayState>>,
@@ -116,22 +88,14 @@ async fn fetch_org_id(token: &str) -> Result<String, api::ApiError> {
     Ok(r.id)
 }
 
-/// Start (or restart) the relay loop for a specific org.
-///
-/// `org_id` is the org whose relay Durable Object to join. The OWNER's
-/// own org and a sub-user's host org are different DOs, so the caller
-/// passes the ACTIVE org — that's how a sub-user observing someone else's
-/// machines gets routed into the right relay (and tagged `member`, with
-/// the owner tagged `owner`). When omitted we fall back to the caller's
-/// primary org (`/v1/orgs/me`) — the historical behaviour, still correct
-/// for an owner looking at their own fleet.
+/// Start (or restart) the relay loop for `org_id` (the ACTIVE org, so a sub-user joins the
+/// owner's DO); defaults to the caller's primary org.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn cloud_relay_start(
     app: AppHandle,
     state: tauri::State<'_, Arc<RelayState>>,
     org_id: Option<String>,
 ) -> Result<(), String> {
-    // Replace any prior loop.
     {
         let mut guard = state.cancel.lock().await;
         if let Some(tx) = guard.take() {
@@ -166,7 +130,6 @@ pub async fn cloud_relay_start(
         let mut last_seq: Option<u64> = None;
 
         loop {
-            // Has anyone called stop?
             if let Ok(()) = cancel_rx.try_recv() {
                 return;
             }
@@ -178,11 +141,8 @@ pub async fn cloud_relay_start(
                     return;
                 }
             };
-            // Assert THIS machine's device id so commands aimed at it route to
-            // this exact desktop (not broadcast to all the owner's desktops).
-            // Re-read per connect so a local node that came up AFTER relay
-            // start is picked up on the next reconnect. Omitted when there's
-            // no local node yet — the cloud then falls back to owner broadcast.
+            // Assert this machine's device id so targeted commands reach this exact desktop; re-read
+            // per connect so a late local node is picked up.
             let device_id = app_for_loop
                 .state::<crate::backend::NodeRegistry>()
                 .this_machine()
@@ -199,9 +159,7 @@ pub async fn cloud_relay_start(
                 url.push_str(&urlencoded(did));
             }
 
-            // NB: never log `url` — it carries `?token=<jwt>`. Log only the
-            // host + org so a debug-level log / crash report can't leak the
-            // session token.
+            // Never log `url`: it carries the JWT.
             tracing::debug!(
                 "[relay] connecting to wss://{}/v1/relay/{}",
                 localforge_cloud_client::relay::ws_host(&super::api_origin()),
@@ -211,18 +169,10 @@ pub async fn cloud_relay_start(
                 Ok((mut ws, _)) => {
                     backoff.reset();
                     let _ = app_for_loop.emit("cloud://relay-connected", ());
-                    // App-level keepalive. Cloudflare drops idle WebSockets at
-                    // ~5 min and the promised server-side ping was never
-                    // implemented; the DO's setWebSocketAutoResponse expects the
-                    // CLIENT to send `{"type":"ping"}` (audit finding). Without
-                    // it a quiet org's socket churned every few minutes, losing
-                    // events in the gap. The agent already does this at 30s.
+                    // App-level keepalive: Cloudflare drops idle sockets and the DO expects a client ping.
                     let mut ping = tokio::time::interval(Duration::from_secs(30));
                     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     ping.tick().await; // consume the immediate first tick
-                    // Pump frames until close. We multiplex four things:
-                    // 1. cancellation, 2. outbound messages enqueued by Tauri
-                    // commands, 3. inbound WS frames, 4. the keepalive ping.
                     loop {
                         tokio::select! {
                             biased;
@@ -230,7 +180,6 @@ pub async fn cloud_relay_start(
                                 let _ = ws.send(Message::Close(None)).await;
                                 return;
                             }
-                            // Outbound: drain whatever the app wants to send.
                             outbound = out_rx.recv() => match outbound {
                                 Some(text) => {
                                     if ws.send(Message::Text(text.into())).await.is_err() {
@@ -268,12 +217,7 @@ pub async fn cloud_relay_start(
                         }
                     }
                     let _ = app_for_loop.emit("cloud://relay-disconnected", ());
-                    // Discard any commands queued during this now-dead connection.
-                    // Draining here (rather than flushing them on reconnect)
-                    // stops a burst of stale, possibly-duplicated cmds — a
-                    // minute-late `stop` reverting a fresh `start`, or three
-                    // queued restarts — landing on the owner's live servers when
-                    // the socket comes back (audit finding).
+                    // Drop commands queued during the dead connection so stale cmds don't replay on reconnect.
                     while out_rx.try_recv().is_ok() {}
                 }
                 Err(e) => {
@@ -281,11 +225,7 @@ pub async fn cloud_relay_start(
                 }
             }
 
-            // Backoff with jitter. Make the wait itself cancellable so a
-            // `stop` (or a `start` that replaced our cancel handle) is honored
-            // promptly instead of after a full reconnect attempt — otherwise a
-            // quick stop→start during backoff could leave this loop dialing the
-            // old org/token for up to the backoff window.
+            // Cancellable backoff wait so stop/restart is honoured promptly.
             let delay = backoff.next();
             tokio::select! {
                 biased;
@@ -317,24 +257,16 @@ async fn handle_text(
         if first || changed {
             // Reset the seq tracker too — a new epoch starts at 1.
             *last_seq = None;
-            // Recover any events we missed. Emit `cloud://sync-changed` so the
-            // JS store actually re-pulls + repaints — the previous Rust-side
-            // `cloud_sync_pull` here was a pure function whose result was thrown
-            // away, so the sub-user's list stayed stale until the next event
-            // (audit finding). The JS handler owns the pull.
+            // Recover missed events: the JS store owns the re-pull.
             let _ = app.emit("cloud://sync-changed", ());
         }
     }
 
-    // Gap detection within the same epoch. The server stamps seq
-    // monotonically, so anything beyond +1 from our last value means
-    // a packet went missing — refetch state to be safe.
+    // Gap detection within an epoch: anything beyond +1 means a lost frame.
     if let Some(seq) = env_msg.seq {
         if let Some(prev) = last_seq {
             if seq > *prev + 1 {
                 tracing::warn!("[relay] seq gap: {} → {} (missed {})", prev, seq, seq - *prev - 1);
-                // Same as the epoch path: signal the JS store to re-pull, rather
-                // than pulling here and discarding the result (audit finding).
                 let _ = app.emit("cloud://sync-changed", ());
             }
         }
@@ -343,9 +275,7 @@ async fn handle_text(
 
     match env_msg.ty.as_str() {
         "hello" => {
-            // Surface the hello to the React layer so the UI can show
-            // role + peers. Forward the raw text — it has the
-            // session/epoch/peers structure intact.
+            // Forward raw so the UI sees session/epoch/peers.
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(txt) {
                 let _ = app.emit("cloud://relay-hello", &value);
             }
@@ -354,29 +284,22 @@ async fn handle_text(
             if env_msg.kind.as_deref() == Some("sync_changed")
                 || env_msg.kind.as_deref() == Some("sync_deleted")
             {
-                // Auto-pull silently; UI updates via the store.
-                if let Some(state) = app.try_state::<crate::backend::NodeRegistry>() {
-                    let _ = sync::cloud_sync_pull(state).await;
-                }
+                // The JS store owns the re-pull.
                 let _ = app.emit("cloud://sync-changed", ());
             }
-            // Any other event — surface raw so the React layer can
-            // pattern-match on `kind` (cmd_result, console_line, etc).
+            // Forward raw so the React layer can match on `kind`.
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(txt) {
                 let _ = app.emit("cloud://relay-event", &value);
             }
         }
         "cmd" => {
-            // Owner-side: a sub-user just asked us to do something. Hand
-            // it to the React layer — the auth store maps the cmd to a
-            // local Tauri invoke and emits the `event` response back.
+            // Owner side: the React executor maps the cmd to a local invoke and replies with an event.
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(txt) {
                 let _ = app.emit("cloud://relay-cmd", &value);
             }
         }
         "error" => {
-            // Surface server-side rejections (forbidden, unknown_cmd, …)
-            // so the UI can hint "the relay refused your last command".
+            // Server-side rejections (forbidden, unknown_cmd, …).
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(txt) {
                 let _ = app.emit("cloud://relay-error", &value);
             }
@@ -389,11 +312,6 @@ async fn handle_text(
         _ => {}
     }
 }
-
-// `api_host` previously lived here as a string-stripping helper; it
-// moved to `localforge-cloud-client::relay::ws_host` so the mobile
-// companion picks up the exact same scheme→WSS mapping. Any change
-// to the rule needs to land in the shared crate, not here.
 
 fn urlencoded(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -408,9 +326,7 @@ fn urlencoded(s: &str) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
 // Backoff
-// ---------------------------------------------------------------------------
 
 struct Backoff {
     attempt: u32,

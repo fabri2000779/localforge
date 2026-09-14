@@ -2,15 +2,7 @@ import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { ExternalLink, X } from 'lucide-react';
 
-/**
- * Transient banner shown when the install pipeline opened an OAuth URL
- * in the user's local browser. The desktop already spawned `xdg-open` /
- * `open` / `start`, so this is purely informational — it tells the user
- * "go check your browser, complete the login, come back".
- *
- * We listen for `install-oauth-opened` Tauri events emitted from
- * commands::server::run_install_pipeline.
- */
+/** Banner shown when the install pipeline opened an OAuth URL in the browser (`install-oauth-opened`). */
 export function OAuthToast() {
   const [items, setItems] = useState<{ id: number; url: string }[]>([]);
 

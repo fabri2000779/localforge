@@ -1,16 +1,4 @@
-/**
- * Dev-only mock for the Tauri runtime. When you run `vite` outside the
- * Tauri shell (e.g. for visual debugging in a regular browser), the
- * `@tauri-apps/api/core` `invoke` helper crashes because
- * `window.__TAURI_INTERNALS__` is undefined. The components that call
- * `getCurrentWindow().minimize()` etc. also throw, which propagates
- * up and renders the whole app as a blank black screen.
- *
- * Install lightweight stubs on `window.__TAURI_INTERNALS__` so the
- * frontend can render with realistic mock data. NOT imported in
- * production builds — only in `import.meta.env.DEV` mode from
- * main.tsx.
- */
+/** Dev-only Tauri runtime mock so the UI renders in a plain browser; installed only when `import.meta.env.DEV`. */
 
 type AnyArgs = Record<string, unknown>;
 
@@ -114,6 +102,12 @@ function handleCommand(cmd: string, _args: AnyArgs): unknown {
     case 'get_node_stats':
       return null;
 
+    case 'cloud_templates_list':
+      return { templates: [], nextBefore: null, nextBeforeId: null };
+    case 'cloud_node_list':
+    case 'cloud_list_machines':
+    case 'query_crash_events':
+      return [];
     case 'list_servers':
       return [];
 
@@ -141,8 +135,7 @@ function handleCommand(cmd: string, _args: AnyArgs): unknown {
           "iex \"& { $(irm https://github.com/fabri2000779/localforge/releases/download/latest/install-agent.ps1) }\"",
       };
 
-    // Window plugin invocations (minimize, maximize, etc.) all return
-    // null successfully so the TitleBar buttons don't crash.
+    // Window plugin invocations return null so the TitleBar buttons don't crash.
     default:
       if (cmd.startsWith('plugin:')) return null;
       console.debug('[dev-shim] unhandled invoke', cmd);
@@ -156,6 +149,10 @@ function installShim() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   if ((window as any).__TAURI_INTERNALS__) return;
 
+  // The event API calls this from every unlisten(); a no-op keeps the dev console quiet.
+  (window as unknown as { __TAURI_EVENT_PLUGIN_INTERNALS__?: unknown }).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+    unregisterListener: () => {},
+  };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__TAURI_INTERNALS__ = {
     metadata: {
@@ -170,8 +167,6 @@ function installShim() {
       }
     },
     transformCallback: (callback?: (response: unknown) => void) => {
-      // Return a numeric id; Tauri uses these to map responses back to
-      // callbacks. We never call the callback so just give a stable id.
       void callback;
       return Math.floor(Math.random() * 1e9);
     },
@@ -181,10 +176,7 @@ function installShim() {
   console.info('[dev-shim] Tauri runtime mocked — no real backend calls');
 }
 
-// Vite replaces `import.meta.env.DEV` with the literal `true` / `false`
-// at build time, so the entire shim call is dead-code-eliminated from
-// production bundles. In dev (npm run dev) the shim runs and provides
-// stub Tauri responses for visual debugging.
+// import.meta.env.DEV is a build-time literal, so the shim is eliminated from production bundles.
 if (import.meta.env.DEV) {
   installShim();
 }

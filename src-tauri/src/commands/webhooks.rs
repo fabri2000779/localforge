@@ -1,10 +1,4 @@
-//! Webhook-alert config commands (host-local).
-//!
-//! These manage the desktop host's own `webhooks.json` — the endpoints its
-//! crash-watcher POSTs to when one of its servers crashes. The full URL stays
-//! Rust-side; the frontend only ever sees a redacted [`WebhookConfigView`].
-//! (Alerting for servers on a remote agent uses that agent's own config —
-//! provisioning it from here is a follow-up, mirroring backup targets.)
+//! Host-local webhook alert config; the frontend only sees the redacted view.
 
 use crate::paths;
 use localforge_backend_local::webhooks;

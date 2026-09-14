@@ -15,11 +15,7 @@ const sizeClasses = {
   xl: 'w-20 h-20 text-4xl',
 };
 
-/**
- * Render a game's icon — either the configured logo URL (object-contain
- * inside a tinted square so different aspect-ratio logos don't crop or
- * stretch) or the emoji fallback.
- */
+/** Game icon: the configured logo (contained in a tinted square) or the emoji fallback. */
 export function GameIcon({ icon, logoUrl, name, size = 'md', className = '' }: GameIconProps) {
   const [imageError, setImageError] = useState(false);
   const sizeClass = sizeClasses[size];

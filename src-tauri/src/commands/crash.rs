@@ -1,9 +1,4 @@
-//! Crash-history Tauri command — reads the host's local crash journal.
-//!
-//! The crash-watcher (in `backend-local`) records unexpected container exits to
-//! a local JSONL journal. This surfaces them for the desktop's own servers.
-//! Servers on a remote agent keep their journal on that agent; querying those
-//! would need a relay/HTTP route, which isn't wired yet.
+//! Crash-journal reader for the desktop's own servers (remote agents keep their own journal).
 
 use crate::paths;
 use localforge_core::types::CrashEvent;

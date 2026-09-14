@@ -1,29 +1,5 @@
-/**
- * First-run "name this machine" prompt.
- *
- * Every desktop mints a stable local identity the first time Docker
- * connects (`this_machine.toml`), defaulting its label to the OS hostname.
- * Once you sign in and own more than one machine — a second desktop, an
- * enrolled agent — that label is how you tell them apart in the fleet
- * switcher + Servers grouping. A raw hostname like `DESKTOP-7F3K9Q2` is
- * useless there, so we ask once, pre-filled, and let the user confirm or
- * rename. Shown a single time per install; never nags again — the label
- * is always editable later from the Nodes page.
- *
- * Gate lives in `this_machine.toml` (Rust side) — not localStorage —
- * because the WebView's local storage gets wiped under several real
- * scenarios (dev vs prod profile, WebView2 reset, reinstall), and
- * `~/LocalForge/` survives them. The dialog reads
- * `thisMachine.name_prompt_dismissed_at`; on accept/skip we call
- * `dismissMachineNamePrompt` which persists the timestamp.
- *
- * Migration: anyone whose previous install set the old localStorage flag
- * (`lf.onboard.machine.v1`) gets it mirrored into the toml on first launch
- * of this version, so they don't get re-prompted.
- *
- * Waits for the local node to exist (Docker up → `thisMachine` populated)
- * before appearing, since there's nothing to name until then.
- */
+/** First-run "name this machine" prompt, shown once per install (gated by `this_machine.toml`, not
+ *  localStorage, which WebView resets wipe). Waits for the local node to exist. */
 import { useEffect, useRef, useState } from 'react';
 import { Server, Check } from 'lucide-react';
 import { useNodesStore } from '../stores/nodesStore';
@@ -39,19 +15,15 @@ export function MachineNameDialog() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
-  // Guards the one-time legacy migration so it can't loop while the store
-  // refreshes `thisMachine`.
+  // Guards the one-time legacy migration against loops while the store refreshes.
   const migratedRef = useRef(false);
 
-  // Make sure we have the identity loaded (the bridge also fetches it, but
-  // this covers the signed-out local-only path).
+  // Covers the signed-out local-only path (the bridge also fetches it).
   useEffect(() => {
     if (!thisMachine) void fetchThisMachine();
   }, [thisMachine, fetchThisMachine]);
 
-  // One-time migration: if the previous (localStorage-gated) version
-  // already recorded a dismissal here, mirror it into the toml so this
-  // device is silenced going forward regardless of WebView state.
+  // One-time migration of the old localStorage dismissal flag into the toml.
   useEffect(() => {
     if (migratedRef.current) return;
     if (!thisMachine) return;
@@ -65,14 +37,12 @@ export function MachineNameDialog() {
     void dismissPrompt().catch(() => { /* best-effort — non-fatal */ });
   }, [thisMachine, dismissPrompt]);
 
-  // Open once, when the identity is known and the prompt has never been
-  // dismissed on this install.
+  // Open once the identity is known and the prompt was never dismissed.
   useEffect(() => {
     if (open) return;
     if (!thisMachine) return;
     if (thisMachine.name_prompt_dismissed_at) return;
-    // Wait one tick if we're about to migrate from legacy localStorage so
-    // we don't briefly flash the dialog before the toml catches up.
+    // Don't flash the dialog while the legacy migration is about to run.
     if (
       typeof localStorage !== 'undefined' &&
       localStorage.getItem(LEGACY_SEEN_KEY)
@@ -85,9 +55,7 @@ export function MachineNameDialog() {
 
   function dismiss() {
     setOpen(false);
-    // Authoritative: persist in the toml. Best-effort + non-blocking — if
-    // it fails (disk full, perms) the worst case is we ask again next
-    // launch, never any data loss.
+    // Persist in the toml; best-effort (worst case we ask again next launch).
     void dismissPrompt().catch(() => {});
   }
 

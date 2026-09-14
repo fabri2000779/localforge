@@ -162,8 +162,7 @@ function AccountChip() {
     );
   }
 
-  // Signed-in chip — shows initials + plan badge, click navigates to
-  // the Settings page where the full Cloud Account panel lives.
+  // Signed-in chip: initials + plan badge; click opens Settings.
   const initials = (me.displayName ?? me.email).slice(0, 2).toUpperCase();
   const plan = me.subscription.plan;
   return (
@@ -180,10 +179,7 @@ function AccountChip() {
 }
 
 function BrandGlyph() {
-  // LocalForge "Crucible" mark — a hexagonal crucible with a molten ember
-  // ingot + steel-forged edge, and two nodes: a filled ember stud (local) +
-  // a hollow steel ring (remote). Local vs remote reads by SHAPE as well as
-  // colour. Matches favicon.svg + the mobile/landing brand.
+  // LocalForge "Crucible" mark; matches favicon.svg and the mobile/landing brand.
   return (
     <svg
       width="20"

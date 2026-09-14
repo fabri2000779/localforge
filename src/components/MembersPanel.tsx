@@ -1,18 +1,14 @@
-/**
- * Team-plan members + pending-invitations panel for the Settings page.
- *
- * Hidden when plan != team — the cloud API 402s invite calls for
- * Hobby anyway, but we don't want to render a section that's just
- * "upgrade to use this".
- */
+/** Team members + pending invitations (Settings); hidden unless the plan is Team. */
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { Users, UserPlus, X, MailWarning, Trash2, Shield } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { appConfirm } from '../stores/dialogStore';
 import { useAuthStore } from '../stores/authStore';
 import { ServerScopeDialog } from './ServerScopeDialog';
 import { useEscapeClose } from '../hooks/useEscapeClose';
+import { describeError } from '../utils/errors';
 
 interface Member {
   id: string;
@@ -61,7 +57,7 @@ export function MembersPanel() {
         setInvitations([]);
       }
     } catch (e) {
-      setError(String(e));
+      setError(describeError(e));
     }
   }, []);
 
@@ -76,18 +72,23 @@ export function MembersPanel() {
     try {
       await invoke('cloud_orgs_revoke_invitation', { orgId: org!.id, invitationId: invId });
       setInvitations((cur) => cur.filter((i) => i.id !== invId));
-    } catch (e) { setError(String(e)); }
+    } catch (e) { setError(describeError(e)); }
   }
 
   async function onRemoveMember(userId: string) {
-    if (!confirm('Remove this member?')) return;
+    const ok = await appConfirm({
+      title: 'Remove this member?',
+      message: 'They lose access to the org right away.',
+      confirmLabel: 'Remove member',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await invoke('cloud_orgs_remove_member', { orgId: org!.id, userId });
       void refresh();
-      // Offer to rotate the encryption key so the removed member's cached key
-      // can't decrypt future changes (they're already cut off from the API).
+      // Offer a key rotation so the removed member's cached key can't read future changes.
       setRotateOpen(true);
-    } catch (e) { setError(String(e)); }
+    } catch (e) { setError(describeError(e)); }
   }
 
   return (
@@ -191,12 +192,7 @@ export function MembersPanel() {
   );
 }
 
-/**
- * Offered after removing a member: re-encrypt the org's servers under a fresh
- * key so the ex-member's cached key can't read future changes. Optional — the
- * member is already locked out of the API on removal; this is forward-secrecy
- * hardening. Needs the sync passphrase (to re-wrap the new key).
- */
+/** Post-removal key rotation (forward-secrecy hardening); needs the sync passphrase to re-wrap. */
 function RotateKeyDialog({ open, orgId, onClose }: { open: boolean; orgId: string; onClose: () => void }) {
   const [passphrase, setPassphrase] = useState('');
   const [busy, setBusy] = useState(false);
@@ -213,8 +209,7 @@ function RotateKeyDialog({ open, orgId, onClose }: { open: boolean; orgId: strin
     setBusy(true); setErr(null);
     try {
       await invoke('cloud_rotate_org_dek', { orgId, passphrase });
-      // Tell connected clients (other devices + members) the key rotated, AFTER
-      // the new grants were sealed — they re-open the fresh grant / re-unlock.
+      // Notify connected clients AFTER the new grants were sealed.
       void invoke('cloud_relay_send_event', { payload: { kind: 'dek_rotated' } }).catch(() => {});
       onClose();
     } catch (e) {
@@ -223,7 +218,7 @@ function RotateKeyDialog({ open, orgId, onClose }: { open: boolean; orgId: strin
         m.code === 'wrong_secret' ? 'That passphrase doesn’t match your sync key.' :
         m.code === 'sync_key_not_set' ? 'Set up cloud sync first.' :
         m.code === 'undecryptable_blob' ? 'Some servers couldn’t be read on this device — rotate from the machine that owns them.' :
-        m.message ?? String(e),
+        m.message ?? describeError(e),
       );
     } finally { setBusy(false); }
   }
@@ -271,9 +266,7 @@ function InviteDialog({ open, orgId, onClose }: { open: boolean; orgId: string; 
   const [submitting, setSubmitting] = useState(false);
   useEscapeClose(onClose, open && !submitting);
   const [err, setErr] = useState<string | null>(null);
-  // After a successful invite we show the secret-bearing link to SHARE: the
-  // emailed link works but carries no key, so only this link grants instant
-  // decryption. The `#k=` secret never touched the server.
+  // The shareable link carries the `#k=` secret (instant decryption); the emailed link has no key.
   const [link, setLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -293,15 +286,14 @@ function InviteDialog({ open, orgId, onClose }: { open: boolean; orgId: string; 
       const res = await invoke<{ id: string; secret: string }>('cloud_orgs_invite', {
         orgId, email: email.trim(), role,
       });
-      // /invite (NOT /auth/invite): that path had no page + wasn't in the AASA,
-      // so the shared link opened neither the site nor the app (audit finding).
+      // /invite is the path with a page and in the AASA.
       setLink(`https://localforge.gg/invite?token=${res.id}#k=${res.secret}`);
     } catch (e) {
       const msg = (e as { code?: string; message?: string });
       setErr(
         msg.code === 'already_member' ? `${email} is already a member.` :
         msg.code === 'plan_required'  ? 'Team plan required to invite — upgrade first.' :
-                                        msg.message ?? String(e),
+                                        msg.message ?? describeError(e),
       );
     } finally { setSubmitting(false); }
   }

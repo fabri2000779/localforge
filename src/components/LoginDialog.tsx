@@ -1,10 +1,4 @@
-/**
- * Modal sign-in / sign-up. Triggered from the topbar's "Sign in" button
- * or from any "you need an account for this" CTA elsewhere in the app.
- *
- * Cancelable at any time — login is OPTIONAL. The user can close the
- * dialog and keep using LocalForge as a free local-only app.
- */
+/** Modal sign-in / sign-up; always cancelable (login is optional). */
 import { useEffect, useState, type FormEvent } from 'react';
 import { X } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
@@ -33,8 +27,7 @@ export function LoginDialog({ open, onClose, initialMode = 'login' }: Props) {
   const loginOAuth = useAuthStore((s) => s.loginOAuth);
   const requestReset = useAuthStore((s) => s.requestPasswordReset);
 
-  // Close automatically when sign-in succeeds (via either email/pwd or
-  // the OAuth deep-link callback flipping the store).
+  // Close automatically when sign-in succeeds (email or OAuth deep link).
   useEffect(() => {
     if (open && me) onClose();
   }, [open, me, onClose]);

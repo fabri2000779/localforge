@@ -1,9 +1,5 @@
-//! Persistent S3 backup-target list for relay-triggered backups.
-//!
-//! The desktop pushes the org's full named list over **direct HTTPS**
-//! (`PUT /backup-targets`) so the agent can execute relay-triggered backups
-//! (e.g. from the mobile app) even when the owner's desktop is offline.
-//! Stored as a JSON array in `<data_root>/backup-targets.json` with 0600 perms.
+//! Org backup-target list pushed by the desktop over direct HTTPS, stored 0600 in
+//! `<data_root>/backup-targets.json` so relay-triggered backups work with the desktop offline.
 
 use localforge_core::types::{BackupTarget, OrgBackupTarget};
 use std::path::{Path, PathBuf};
@@ -16,7 +12,7 @@ fn path(data_root: &Path) -> PathBuf {
 pub fn load(data_root: &Path) -> Vec<OrgBackupTarget> {
     match std::fs::read_to_string(path(data_root)) {
         Ok(s) => {
-            // Try Vec (new format); fall back to single BackupTarget (old format migration).
+            // New format is a Vec; fall back to the single-target legacy shape.
             if let Ok(v) = serde_json::from_str::<Vec<OrgBackupTarget>>(&s) {
                 return v;
             }
@@ -33,8 +29,7 @@ pub fn load(data_root: &Path) -> Vec<OrgBackupTarget> {
     }
 }
 
-/// Replace the stored list atomically (temp-file + rename so a crash can't
-/// corrupt the file).
+/// Replace the stored list atomically (temp file + rename).
 pub fn save(data_root: &Path, targets: &[OrgBackupTarget]) -> std::io::Result<()> {
     let p = path(data_root);
     if let Some(parent) = p.parent() {

@@ -1,13 +1,4 @@
-//! Backend contract: every node (local Docker or remote agent) must expose
-//! this surface for the desktop app to drive it.
-//!
-//! The trait is intentionally crate-agnostic: it knows nothing about Tauri,
-//! bollard, axum, or HTTPS. Implementations live in the desktop crate (local
-//! Docker via bollard) and in the agent / remote-client crates (Phase 2/3).
-//!
-//! The trait is intentionally **incremental** — only methods with a working
-//! implementation today are listed. As lifecycle/streaming/install support
-//! lands on every backend, methods get added here.
+//! Backend contract every node (local Docker or remote agent) implements; crate-agnostic.
 
 use crate::types::{
     BackupEntry, BackupTarget, ContainerStats, CreateServerRequest, DirectoryContents, DockerInfo,
@@ -20,10 +11,7 @@ use std::collections::HashMap;
 
 pub type Result<T> = std::result::Result<T, BackendError>;
 
-/// Errors surfaced by a [`NodeBackend`] implementation.
-///
-/// The variants are deliberately coarse — implementations stringify their
-/// internal causes so the trait can stay free of bollard / hyper / etc.
+/// Errors from a [`NodeBackend`]; deliberately coarse, causes are stringified.
 #[derive(thiserror::Error, Debug)]
 pub enum BackendError {
     #[error("node is not reachable: {0}")]
@@ -79,21 +67,13 @@ pub struct LogLine {
 /// Boxed log stream, `'static` so it can outlive the backend Arc.
 pub type LogStream = BoxStream<'static, Result<LogLine>>;
 
-/// Boxed install-event stream. Each item is an [`InstallEvent`] yielded
-/// while the install script runs; the stream ends with a `Done` event
-/// (carrying the exit code) or an `Err` if the underlying transport
-/// died.
+/// Install-event stream; ends with `Done` (exit code) or an `Err`.
 pub type InstallStream = BoxStream<'static, Result<InstallEvent>>;
 
-/// Stream of file chunks for upload/download. Uses [`bytes::Bytes`] for
-/// zero-copy chunk passing — chunks are typically 8-64 KB depending on
-/// who feeds the stream.
+/// Chunked file stream for upload/download.
 pub type ByteStream = BoxStream<'static, Result<bytes::Bytes>>;
 
-/// Detect an OAuth-style URL embedded in an install-script log line.
-/// Matches whitespace-separated tokens that start with `https://` and
-/// contain one of the common auth keywords. Returns the first match
-/// stripped of surrounding quotes/brackets.
+/// First `https://` token in a log line that looks like an auth/device-login URL.
 pub fn detect_oauth_url(line: &str) -> Option<String> {
     for word in line.split_whitespace() {
         if !word.starts_with("https://") {
@@ -115,9 +95,7 @@ pub fn detect_oauth_url(line: &str) -> Option<String> {
     None
 }
 
-/// The node operations contract. This is the read-only / file-management
-/// surface — server lifecycle (start/stop/install) and live streaming
-/// land in subsequent phases.
+/// The node operations contract.
 #[async_trait]
 pub trait NodeBackend: Send + Sync {
     // ----- health & metadata ----------------------------------------------
@@ -128,9 +106,7 @@ pub trait NodeBackend: Send + Sync {
     /// Docker daemon information (or equivalent on the remote node).
     async fn docker_info(&self) -> Result<DockerInfo>;
 
-    /// Host-level metrics (CPU%, mem, disk, uptime) for the node.
-    /// Implementations cache a sysinfo snapshot in the background so
-    /// readings are accurate without per-call delays.
+    /// Host-level metrics; implementations cache a background sysinfo snapshot.
     async fn node_stats(&self) -> Result<NodeStats>;
 
     // ----- server read-side -----------------------------------------------
@@ -151,8 +127,7 @@ pub trait NodeBackend: Send + Sync {
 
     // ----- server lifecycle ----------------------------------------------
 
-    /// Create a server record and prepare its data directory. Does **not**
-    /// start the container — call [`start_server`] for that.
+    /// Create the record and data directory without starting the container.
     async fn create_server(
         &self,
         request: CreateServerRequest,
@@ -165,41 +140,37 @@ pub trait NodeBackend: Send + Sync {
         config: HashMap<String, String>,
     ) -> Result<Server>;
 
-    /// Stop the container (if running), remove it, and delete the on-disk
-    /// data directory + persisted record.
+    /// Stop and remove the container, then delete the data directory and record.
     async fn delete_server(&self, id: &str) -> Result<()>;
+
+    /// Like [`delete_server`] but keeps the on-disk data. Backends without support must
+    /// refuse (the default) rather than fall back to a full delete.
+    async fn delete_server_keep_data(&self, id: &str) -> Result<()> {
+        let _ = id;
+        Err(BackendError::Other(
+            "keeping world data on delete is not supported by this node — upgrade the agent, or delete everything".into(),
+        ))
+    }
 
     /// Start the server's container. Returns the new status after starting.
     async fn start_server(&self, id: &str) -> Result<ServerStatus>;
 
-    /// Stop the container gracefully (sending the configured stop_command
-    /// where available before SIGTERM).
+    /// Stop gracefully (configured stop command before SIGTERM).
     async fn stop_server(&self, id: &str) -> Result<ServerStatus>;
 
     /// Send a single console command to the running container's stdin.
     async fn send_command(&self, id: &str, command: &str) -> Result<()>;
 
-    /// Continuous stream of new log lines for the running container.
-    /// The stream ends when the container stops or the caller drops it.
+    /// Live log stream; ends when the container stops or the caller drops it.
     async fn stream_logs(&self, id: &str) -> Result<LogStream>;
 
-    /// Run the game's install script in a one-shot container, streaming
-    /// progress events. Game metadata (script, image, volume path) is
-    /// supplied by the caller because the agent doesn't keep a copy of
-    /// the desktop's game catalogue.
+    /// Run the install script in a one-shot container, streaming events; the caller supplies the game.
     async fn run_install(&self, id: &str, game: GameConfig) -> Result<InstallStream>;
 
-    /// Stop the server (if running), wipe its on-disk data dir, and
-    /// mark it as not-installed so the next start re-runs the install
-    /// script. The persisted [`Server`] record is preserved.
+    /// Stop, wipe the data dir and mark not-installed; the [`Server`] record is kept.
     async fn reset_server_data(&self, id: &str) -> Result<()>;
 
     // ----- file operations on the host -----------------------------------
-    //
-    // Paths are absolute. For the local backend that's the user's
-    // filesystem; for remote agents the path lives on the remote host.
-    // Both implementations are expected to enforce that the path is under
-    // one of the known server data directories.
 
     async fn list_files(&self, path: &str) -> Result<DirectoryContents>;
     async fn read_file_text(&self, path: &str) -> Result<String>;
@@ -212,27 +183,16 @@ pub trait NodeBackend: Send + Sync {
     async fn copy_path(&self, from: &str, to: &str) -> Result<()>;
     async fn file_info(&self, path: &str) -> Result<FileEntry>;
 
-    /// Stream a file's contents in chunks. Used by the desktop's
-    /// "Download" action to pull large worlds from a remote node
-    /// without loading the whole file into memory.
+    /// Chunked file download.
     async fn download_file(&self, path: &str) -> Result<ByteStream>;
 
-    /// Stream a file's contents into `path`, replacing it if it exists.
-    /// Counterpart to [`download_file`].
+    /// Chunked upload replacing `path`.
     async fn upload_file(&self, path: &str, body: ByteStream) -> Result<()>;
 
     // ----- backups (bring-your-own S3) -----------------------------------
-    //
-    // A backup archives the server's data dir and uploads it to the
-    // user-supplied S3-compatible bucket; restore pulls it back. These run ON
-    // THE HOST (local Docker or the agent) — the cloud never touches S3.
-    //
-    // Default impls return "unsupported" so a backend that hasn't wired this
-    // yet (the remote client until the agent route lands) degrades gracefully
-    // instead of failing to compile.
+    // Backups run on the host (local Docker or the agent); the cloud never touches S3.
 
-    /// Archive the server's data dir (tar + gzip) and upload it to `target`.
-    /// Returns the object key written.
+    /// Tar+gzip the data dir and upload it; returns the object key.
     async fn create_backup(&self, id: &str, target: &BackupTarget) -> Result<String> {
         let _ = (id, target);
         Err(BackendError::Other(
@@ -248,8 +208,7 @@ pub trait NodeBackend: Send + Sync {
         ))
     }
 
-    /// Download `key` and restore it over the server's data dir. The server is
-    /// stopped first and the previous data is moved aside before extraction.
+    /// Stop the server, move the old data aside and extract `key` over it.
     async fn restore_backup(&self, id: &str, target: &BackupTarget, key: &str) -> Result<()> {
         let _ = (id, target, key);
         Err(BackendError::Other(
@@ -265,23 +224,13 @@ pub trait NodeBackend: Send + Sync {
         ))
     }
 
-    /// Provision the full org backup-target list onto this node so it can run
-    /// relay-triggered backups by itself (e.g. when the mobile app fires one
-    /// and the owner's desktop is offline). Default is a no-op: the local
-    /// backend resolves credentials from the keychain directly. Only the
-    /// remote-agent client overrides this — pushes over direct HTTPS, never
-    /// the relay, so the secret never transits Cloudflare.
+    /// Push the org's backup targets to this node over direct HTTPS (remote agents only; local is a no-op).
     async fn set_backup_targets(&self, targets: &[OrgBackupTarget]) -> Result<()> {
         let _ = targets;
         Ok(())
     }
 
     // ----- scheduled actions ---------------------------------------------
-    //
-    // Schedules are stored host-side and fired by the host's scheduler loop.
-    // These CRUD the persisted defs; execution is automatic. Default impls keep
-    // a backend that hasn't wired this (the remote client until its route
-    // lands) compiling.
 
     /// All schedules for a server.
     async fn list_schedules(&self, server_id: &str) -> Result<Vec<Schedule>> {
@@ -307,19 +256,13 @@ pub trait NodeBackend: Send + Sync {
 
     // ----- metrics history -----------------------------------------------
 
-    /// Sampled metrics for a server since `since_ms` (unix ms), oldest first.
-    /// Read from the host's local store; the cloud never sees this.
+    /// Sampled metrics since `since_ms`, oldest first.
     async fn query_metrics(&self, server_id: &str, since_ms: i64) -> Result<Vec<MetricPoint>> {
         let _ = (server_id, since_ms);
         Ok(Vec::new())
     }
 
     // ----- player administration -----------------------------------------
-    //
-    // Live player list + moderation (kick/ban/op). Per-game: only servers whose
-    // game exposes a console/RCON/REST admin surface support this; everything
-    // else falls through to the defaults (empty list / unsupported action). The
-    // host talks to the running container directly — the cloud is never involved.
 
     /// Players currently online. Empty if the game/server can't report them.
     async fn list_players(&self, server_id: &str) -> Result<Vec<Player>> {

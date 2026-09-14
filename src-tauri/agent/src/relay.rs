@@ -1,17 +1,7 @@
-//! Relay client — connects a *linked* agent to the LocalForge cloud relay so
-//! it executes commands without the owner's desktop being online.
-//!
-//! Only runs when `config.cloud` is set (an enrolled agent). The standalone
-//! HTTPS surface is unaffected. Mirrors the mobile relay's staged-connect TLS
-//! (webpki roots + ring) — the approach that cured the connect-hang — and
-//! dispatches the relay cmd vocabulary to the SAME `NodeBackend` the agent
-//! already serves over HTTPS. See the cloud repo's
-//! docs/adr/0001-agent-direct-relay.md.
-//!
-//! Inbound  : `cmd` frames {type:'cmd', cmd, target, request_id, args}.
-//! Outbound : `event` frames the cloud broadcasts to the mobile/desktop —
-//!            cmd_result, logs_snapshot, stats_snapshot, console_line,
-//!            server.state_changed, state_snapshot.
+//! Relay client for a linked agent: connects to the cloud relay and executes `cmd` frames
+//! against the same `NodeBackend` served over HTTPS, so the owner's desktop needn't be online.
+//! Outbound `event` frames: cmd_result, logs_snapshot, stats_snapshot, console_line,
+//! server.state_changed, state_snapshot.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,8 +26,7 @@ type Outbound = mpsc::UnboundedSender<String>;
 type AttachMap = Arc<Mutex<HashMap<String, JoinHandle<()>>>>;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// App-level keepalive. The cloud DO auto-responds to {"type":"ping"} via
-/// setWebSocketAutoResponse without waking, keeping the socket alive.
+/// App-level keepalive; the cloud DO auto-responds without waking.
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Deserialize)]
@@ -50,9 +39,7 @@ struct RelayFrame {
     args: Option<Value>,
 }
 
-/// Spawn the relay client. Returns immediately; the loop runs for the life of
-/// the process, reconnecting with backoff (250ms → 30s). `data_root` is where
-/// the provisioned S3 backup target lives (for relay-triggered backups).
+/// Spawn the relay loop for the life of the process, reconnecting with backoff (250 ms → 30 s).
 pub fn spawn(backend: Arc<dyn NodeBackend>, link: CloudLink, data_root: std::path::PathBuf) {
     tokio::spawn(async move { run(backend, link, data_root).await });
 }
@@ -172,10 +159,7 @@ async fn handle_cmd(
     let rid = f.request_id;
     let args = f.args.unwrap_or(Value::Null);
 
-    // Validate the server id (relay `target`) before passing it to the backend.
-    // The backend constructs filesystem paths from this value, so reject anything
-    // that could escape the data directory. Valid ids are UUIDs (hex + dashes);
-    // we allow underscores for forward-compat but nothing else.
+    // The backend builds filesystem paths from the server id; reject anything that could escape.
     if !target.is_empty()
         && !target.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
@@ -186,10 +170,7 @@ async fn handle_cmd(
     match cmd.as_str() {
         "state.snapshot" => match backend.list_servers().await {
             Ok(servers) => {
-                // Include name + game_type so a relay client that doesn't
-                // already know this server (e.g. the mobile app discovering
-                // an agent's servers) can render a full row, not just a
-                // status badge. Extra fields are ignored by older consumers.
+                // name + game_type let a client that doesn't know this server render a full row.
                 let arr: Vec<Value> = servers
                     .iter()
                     .map(|s| {
@@ -236,8 +217,6 @@ async fn handle_cmd(
         "server.start" => lifecycle(backend.start_server(&target).await, &out, &rid, &cmd, &target),
         "server.stop" => lifecycle(backend.stop_server(&target).await, &out, &rid, &cmd, &target),
         "server.restart" => {
-            // A real restart: stop, then start (the desktop maps restart to
-            // stop-only today; the agent does it properly).
             if let Err(e) = backend.stop_server(&target).await {
                 cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string()));
                 return;
@@ -264,10 +243,23 @@ async fn handle_cmd(
             }
         }
 
-        "server.delete" => match backend.delete_server(&target).await {
-            Ok(()) => cmd_result(&out, &rid, &cmd, &target, true, None),
-            Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),
-        },
+        "server.delete" => {
+            // A missing/unknown `deleteData` keeps the world data (same safe default as the desktop executor).
+            let delete_data = args
+                .get("deleteData")
+                .or_else(|| args.get("delete_data"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let res = if delete_data {
+                backend.delete_server(&target).await
+            } else {
+                backend.delete_server_keep_data(&target).await
+            };
+            match res {
+                Ok(()) => cmd_result(&out, &rid, &cmd, &target, true, None),
+                Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),
+            }
+        }
 
         "server.attach" => {
             let out2 = out.clone();
@@ -308,9 +300,7 @@ async fn handle_cmd(
             cmd_result(&out, &rid, &cmd, &target, true, None);
         }
 
-        // ----- backups over relay (uses this node's provisioned target) ------
-        // The S3 secret never travels the relay: the desktop provisioned it to
-        // this agent over direct HTTPS, and we resolve it locally here.
+        // Backups over relay: the S3 secret never travels the relay; it was provisioned over direct HTTPS.
         "server.backups_list" => match crate::backup_target::find(&data_root, args.get("targetId").and_then(|v| v.as_str())) {
             Some(t) => match backend.list_backups(&target, &t).await {
                 Ok(list) => {
@@ -380,6 +370,25 @@ async fn handle_cmd(
 
         "server.delete_schedule" => {
             let sid = args.get("schedule_id").and_then(Value::as_str).unwrap_or("");
+            // Verify the schedule belongs to `target`: the relay scope-checks the target, not the schedule id.
+            let owned = match backend.list_schedules(&target).await {
+                Ok(list) => list.iter().any(|s| s.id == sid),
+                Err(e) => {
+                    cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string()));
+                    return;
+                }
+            };
+            if !owned {
+                cmd_result(
+                    &out,
+                    &rid,
+                    &cmd,
+                    &target,
+                    false,
+                    Some("schedule does not belong to the target server".into()),
+                );
+                return;
+            }
             match backend.delete_schedule(sid).await {
                 Ok(()) => cmd_result(&out, &rid, &cmd, &target, true, None),
                 Err(e) => cmd_result(&out, &rid, &cmd, &target, false, Some(e.to_string())),
@@ -431,11 +440,8 @@ fn cmd_result(
     );
 }
 
-/// webpki roots + ring, handed explicitly to tokio-tungstenite — the exact
-/// connector the mobile relay uses (its default TLS path hung on connect).
+/// webpki roots + ring handed explicitly to tokio-tungstenite (its default TLS path hung on connect).
 fn relay_tls_connector() -> tokio_tungstenite::Connector {
-    // Install a process-default provider if none yet (the HTTPS server may
-    // have installed one already; idempotent).
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());

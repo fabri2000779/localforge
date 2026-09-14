@@ -1,8 +1,4 @@
-//! Metrics-history Tauri command.
-//!
-//! Reads the host's local time-series for a server (CPU/RAM/net) since a given
-//! timestamp. Routed to the active node's backend — local Docker, or an agent
-//! over HTTPS. The cloud is never involved.
+//! Metrics-history command, routed to the active node's backend.
 
 use crate::backend::NodeRegistry;
 use crate::commands::require_backend;

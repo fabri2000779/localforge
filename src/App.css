@@ -1,8 +1,6 @@
 @import "tailwindcss";
 
-/* ---------------------------------------------------------------------------
- * Design tokens
- * ------------------------------------------------------------------------- */
+/* Design tokens */
 :root {
   /* Surfaces — "night" backdrop with layered glass cards (Crucible brand). */
   --color-bg: #0a0d14;
@@ -16,8 +14,7 @@
   --color-text-muted: #94a3b8;
   --color-text-dim: #64748b;
 
-  /* Accents — ember (forge) is the PRIMARY accent; steel (cool blue) is the
-     secondary, used for remote/agent + informational surfaces. */
+  /* Accents: ember (primary), steel (secondary; remote/agent + informational). */
   --color-accent: #f97316;
   --color-accent-light: #fdba74;
   --color-accent-deep: #ea580c;
@@ -33,13 +30,7 @@
   --color-error: #f87171;
 }
 
-/* Universal reset — MUST be inside @layer base so Tailwind utilities
- * (which live in @layer utilities) can still override it. An unlayered
- * `* { margin: 0 }` beats every Tailwind `mb-*` / `mt-*` / `m-*` rule
- * because unlayered styles have higher cascade priority than layered
- * ones, which is why our `mb-10`s on Home sections were computing to
- * `margin-bottom: 0px` and the stat cards visually collided with the
- * empty-state card below. */
+/* Universal reset inside @layer base so Tailwind utilities can still override it. */
 @layer base {
   * {
     margin: 0;
@@ -68,16 +59,12 @@ html {
   overflow: hidden;
 }
 
-/* ---------------------------------------------------------------------------
- * App shell — outer chrome
- * ------------------------------------------------------------------------- */
+/* App shell */
 .app-shell {
   background: var(--color-bg);
 }
 
-/* ---------------------------------------------------------------------------
- * Title bar
- * ------------------------------------------------------------------------- */
+/* Title bar */
 .title-bar {
   height: 2.25rem;
   display: flex;
@@ -111,9 +98,7 @@ html {
   color: white;
 }
 
-/* ---------------------------------------------------------------------------
- * Sidebar
- * ------------------------------------------------------------------------- */
+/* Sidebar */
 .app-sidebar {
   width: 16rem;
   flex-shrink: 0;
@@ -205,9 +190,7 @@ html {
   gap: 0.4rem;
 }
 
-/* ---------------------------------------------------------------------------
- * Main content area — subtle radial highlight at the top
- * ------------------------------------------------------------------------- */
+/* Main content area */
 .main-content {
   flex: 1;
   overflow-y: auto;
@@ -223,9 +206,7 @@ html {
   padding: 2.5rem 2.25rem 4.5rem;
 }
 
-/* ---------------------------------------------------------------------------
- * Page header
- * ------------------------------------------------------------------------- */
+/* Page header */
 .page-header {
   margin-bottom: 2.5rem;
 }
@@ -244,9 +225,7 @@ html {
   line-height: 1.55;
 }
 
-/* ---------------------------------------------------------------------------
- * Section header (inside a page)
- * ------------------------------------------------------------------------- */
+/* Section header */
 .section-header {
   display: flex;
   align-items: center;
@@ -263,9 +242,7 @@ html {
   gap: 0.5rem;
 }
 
-/* ---------------------------------------------------------------------------
- * Hero (the title block + CTA at the very top of a page)
- * ------------------------------------------------------------------------- */
+/* Hero */
 .hero {
   display: flex;
   align-items: center;
@@ -299,9 +276,7 @@ html {
   flex-shrink: 0;
 }
 
-/* ---------------------------------------------------------------------------
- * Overview grid (top-of-Home metrics block)
- * ------------------------------------------------------------------------- */
+/* Overview grid */
 .overview-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -313,9 +288,7 @@ html {
   }
 }
 
-/* ---------------------------------------------------------------------------
- * Stat cards — bigger numbers, accent-coloured left rail, more breathing room
- * ------------------------------------------------------------------------- */
+/* Stat cards */
 .stat-card {
   position: relative;
   display: flex;
@@ -376,27 +349,7 @@ html {
   margin-top: 0.45rem;
 }
 
-/* Legacy `.stat-value` / `.stat-icon` left here for any non-Home callers. */
-.stat-icon {
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: 0.625rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.stat-value {
-  font-size: 1.5rem;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-  color: #f8fafc;
-  line-height: 1.1;
-}
-
-/* ---------------------------------------------------------------------------
- * Scrollbars (slim, themed)
- * ------------------------------------------------------------------------- */
+/* Scrollbars */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -415,9 +368,7 @@ html {
   background-clip: padding-box;
 }
 
-/* ---------------------------------------------------------------------------
- * Buttons
- * ------------------------------------------------------------------------- */
+/* Buttons */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -439,8 +390,7 @@ html {
 }
 
 .btn-primary {
-  /* Forged-ember primary: dark text on a hot-metal gradient — the brand's
-     signature CTA, shared with mobile + landing. */
+  /* Forged-ember primary CTA, shared with mobile + landing. */
   background: linear-gradient(180deg, #fb923c 0%, #f97316 100%);
   color: #1c0f03;
   box-shadow:
@@ -521,9 +471,7 @@ html {
   color: #f1f5f9;
 }
 
-/* ---------------------------------------------------------------------------
- * Server card
- * ------------------------------------------------------------------------- */
+/* Server card */
 .server-card {
   display: flex;
   flex-direction: column;
@@ -563,9 +511,7 @@ html {
   transform: translateY(0);
 }
 
-/* ---------------------------------------------------------------------------
- * Game tile (used in Home + CreateServer game picker)
- * ------------------------------------------------------------------------- */
+/* Game tile */
 .game-tile {
   position: relative;
   display: flex;
@@ -620,9 +566,7 @@ html {
   color: #fdba74;
 }
 
-/* ---------------------------------------------------------------------------
- * Cards
- * ------------------------------------------------------------------------- */
+/* Cards */
 .card {
   background: rgba(14, 19, 28, 0.7);
   border: 1px solid var(--color-border);
@@ -640,9 +584,7 @@ html {
     0 18px 40px -20px rgba(0, 0, 0, 0.6);
 }
 
-/* ---------------------------------------------------------------------------
- * Settings rows (key-value style)
- * ------------------------------------------------------------------------- */
+/* Settings rows */
 .settings-row {
   display: flex;
   align-items: center;
@@ -663,9 +605,7 @@ html {
   font-weight: 500;
 }
 
-/* ---------------------------------------------------------------------------
- * Inputs
- * ------------------------------------------------------------------------- */
+/* Inputs */
 .input {
   width: 100%;
   padding: 0.55rem 0.875rem;
@@ -695,9 +635,7 @@ html {
   letter-spacing: -0.005em;
 }
 
-/* ---------------------------------------------------------------------------
- * Utility — eyebrow label
- * ------------------------------------------------------------------------- */
+/* Eyebrow label */
 .eyebrow {
   font-size: 0.625rem;
   font-weight: 600;
@@ -706,9 +644,7 @@ html {
   color: var(--color-accent);
 }
 
-/* ---------------------------------------------------------------------------
- * Status indicators
- * ------------------------------------------------------------------------- */
+/* Status indicators */
 .status-dot {
   display: inline-block;
   width: 0.5rem;
@@ -730,9 +666,7 @@ html {
   50% { opacity: 0.4; }
 }
 
-/* ---------------------------------------------------------------------------
- * Terminal / Console
- * ------------------------------------------------------------------------- */
+/* Terminal / Console */
 .console {
   background: #050709;
   border-radius: 0.5rem;
@@ -824,9 +758,7 @@ html {
 .console-toolbar-btn:hover { background: rgba(51, 65, 85, 0.5); color: white; }
 .console-toolbar-btn.active { background: rgba(51, 65, 85, 0.7); color: white; }
 
-/* ---------------------------------------------------------------------------
- * Animations
- * ------------------------------------------------------------------------- */
+/* Animations */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -836,10 +768,7 @@ html {
   animation: fadeIn 250ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* ────────────────────────────────────────────────────────────────────
-   Cloud auth — title bar chip, login dialog, account panel.
-   Sign-in is OPTIONAL; the empty states need to look friendly.
-   ──────────────────────────────────────────────────────────────────── */
+/* Cloud auth: title bar chip, login dialog, account panel. */
 
 .title-bar-account {
   display: inline-flex;
@@ -896,7 +825,7 @@ html {
 .plan-hobby { background: rgba(249, 115, 22, 0.22);  color: #fdba74; }
 .plan-team  { background: rgba(56, 189, 248, 0.22); color: #7dd3fc; }
 
-/* ── Modal ─────────────────────────────────────────────────────────── */
+/* Modal */
 .auth-overlay {
   position: fixed;
   inset: 0;
@@ -1058,7 +987,7 @@ html {
 }
 .auth-link:hover { color: white; text-decoration: underline; }
 
-/* ── Settings page panel ──────────────────────────────────────────── */
+/* Settings page panel */
 .cloud-empty {
   padding: 12px 4px 4px;
   font-size: 13px;
@@ -1173,7 +1102,7 @@ html {
   color: #64748b;
 }
 
-/* ── Vault key dialog + sync controls ────────────────────────────── */
+/* Vault key dialog + sync controls */
 .vault-key-block {
   display: flex;
   flex-direction: column;
@@ -1244,7 +1173,7 @@ html {
   margin-left: auto;
 }
 
-/* ── Members panel ──────────────────────────────────────────────── */
+/* Members panel */
 .members-list {
   display: flex;
   flex-direction: column;
@@ -1329,7 +1258,7 @@ html {
   border-color: rgba(248, 113, 113, 0.25);
 }
 
-/* ── Invite toast ───────────────────────────────────────────────── */
+/* Invite toast */
 .invite-toast {
   position: fixed;
   bottom: 24px;
@@ -1410,7 +1339,7 @@ html {
 }
 .cloud-foot-link:disabled { opacity: 0.6; cursor: not-allowed; }
 
-/* ── Org switcher in titlebar ───────────────────────────────────── */
+/* Org switcher in titlebar */
 .title-bar-org {
   position: relative;
   margin-right: 8px;

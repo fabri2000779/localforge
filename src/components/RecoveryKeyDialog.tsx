@@ -1,20 +1,9 @@
-/**
- * Two modes:
- *   "show"   — display the local vault key so the user can copy it to
- *              a password manager / second device.
- *   "import" — paste an existing key from another device; replaces the
- *              local one. Used to set up cloud sync on a second install.
- *
- * The key is a 256-bit AES-GCM key (the DEK) base64-encoded. The cloud
- * never sees it in the clear — only a copy WRAPPED behind the user's
- * password/passphrase (see cloud_sync_key_setup) so other devices can
- * unlock it. This dialog handles the raw key for manual device-to-device
- * transfer.
- */
+/** Show or import the raw base64 DEK for manual device-to-device transfer (the cloud only holds a wrapped copy). */
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Copy, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
+import { describeError } from '../utils/errors';
 
 interface Props {
   open: boolean;
@@ -50,7 +39,7 @@ export function RecoveryKeyDialog({ open, mode, onClose }: Props) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (e) {
-      setError(String(e));
+      setError(describeError(e));
     }
   }
 

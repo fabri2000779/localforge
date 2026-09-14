@@ -1,9 +1,4 @@
-//! Player-administration Tauri commands.
-//!
-//! Live roster + moderation (kick/ban/op) for the active node's backend — local
-//! Docker or an agent over HTTPS. Only games with a console/RCON/REST admin
-//! surface report players; the rest return an empty list. The cloud is never
-//! involved (the host talks to the running container directly).
+//! Player roster and moderation commands, routed to the active node's backend.
 
 use crate::backend::NodeRegistry;
 use crate::commands::require_backend;

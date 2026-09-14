@@ -1,15 +1,9 @@
-//! Desktop audit-log glue.
-//!
-//! The POST logic lives in `localforge-cloud-client::audit`. What
-//! stays here is the desktop's fire-and-forget pattern — every UI
-//! action spawns a Tokio task so the caller doesn't pay any cost on
-//! the request path. Mobile will do something similar with its own
-//! spawn primitive.
+//! Desktop audit-log glue: fire-and-forget emits plus the activity-feed reader.
 
 use super::{api, auth};
 use serde::{Deserialize, Serialize};
 
-// ── Activity feed (read) ───────────────────────────────────────────────────
+// Activity feed (read)
 
 /// One row of the org's activity feed, as the cloud returns it (camelCase).
 #[derive(Deserialize, Serialize)]
@@ -32,17 +26,12 @@ pub struct AuditList {
     pub entries: Vec<AuditEntry>,
     #[serde(default)]
     pub next_before: Option<i64>,
-    /// Rowid tiebreaker for the composite cursor — batch-inserted audit rows
-    /// share a created_at ms, and paging on the timestamp alone dropped the
-    /// boundary-ms siblings (audit finding).
+    /// Rowid tiebreaker for the composite cursor (batch inserts share a created_at ms).
     #[serde(default)]
     pub next_before_id: Option<i64>,
 }
 
-/// Read the active org's activity feed (Team plan, admin+; cloud enforces).
-/// `(before, before_id)` is the composite cursor for "load older" — pass both
-/// values from the previous page's `nextBefore`/`nextBeforeId`; omit for the
-/// latest page.
+/// The active org's activity feed (Team, admin+). `(before, before_id)` is the "load older" cursor.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn cloud_audit_list(
     before: Option<i64>,
@@ -62,8 +51,7 @@ pub async fn cloud_audit_list(
         .map_err(|e| e.to_string())
 }
 
-/// Best-effort audit emit. Spawns the HTTP call so callers don't pay
-/// any cost on the request path.
+/// Best-effort emit on a spawned task.
 pub fn emit(
     app: &tauri::AppHandle,
     action: &'static str,
@@ -87,10 +75,7 @@ async fn emit_inner(
     localforge_cloud_client::audit::emit(action, target, metadata, &token).await
 }
 
-/// IPC-facing audit emit. The frontend passes the action as a String,
-/// we map it to one of the recognised static strings; anything else
-/// is logged at debug and dropped (matches the cloud's drop-unknown
-/// policy so the wire contract stays in sync).
+/// IPC emit; unknown actions are dropped, matching the cloud's policy.
 #[tauri::command]
 pub async fn cloud_audit_emit(
     app: tauri::AppHandle,

@@ -25,9 +25,7 @@ export function CreateServer() {
   const { createServer, isLoading, error, clearError } = useServerStore();
   const { games } = useGamesStore();
   const { nodes, activeNodeId } = useNodesStore();
-  // The server is created on whichever node is active in the top-left
-  // switcher. Surface it so the user knows where it'll land — and how to
-  // change it — before they commit.
+  // The server lands on the active node; say so before the user commits.
   const activeNode = nodes.find((n) => n.id === activeNodeId);
 
   const initialGameType = (location.state as { gameType?: GameType })?.gameType;
@@ -44,10 +42,7 @@ export function CreateServer() {
     if (gameConfig) {
       const defaults: Record<string, string> = {};
       gameConfig.variables
-        // Parenthesise like editableVariables below: without it, && binds
-        // tighter than ||, so `system_mapping === 'none'` alone let internal
-        // (user_editable:false) variables leak their default into config
-        // (audit finding).
+        // Parenthesised: && binds tighter than ||, so internal variables must not leak their defaults.
         .filter((v) => v.user_editable && (!v.system_mapping || v.system_mapping === 'none'))
         .forEach((v) => {
           defaults[v.env] = v.default;

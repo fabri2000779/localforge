@@ -30,7 +30,9 @@ import {
   Download,
   Loader2,
 } from 'lucide-react';
+import { appConfirm } from '../stores/dialogStore';
 import { useNodesStore } from '../stores/nodesStore';
+import { describeError } from '../utils/errors';
 
 interface FileEntry {
   name: string;
@@ -52,7 +54,6 @@ interface FileManagerProps {
   serverName?: string;
 }
 
-// File icons based on extension
 const getFileIcon = (entry: FileEntry) => {
   if (entry.is_dir) {
     return <Folder size={18} className="text-yellow-400" />;
@@ -107,7 +108,6 @@ const getFileIcon = (entry: FileEntry) => {
   }
 };
 
-// Check if file is editable (text-based)
 const isEditable = (entry: FileEntry): boolean => {
   if (entry.is_dir) return false;
   
@@ -123,7 +123,6 @@ const isEditable = (entry: FileEntry): boolean => {
   return ext ? editableExtensions.includes(ext) : false;
 };
 
-// Format file size
 const formatSize = (bytes: number): string => {
   if (bytes === 0) return '—';
   const k = 1024;
@@ -132,16 +131,13 @@ const formatSize = (bytes: number): string => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 };
 
-// Format date
 const formatDate = (timestamp: number | null): string => {
   if (!timestamp) return '—';
   const date = new Date(timestamp * 1000);
   return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
-// Path helpers — split on BOTH separators since a local (Windows) node uses
-// "\" while a remote agent (Linux) node uses "/". The backend's rename/copy/
-// move take full source AND destination paths, so we build the dest here.
+// Split on BOTH separators: a local Windows node uses "\", a remote Linux agent uses "/".
 const baseName = (p: string): string => p.split(/[/\\]/).filter(Boolean).pop() ?? p;
 const parentDir = (p: string): string => {
   const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
@@ -155,19 +151,15 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
-  // Selection state
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [clipboard, setClipboard] = useState<{ paths: string[]; operation: 'copy' | 'cut' } | null>(null);
   
-  // Context menu
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: FileEntry | null } | null>(null);
   
-  // Dialogs
   const [renameDialog, setRenameDialog] = useState<{ entry: FileEntry; newName: string } | null>(null);
   const [newItemDialog, setNewItemDialog] = useState<{ type: 'file' | 'folder'; name: string } | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<FileEntry[] | null>(null);
   
-  // Editor
   const [editingFile, setEditingFile] = useState<{ path: string; name: string; content: string; original: string } | null>(null);
   const [editorSaving, setEditorSaving] = useState(false);
 
@@ -181,12 +173,9 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
   };
   const [transfers, setTransfers] = useState<Record<string, TransferInfo>>({});
 
-  // Active node id is needed for the transfer commands so we can target
-  // either the local node or whichever remote is currently selected.
   const activeNodeId = useNodesStore((s) => s.activeNodeId);
 
-  // Listen for streamed progress events from the Rust transfer
-  // commands and update the on-screen progress bar live.
+  // Live progress from the Rust transfer commands.
   useEffect(() => {
     const unlistenPromise = listen<{
       id: string;
@@ -210,10 +199,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
   }, []);
 
   const handleUpload = async () => {
-    // The OS file picker + the overwrite confirm now live in Rust: the host
-    // source path is never a free string from this WebView, which used to let a
-    // compromised frontend read any file on disk (audit finding). A cancelled
-    // pick / declined overwrite returns 0 bytes.
+    // The OS picker and overwrite confirm live in Rust: the WebView never supplies a host source path.
     const id = crypto.randomUUID();
     setTransfers((prev) => ({
       ...prev,
@@ -243,8 +229,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
   };
 
   const handleDownload = async (entry: FileEntry) => {
-    // The OS save dialog now runs in Rust — the host destination is chosen
-    // there, not passed as a string from this WebView (audit finding).
+    // The OS save dialog runs in Rust: the host destination is never a string from this WebView.
     const id = crypto.randomUUID();
     setTransfers((prev) => ({
       ...prev,
@@ -274,14 +259,10 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     }
   };
 
-  // Monotonic navigation token. Every loadDirectory bumps it; a slower response
-  // (or the 3s auto-refresh) that resolves after the user navigated is dropped,
-  // so the table never shows one directory's entries under another's path
-  // (audit finding). With rapid double-clicks, the last NAVIGATION wins, not
-  // the last response to resolve.
+  // Monotonic navigation token: a response (or auto-refresh) that resolves after the user navigated
+  // away is dropped, so the last NAVIGATION wins, not the last response.
   const navGenRef = useRef(0);
 
-  // Load directory contents
   const loadDirectory = useCallback(async (path: string) => {
     setLoading(true);
     setError(null);
@@ -295,18 +276,16 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
       setCurrentPath(path);
     } catch (e) {
       if (gen !== navGenRef.current) return;
-      setError(String(e));
+      setError(describeError(e));
     } finally {
       if (gen === navGenRef.current) setLoading(false);
     }
   }, [activeNodeId]);
 
-  // Initial load
   useEffect(() => {
     loadDirectory(rootPath);
   }, [rootPath, loadDirectory]);
 
-  // Auto-refresh every 3 seconds for live updates
   useEffect(() => {
     const interval = setInterval(() => {
       if (!editingFile && !renameDialog && !newItemDialog && !deleteConfirm) {
@@ -314,8 +293,6 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
         const gen = navGenRef.current;
         invoke<DirectoryContents>('list_directory', { path: currentPath, nodeId: activeNodeId })
           .then(result => {
-            // Drop a refresh whose directory the user navigated away from while
-            // it was in flight (audit finding).
             if (gen !== navGenRef.current) return;
             // Only update if entries changed (compare by JSON)
             const currentEntries = JSON.stringify(contents?.entries.map(e => ({ name: e.name, size: e.size, modified: e.modified })));
@@ -331,19 +308,16 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     return () => clearInterval(interval);
   }, [currentPath, contents, editingFile, renameDialog, newItemDialog, deleteConfirm, activeNodeId]);
 
-  // Close context menu on click outside
   useEffect(() => {
     const handleClick = () => setContextMenu(null);
     document.addEventListener('click', handleClick);
     return () => document.removeEventListener('click', handleClick);
   }, []);
 
-  // Navigate to directory
   const navigateTo = (path: string) => {
     loadDirectory(path);
   };
 
-  // Go up one level
   const goUp = () => {
     if (contents?.parent && currentPath !== rootPath) {
       // Don't go above root
@@ -353,30 +327,25 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     }
   };
 
-  // Go to root
   const goHome = () => {
     navigateTo(rootPath);
   };
 
-  // Open file/folder
   const handleOpen = async (entry: FileEntry) => {
     if (entry.is_dir) {
       navigateTo(entry.path);
     } else if (isEditable(entry)) {
-      // Open in editor
       try {
         const content = await invoke<string>('read_file_text', { path: entry.path, nodeId: activeNodeId });
         setEditingFile({ path: entry.path, name: entry.name, content, original: content });
       } catch (e) {
-        setError(String(e));
+        setError(describeError(e));
       }
     }
   };
 
-  // Handle selection
   const handleSelect = (entry: FileEntry, e: React.MouseEvent) => {
     if (e.ctrlKey || e.metaKey) {
-      // Toggle selection
       const newSelection = new Set(selectedItems);
       if (newSelection.has(entry.path)) {
         newSelection.delete(entry.path);
@@ -385,7 +354,6 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
       }
       setSelectedItems(newSelection);
     } else if (e.shiftKey && selectedItems.size > 0) {
-      // Range selection
       const entries = contents?.entries || [];
       const lastSelected = Array.from(selectedItems).pop();
       const lastIndex = entries.findIndex(e => e.path === lastSelected);
@@ -405,14 +373,12 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     }
   };
 
-  // Context menu handler
   const handleContextMenu = (e: React.MouseEvent, entry: FileEntry | null) => {
     e.preventDefault();
     e.stopPropagation();
     setContextMenu({ x: e.clientX, y: e.clientY, entry });
   };
 
-  // Delete items
   const handleDelete = async () => {
     if (!deleteConfirm) return;
     
@@ -423,11 +389,10 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
       setDeleteConfirm(null);
       loadDirectory(currentPath);
     } catch (e) {
-      setError(String(e));
+      setError(describeError(e));
     }
   };
 
-  // Rename item
   const handleRename = async () => {
     if (!renameDialog) return;
     
@@ -440,11 +405,10 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
       setRenameDialog(null);
       loadDirectory(currentPath);
     } catch (e) {
-      setError(String(e));
+      setError(describeError(e));
     }
   };
 
-  // Create new item
   const handleCreateNew = async () => {
     if (!newItemDialog) return;
     
@@ -459,11 +423,10 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
       setNewItemDialog(null);
       loadDirectory(currentPath);
     } catch (e) {
-      setError(String(e));
+      setError(describeError(e));
     }
   };
 
-  // Copy/Cut to clipboard
   const handleCopy = (cut: boolean = false) => {
     const paths = Array.from(selectedItems);
     if (paths.length > 0) {
@@ -472,7 +435,6 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     setContextMenu(null);
   };
 
-  // Paste from clipboard
   const handlePaste = async () => {
     if (!clipboard) return;
     
@@ -491,12 +453,11 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
       
       loadDirectory(currentPath);
     } catch (e) {
-      setError(String(e));
+      setError(describeError(e));
     }
     setContextMenu(null);
   };
 
-  // Save edited file
   const handleSaveFile = async () => {
     if (!editingFile) return;
     
@@ -505,23 +466,25 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
       await invoke('write_file_text', { path: editingFile.path, content: editingFile.content, nodeId: activeNodeId });
       setEditingFile({ ...editingFile, original: editingFile.content });
     } catch (e) {
-      setError(String(e));
+      setError(describeError(e));
     } finally {
       setEditorSaving(false);
     }
   };
 
-  // Close editor
-  const handleCloseEditor = () => {
+  const handleCloseEditor = async () => {
     if (editingFile && editingFile.content !== editingFile.original) {
-      if (!confirm('You have unsaved changes. Close anyway?')) {
-        return;
-      }
+      const ok = await appConfirm({
+        title: 'Discard unsaved changes?',
+        message: 'The edits in this file will be lost.',
+        confirmLabel: 'Close without saving',
+        danger: true,
+      });
+      if (!ok) return;
     }
     setEditingFile(null);
   };
 
-  // Open in system file explorer
   const openInExplorer = async () => {
     try {
       await open(currentPath);
@@ -530,7 +493,6 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     }
   };
 
-  // Breadcrumb path
   const getBreadcrumbs = () => {
     const relativePath = currentPath.replace(rootPath, '').replace(/^[\\/]/, '');
     const parts = relativePath ? relativePath.split(/[\\/]/) : [];
@@ -546,12 +508,10 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     return crumbs;
   };
 
-  // Get selected entries
   const getSelectedEntries = (): FileEntry[] => {
     return contents?.entries.filter(e => selectedItems.has(e.path)) || [];
   };
 
-  // File editor modal
   if (editingFile) {
     const hasChanges = editingFile.content !== editingFile.original;
     

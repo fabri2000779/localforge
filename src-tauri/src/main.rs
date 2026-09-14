@@ -1,5 +1,4 @@
-// LocalForge - Main entry point
-// Run game servers locally with a single click
+//! LocalForge desktop entry point.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -27,15 +26,10 @@ fn main() {
 
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    // Install the OS-native credential store BEFORE anything reads the
-    // keychain (cloud login, sync-key storage, relay). keyring 4 selects
-    // the backend at runtime, not via Cargo features.
+    // Must run before anything reads the keychain; keyring 4 picks the backend at runtime.
     cloud::keychain::init();
 
-    // Tell the cloud-client crate which product+version to advertise
-    // in the User-Agent. The shared crate can't bake this in via
-    // `env!()` because that would resolve to its own version (always
-    // 0.1.x), which is not what the cloud-side logs want to see.
+    // The shared crate can't use env!() for the version (it would resolve to its own).
     localforge_cloud_client::init_user_agent(format!(
         "LocalForge/{} ({} {})",
         env!("CARGO_PKG_VERSION"),
@@ -44,24 +38,15 @@ fn main() {
     ));
 
     tauri::Builder::default()
-        // single-instance MUST be the first plugin: if a second copy
-        // of LocalForge launches (which is what happens on Win/Linux
-        // when the OS hands a `localforge://…` URL to its handler),
-        // we want to forward its args to the running instance and
-        // exit before any other plugin spins up — otherwise we end up
-        // with multiple processes fighting for the keychain entry,
-        // duplicate D1 backend connections, etc.
+        // single-instance MUST be first: a second launch (how Win/Linux deliver `localforge://` URLs)
+        // forwards its args here and exits before any other plugin starts.
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             tracing::info!("[single-instance] second launch with args: {:?}", args);
-            // Bring the main window to the front so the user sees the
-            // result of whatever deep-link they just clicked.
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
                 let _ = w.set_focus();
             }
-            // Forward any localforge:// URL in argv to the deep-link
-            // handler. Windows passes the URL as the last arg; Linux
-            // sometimes splits it weirdly — we just scan.
+            // Forward any localforge:// URL in argv to the deep-link handler.
             for arg in args {
                 if arg.starts_with("localforge://") {
                     let h = app.clone();
@@ -89,10 +74,7 @@ fn main() {
             });
             std::fs::create_dir_all(&app_data_dir).ok();
 
-            // Bring up the local Docker backend and any persisted remote
-            // nodes in the background. If Docker is offline that leaves
-            // the local slot in the registry empty and the UI shows the
-            // Docker-required screen.
+            // Bring up the local Docker backend and persisted remote nodes in the background.
             let data_root = paths::home_root();
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -101,14 +83,10 @@ fn main() {
                     Ok(b) => {
                         let arc = Arc::new(b);
                         state.install_local(arc.clone()).await;
-                        // Start the host scheduler (idempotent) so cron actions
-                        // fire while the app is open. Backup schedules resolve
-                        // their target id against the desktop keychain at fire time.
+                        // Host scheduler (idempotent); backup schedules resolve targets from the keychain at fire time.
                         let resolver: localforge_backend_local::BackupTargetResolver =
                             Arc::new(|id| crate::backups::find_target(id).map(|(_, t)| t));
                         localforge_backend_local::spawn_scheduler(arc.clone(), paths::home_root(), resolver);
-                        // Watch for unexpected container exits and auto-restart
-                        // per policy (the event source for crash alerts).
                         localforge_backend_local::spawn_crash_watcher(arc, paths::home_root());
                         tracing::info!("Local Docker backend connected");
                     }
@@ -119,18 +97,11 @@ fn main() {
                 if let Err(e) = state.load_remotes().await {
                     tracing::warn!("Failed to load remote nodes: {}", e);
                 }
-                // Tell the UI the persisted remote nodes are now in the
-                // registry, so the node switcher (which fetched at mount,
-                // before this finished) re-fetches and shows them without
-                // the user having to open the Nodes page first.
+                // The node switcher fetched at mount, before this finished; tell it to re-fetch.
                 let _ = handle.emit("nodes-changed", ());
             });
 
-            // Deep-link listener: the OS hands us localforge://… URLs
-            // through this callback. On Linux + Windows we ALSO have to
-            // explicitly register the scheme at runtime in dev — the
-            // installer takes care of it in release. `register()` is
-            // idempotent so calling it on prod is fine too.
+            // Deep-link listener. Linux/Windows also register the scheme at runtime for dev (idempotent).
             #[cfg(any(target_os = "linux", windows))]
             {
                 let _ = app.deep_link().register("localforge");
@@ -155,7 +126,6 @@ fn main() {
             commands::server::stop_server,
             commands::server::delete_server,
             commands::server::list_servers,
-            commands::server::get_server_status,
             commands::server::send_command,
             commands::server::get_server_logs,
             commands::server::get_server_stats,
@@ -163,14 +133,12 @@ fn main() {
             commands::server::attach_server,
             commands::server::detach_server,
             commands::server::update_server_config,
-            commands::server::run_install_script,
             commands::server::reinstall_server,
             commands::server::update_server_game,
             commands::server::check_needs_install,
             commands::docker::check_docker_status,
             commands::docker::get_docker_info,
             commands::games::list_available_games,
-            commands::games::get_game_config,
             commands::games::add_custom_game,
             commands::games::update_game,
             commands::games::delete_game,
@@ -190,7 +158,6 @@ fn main() {
             commands::files::rename_path,
             commands::files::move_path,
             commands::files::copy_path,
-            commands::files::get_file_info,
             commands::files::download_file_to_local,
             commands::files::upload_file_from_local,
             commands::nodes::list_nodes,
@@ -201,11 +168,6 @@ fn main() {
             commands::backups::cloud_add_backup_target,
             commands::backups::cloud_remove_backup_target,
             commands::backups::cloud_pull_backup_targets,
-            // legacy compat
-            commands::backups::cloud_set_backup_target,
-            commands::backups::cloud_get_backup_target,
-            commands::backups::cloud_clear_backup_target,
-            commands::backups::cloud_pull_backup_target,
             commands::backups::cloud_backup_now,
             commands::backups::cloud_list_backups,
             commands::backups::cloud_restore_backup,
@@ -249,8 +211,10 @@ fn main() {
             cloud::vault::cloud_process_grants,
             cloud::sync::cloud_sync_now,
             cloud::sync::cloud_sync_pull,
-            cloud::sync::cloud_rotate_org_dek,
+            cloud::sync::cloud_sync_delete_server,
             cloud::sync::cloud_sync_nodes_now,
+            cloud::sync::cloud_sync_delete_node,
+            cloud::sync::cloud_rotate_org_dek,
             cloud::relay::cloud_relay_start,
             cloud::relay::cloud_relay_stop,
             cloud::relay::cloud_relay_send_cmd,

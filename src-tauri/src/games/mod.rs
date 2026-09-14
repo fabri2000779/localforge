@@ -1,5 +1,4 @@
-//! Game catalogue: pulls shared types from `localforge_core` and adds a
-//! local `GamesManager` that persists user-authored custom games.
+//! Game catalogue: shared core types plus the persisted custom-game manager.
 
 mod manager;
 

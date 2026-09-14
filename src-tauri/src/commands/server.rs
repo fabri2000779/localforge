@@ -1,11 +1,5 @@
-//! Server lifecycle Tauri commands.
-//!
-//! Thin wrappers around the active [`NodeBackend`] pulled from
-//! [`NodeRegistry`] using the supplied `nodeId` (defaults to "local").
-//! Install scripts run through the backend's `run_install` stream, so
-//! the same code path drives both local and remote installs — the
-//! desktop just intercepts `OauthUrl` events to open the user's local
-//! browser.
+//! Server lifecycle commands over the active [`NodeBackend`]; installs stream through
+//! `run_install` and the desktop opens any `OauthUrl` in the local browser.
 
 use crate::backend::NodeRegistry;
 use crate::commands::games::GamesState;
@@ -26,21 +20,13 @@ pub use localforge_core::{
     CreateServerRequest, LogEvent, LogsResponse, Server, ServerResponse, ServerStatus,
 };
 
-/// Per-server background tasks that pump log lines from the backend's
-/// stream into Tauri `server-log` events. Dropping the handle (via
-/// `abort` on detach) ends the stream cleanly.
+/// Per-server log-pump tasks (`server-log` events); aborting the handle ends the stream.
 #[derive(Default)]
 pub struct ServerState {
     pub streams: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
 }
 
-/// Does `node_id` address THIS machine's local backend? Accepts the relative
-/// "local"/empty alias AND this machine's GLOBAL device id — the registry maps
-/// both to the local backend, so a command relayed from a sub-user (or the
-/// owner's other device) targeting the device id must be treated as local.
-/// Without the device-id case, a relayed keep-data delete fell into the
-/// `!is_local` branch and wiped the world, and stop_server skipped persisting
-/// Stopping and reopened the crash-watcher race (audit finding).
+/// Whether `node_id` addresses this machine: "local"/empty or this machine's global device id.
 async fn node_is_local(state: &NodeRegistry, node_id: Option<&str>) -> bool {
     match node_id {
         None => true,
@@ -52,9 +38,7 @@ async fn node_is_local(state: &NodeRegistry, node_id: Option<&str>) -> bool {
     }
 }
 
-// ===========================================================================
 // CRUD + lifecycle
-// ===========================================================================
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn create_server(
@@ -101,9 +85,7 @@ pub async fn start_server(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("server '{}' not found", server_id))?;
 
-    // Auto-run install if needed. Works for both local and remote nodes
-    // — the backend's run_install stream is the same shape either way;
-    // OAuth URLs in the stream get opened in the user's local browser.
+    // Auto-run the install first (same stream shape for local and remote nodes).
     if !server.installed {
         let needs_install = {
             let games_manager = games_state.manager.lock().await;
@@ -152,12 +134,8 @@ pub async fn stop_server(
 
     let backend = require_backend(&state, node_id.as_deref()).await?;
 
-    // Close the crash-watcher race: persist Stopping BEFORE the graceful
-    // console-stop + 5s window below. The container can exit inside that
-    // window while the persisted status still said Running — which the
-    // watcher treated as a crash and auto-restarted the server mid-stop
-    // (audit finding). Local node only; a remote agent persists Stopping in
-    // its own backend.stop_server.
+    // Persist Stopping before the graceful stop window so the crash-watcher doesn't treat the
+    // exit as a crash. Local only; a remote agent does this itself.
     if node_is_local(&state, node_id.as_deref()).await {
         let root = paths::home_root();
         if let Ok(mut server) =
@@ -168,10 +146,7 @@ pub async fn stop_server(
         }
     }
 
-    // Graceful stop: send the game's stop_command and give the container
-    // a few seconds. Game metadata lookup happens on the desktop's
-    // catalogue regardless of node (game configs are content-addressable
-    // by game_type).
+    // Graceful stop: send the game's stop command and give it a few seconds.
     {
         let games_manager = games_state.manager.lock().await;
         if let Ok(Some(server)) = backend.get_server(&server_id).await {
@@ -211,30 +186,20 @@ pub async fn delete_server(
 ) -> Result<ServerResponse, String> {
     abort_stream(&server_id, &server_state).await;
 
-    let is_local = node_is_local(&state, node_id.as_deref()).await;
     let backend = require_backend(&state, node_id.as_deref()).await?;
 
-    if delete_data.unwrap_or(true) || !is_local {
+    // Both paths go through the node's backend; `delete_server_keep_data` refuses on backends
+    // that can't honour it instead of degrading to a wipe.
+    if delete_data.unwrap_or(true) {
         backend
             .delete_server(&server_id)
             .await
             .map_err(|e| e.to_string())?;
     } else {
-        let server = paths::load_server(&server_id).map_err(|e| e.to_string())?;
-        if let Some(container_id) = &server.container_id {
-            let _ = backend.stop_server(&server_id).await;
-            let docker = DockerManager::new().await.map_err(|e| e.to_string())?;
-            let _ = docker.remove_container(container_id).await;
-        }
-        paths::delete_server_record(&server_id).map_err(|e| e.to_string())?;
-        // Also drop the server's schedules + metrics, exactly like
-        // backend.delete_server does. Without this the keep-data path left
-        // schedule entries the scheduler kept firing against a now-missing
-        // server (nightly "backup of X failed" forever) and a dead metrics file
-        // (audit finding).
-        let root = paths::home_root();
-        let _ = localforge_backend_local::schedules::delete_for_server(&root, &server_id);
-        localforge_backend_local::metrics::remove_server(&root, &server_id);
+        backend
+            .delete_server_keep_data(&server_id)
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(ServerResponse {
@@ -256,10 +221,7 @@ pub async fn list_servers(
             continue;
         }
         if let Ok(status) = backend.server_status(&server.id).await {
-            // Keep a persisted Crashed verdict visible: the live probe maps
-            // an EXITED container to Stopped, which used to overwrite Crashed
-            // here and make the status unreachable in the UI (audit finding).
-            // A successful start persists Running and clears it naturally.
+            // Keep a persisted Crashed verdict: the live probe maps an exited container to Stopped.
             if server.status == ServerStatus::Crashed
                 && matches!(status, ServerStatus::Stopped | ServerStatus::Error)
             {
@@ -270,31 +232,6 @@ pub async fn list_servers(
     }
     servers.sort_by_key(|s| std::cmp::Reverse(s.created_at));
     Ok(servers)
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn get_server_status(
-    server_id: String,
-    node_id: Option<String>,
-    state: State<'_, NodeRegistry>,
-) -> Result<ServerStatus, String> {
-    let backend = require_backend(&state, node_id.as_deref()).await?;
-    if let Some(server) = backend
-        .get_server(&server_id)
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        if server.status == ServerStatus::Installing {
-            return Ok(ServerStatus::Installing);
-        }
-        if server.container_id.is_none() {
-            return Ok(ServerStatus::Stopped);
-        }
-    }
-    backend
-        .server_status(&server_id)
-        .await
-        .map_err(|e| e.to_string())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -381,9 +318,7 @@ pub async fn update_server_config(
     })
 }
 
-// ===========================================================================
 // Log streaming
-// ===========================================================================
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn attach_server(
@@ -454,26 +389,7 @@ async fn abort_stream(server_id: &str, state: &State<'_, ServerState>) {
     }
 }
 
-// ===========================================================================
-// Install pipeline — node-agnostic
-// ===========================================================================
-
-#[tauri::command(rename_all = "camelCase")]
-pub async fn run_install_script(
-    server_id: String,
-    node_id: Option<String>,
-    app: AppHandle,
-    state: State<'_, NodeRegistry>,
-    games_state: State<'_, GamesState>,
-) -> Result<ServerResponse, String> {
-    let server =
-        run_install_pipeline(&server_id, node_id.as_deref(), &app, &state, &games_state).await?;
-    Ok(ServerResponse {
-        success: true,
-        server: Some(server),
-        error: None,
-    })
-}
+// Install pipeline (node-agnostic)
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn reinstall_server(
@@ -572,10 +488,7 @@ pub async fn check_needs_install(
         .unwrap_or(false))
 }
 
-/// Core install routine — drives the backend's `run_install` stream and
-/// dispatches its events to the desktop UI. OAuth URLs are opened in
-/// the user's local browser regardless of which node is doing the
-/// install (the agent ships them as `OauthUrl` frames).
+/// Drive the backend's `run_install` stream into UI events; OAuth URLs open in the local browser.
 async fn run_install_pipeline(
     server_id: &str,
     node_id: Option<&str>,
@@ -628,8 +541,6 @@ async fn run_install_pipeline(
             Ok(InstallEvent::OauthUrl { url }) => {
                 if opened_urls.insert(url.clone()) {
                     open_url_in_browser(&url);
-                    // The console line is for the in-app log; the
-                    // event is for the top-right toast.
                     let _ = app.emit(
                         "server-log",
                         LogEvent {
@@ -681,10 +592,7 @@ async fn run_install_pipeline(
         .ok_or_else(|| format!("server '{}' not found after install", server_id))
 }
 
-/// Guard a log-derived URL before handing it to the OS opener. The URL is
-/// auto-detected from untrusted container output (`detect_oauth_url`), so a
-/// malicious game image could print something hostile. Require https + reject
-/// whitespace/control/quote chars so nothing weird reaches the shell layer.
+/// Log-derived URLs are untrusted container output: require https and reject shell-hostile chars.
 fn is_safe_external_url(url: &str) -> bool {
     url.starts_with("https://")
         && url.len() <= 2048
@@ -698,11 +606,7 @@ fn open_url_in_browser(url: &str) {
         tracing::warn!("refusing to open non-https/unsafe URL from logs");
         return;
     }
-    // Windows: use rundll32's FileProtocolHandler instead of `cmd /c start`.
-    // It hands the URL straight to the shell's protocol handler WITHOUT a
-    // cmd.exe parse step, so metacharacters (&, |, ^, >) can't be interpreted
-    // as commands. macOS `open` / Linux `xdg-open` already receive the URL as
-    // a single argv entry (no shell), so they're safe as-is.
+    // Windows: rundll32's FileProtocolHandler avoids a cmd.exe parse step (no metacharacter injection).
     #[cfg(target_os = "windows")]
     let _ = std::process::Command::new("rundll32")
         .args(["url.dll,FileProtocolHandler", url])

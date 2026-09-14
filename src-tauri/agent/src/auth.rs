@@ -1,5 +1,4 @@
-//! Bearer-token auth middleware. Every request to `/v1/*` must carry
-//! `Authorization: Bearer <token>` matching the configured value.
+//! Bearer-token middleware for `/v1/*`.
 
 use axum::{
     extract::State,
@@ -35,8 +34,7 @@ fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
 }
 
-/// Constant-time equality — prevents timing oracle attacks against the
-/// bearer token. Both inputs must be the same length.
+/// Constant-time comparison so the token can't be probed via timing.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;

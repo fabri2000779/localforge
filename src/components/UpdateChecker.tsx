@@ -2,18 +2,11 @@ import { useEffect, useState } from 'react';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { Download, X, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { describeError } from '../utils/errors';
 
 type Phase = 'idle' | 'downloading' | 'installing' | 'done' | 'error';
 
-/**
- * Auto-update prompt. Checks the configured `latest.json` endpoint on
- * startup (and once an hour after) — if a newer version is available
- * it shows a top-right card with release notes and an Install button.
- *
- * Restarting the desktop app to apply the update does **not** affect
- * any running game-server containers — those are owned by Docker /
- * the remote agent, not by this process.
- */
+/** Auto-update prompt: checks `latest.json` on startup and hourly; restarting doesn't affect running containers. */
 export function UpdateChecker() {
   const [update, setUpdate] = useState<Update | null>(null);
   const [dismissed, setDismissed] = useState(false);
@@ -74,7 +67,7 @@ export function UpdateChecker() {
       }, 2000);
     } catch (e) {
       console.error('[Updater] install failed:', e);
-      setErrorMsg(String(e));
+      setErrorMsg(describeError(e));
       setPhase('error');
     }
   };

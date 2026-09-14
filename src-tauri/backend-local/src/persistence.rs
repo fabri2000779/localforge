@@ -1,12 +1,4 @@
-//! On-disk persistence of server records, scoped to a configurable root.
-//!
-//! Under `<root>/`:
-//!   - `servers/<game>/<id>/`  — game world / config / saves
-//!   - `config/<id>.json`      — serialised [`Server`] record
-//!
-//! The desktop app uses `~/LocalForge` as the root; the agent uses
-//! whatever path is configured at install time (typically
-//! `/var/lib/localforge`).
+//! Server records under `<root>/config/<id>.json`; world data lives in `<root>/servers/<game>/<id>/`.
 
 use localforge_core::Server;
 use std::path::{Path, PathBuf};
@@ -42,20 +34,9 @@ pub fn save_server(root: &Path, server: &Server) -> std::io::Result<()> {
     let path = server_config_path(root, &server.id);
     let body = serde_json::to_string_pretty(server)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    // Write to a sibling temp file then atomically rename over the target.
-    // Two reasons:
-    //   1. Durability — a crash mid-write can't leave a truncated/torn record;
-    //      readers either see the old file or the complete new one.
-    //   2. Permissions — `rename` needs write on the *directory*, not on the
-    //      existing file. If a record ended up owned by another uid (e.g. it
-    //      was first written while the agent ran as root, but the service now
-    //      runs as the unprivileged `localforge` user), a plain in-place
-    //      `write` would EACCES. That was surfacing as a spurious "permission
-    //      denied" on every start/stop even though the Docker action itself
-    //      succeeded. Replacing via rename works as long as we own the dir.
+    // Temp file + rename: atomic (no torn records) and needs only directory write permission,
+    // so a record owned by another uid (the agent once ran as root) can still be replaced.
     let tmp = dir.join(format!(".{}.json.tmp", server.id));
-    // Clear any stale (possibly foreign-owned) temp so the create/truncate
-    // below can't itself hit EACCES; unlinking only needs dir write.
     let _ = std::fs::remove_file(&tmp);
     std::fs::write(&tmp, body)?;
     std::fs::rename(&tmp, &path)

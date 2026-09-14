@@ -1,22 +1,5 @@
-/**
- * Modal that walks the user through the envelope-encryption setup.
- *
- * Auto-mounted at App root. Renders based on `syncKeyStatus`:
- *   not_set_up → "Create your sync password" (passphrase + confirm)
- *   locked     → "Enter your sync password"  (single input)
- *   unlocked   → nothing
- *
- * Email/pwd users will almost never see this because the auth flow
- * uses their account password to set up / unlock the wrap
- * automatically. OAuth users (Discord / Google / GitHub) WILL see it
- * the first time they sign in.
- *
- * Dismissable: the user can close it and use the app without cloud
- * sync. A persistent banner in CloudAccountPanel + the sync button
- * itself surface that the key still needs setup. We do this rather
- * than block the whole UI because local-only usage is a first-class
- * mode.
- */
+/** Envelope-encryption setup modal driven by `syncKeyStatus` (create or enter the sync password).
+ *  Dismissable: local-only use is first-class; OAuth users see it on first sign-in. */
 import { useEffect, useState, type FormEvent } from 'react';
 import { X, ShieldCheck, KeyRound, AlertTriangle } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
@@ -28,19 +11,14 @@ export function SyncKeyDialog() {
   const setupSyncKey = useAuthStore((s) => s.setupSyncKey);
   const unlockSyncKey = useAuthStore((s) => s.unlockSyncKey);
 
-  // Track whether the user has explicitly dismissed the dialog this
-  // session so we don't keep popping it back open when state refreshes.
-  // Bumping openSyncKeyTick (from "Set up sync key" button in the
-  // CloudAccountPanel) resets this so the dialog re-opens.
+  // Explicit dismissal for this session; openSyncKeyTick re-opens it.
   const [dismissed, setDismissed] = useState(false);
   const [passphrase, setPassphrase] = useState('');
   const [confirm, setConfirm] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Reset transient state whenever the user signs in/out, the status
-  // flips, or the explicit-open counter ticks — keeps the input clean
-  // and forgets any error.
+  // Reset transient state on sign-in/out, status flips and explicit opens.
   useEffect(() => {
     setPassphrase('');
     setConfirm('');
@@ -49,8 +27,6 @@ export function SyncKeyDialog() {
     setDismissed(false);
   }, [me?.id, status, openTick]);
 
-  // Only render when we have a signed-in user, the status was checked,
-  // and the user hasn't already closed it this session.
   const shouldShow =
     !!me &&
     status !== null &&
@@ -78,8 +54,7 @@ export function SyncKeyDialog() {
       : await unlockSyncKey(passphrase);
     setSubmitting(false);
     if (ok) {
-      // Status flip happens inside setupSyncKey/unlockSyncKey via
-      // refreshSyncKeyStatus; the dialog disappears on next render.
+      // The status flip inside setup/unlock hides the dialog on the next render.
       return;
     }
     setErr(isSetup

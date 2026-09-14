@@ -1,8 +1,4 @@
-//! Desktop-specific path resolution. The agent has its own data root;
-//! the desktop hardcodes `~/LocalForge`. These helpers are just thin
-//! wrappers around `localforge_backend_local::persistence` with that
-//! root pre-applied so the install scripts in `commands::server` don't
-//! have to thread a `&Path` through every call.
+//! Desktop path helpers: persistence wrappers with `~/LocalForge` pre-applied.
 
 use localforge_backend_local::persistence;
 use localforge_core::Server;
@@ -17,8 +13,4 @@ pub fn home_root() -> PathBuf {
 
 pub fn load_server(id: &str) -> std::io::Result<Server> {
     persistence::load_server(&home_root(), id)
-}
-
-pub fn delete_server_record(id: &str) -> std::io::Result<()> {
-    persistence::delete_server_record(&home_root(), id)
 }

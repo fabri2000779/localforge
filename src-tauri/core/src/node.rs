@@ -1,8 +1,4 @@
-//! Node identity and configuration types.
-//!
-//! A "node" is anywhere LocalForge can run servers. The desktop app always
-//! has a `Local` node (the user's own machine via Docker) and may have
-//! zero or more `Remote` nodes pointing at agent binaries on a VPS.
+//! Node identity: the local Docker host or a remote agent.
 
 use serde::{Deserialize, Serialize};
 
@@ -59,9 +55,7 @@ pub struct RemoteConfig {
     /// Bearer token issued when the agent was installed.
     pub token: String,
 
-    /// Pinned SHA-256 fingerprint of the agent's TLS certificate. Used
-    /// when the agent runs with a self-signed cert (the default).
-    /// `None` means trust the system CA store (Let's Encrypt / public CA).
+    /// Pinned SHA-256 cert fingerprint; `None` trusts the system CA store.
     #[serde(default)]
     pub cert_fingerprint: Option<String>,
 }

@@ -1,54 +1,30 @@
-//! Desktop vault glue.
-//!
-//! All the pure crypto (AES-GCM envelope, scrypt KEK derivation, wrap
-//! / unwrap, KekParams) lives in `localforge-cloud-client::vault`.
-//! What stays here is the desktop-specific bit: persisting the
-//! unwrapped DEK in the OS keychain (Win Credential Manager, macOS
-//! Keychain, Linux Secret Service) and the `#[tauri::command]`
-//! wrappers the React layer calls.
-//!
-//! Mobile reuses the same shared crate for the crypto and wires its
-//! own DEK storage (sandboxed app-data on iOS / Android — Keychain
-//! Services + Android Keystore come later).
+//! Desktop vault glue: DEK/X25519 storage in the OS keychain plus the Tauri commands; the
+//! crypto lives in `localforge-cloud-client::vault`.
 
 use base64::Engine;
 
 use localforge_cloud_client::vault as crypto;
 
-// Re-export the pure helpers + constants so existing call sites
-// (sync.rs, relay.rs) keep working through `super::vault::*`.
-#[allow(unused_imports)]
-pub use crypto::{
-    KekParams, KEK_LEN, KEK_LOG_N, KEK_P, KEK_R, decrypt, derive_kek, encrypt, generate_key,
-    generate_salt, unwrap_dek, wrap_dek,
-};
+pub use crypto::{decrypt, derive_kek, encrypt, generate_key, unwrap_dek, wrap_dek};
 
 const SERVICE: &str = "LocalForge Cloud";
 const ACCOUNT: &str = "vault-key";
-/// Keychain slot for this user's X25519 SECRET (Team key sharing). Lets the
-/// member open org-DEK grants sealed to them. Same backend as the DEK.
+/// Keychain slot for the user's X25519 secret (Team key sharing).
 const ACCOUNT_X25519: &str = "x25519-sk";
 const KEY_LEN: usize = crypto::KEY_LEN;
 
-/// DEK to use for decrypting the ACTIVE org's blobs when it isn't ours. A
-/// sub-user viewing the owner's org sets this to the org DEK they opened from
-/// their sealed grant; cleared (back to our own keychain DEK) for our own org.
-/// `cloud_sync_pull` consults `active_dek()` so a member's pull decrypts the
-/// owner's data without ever overwriting the member's own cached DEK.
+/// Borrowed org DEK used to decrypt the active org's blobs when we don't own it; `None`
+/// means our own keychain DEK.
 static ACTIVE_DEK_OVERRIDE: std::sync::RwLock<Option<[u8; KEY_LEN]>> =
     std::sync::RwLock::new(None);
 
 fn set_active_dek_override(dek: Option<[u8; KEY_LEN]>) {
-    // Recover from a poisoned lock instead of silently dropping the write:
-    // this state decides which org's data we decrypt, so a no-op'd update is a
-    // correctness/security hazard (we'd keep the previous org's DEK installed).
+    // Recover from a poisoned lock: a dropped write would leave the previous org's DEK installed.
     let mut g = ACTIVE_DEK_OVERRIDE.write().unwrap_or_else(|e| e.into_inner());
     *g = dek;
 }
 
-/// True when a borrowed-org DEK override is installed (we're viewing an org we
-/// don't own). The push path consults this to avoid writing our own local
-/// servers into someone else's org under the wrong key.
+/// True while a borrowed-org DEK is installed (we're viewing an org we don't own).
 pub fn has_active_override() -> bool {
     ACTIVE_DEK_OVERRIDE
         .read()
@@ -56,8 +32,7 @@ pub fn has_active_override() -> bool {
         .unwrap_or_else(|e| e.into_inner().is_some())
 }
 
-/// The DEK the sync/pull path should decrypt with: the active-org override if
-/// set (sub-user viewing another org), else our own keychain DEK.
+/// The DEK the sync/pull path decrypts with: the override if set, else our own.
 pub fn active_dek() -> Result<[u8; KEY_LEN], String> {
     {
         let g = ACTIVE_DEK_OVERRIDE.read().unwrap_or_else(|e| e.into_inner());
@@ -68,18 +43,13 @@ pub fn active_dek() -> Result<[u8; KEY_LEN], String> {
     ensure_key()
 }
 
-// ---------------------------------------------------------------------------
-// OS-keychain-backed DEK storage. Desktop only — mobile uses a
-// different backend (sandboxed app-data file, behind the same logical
-// shape).
-// ---------------------------------------------------------------------------
+// OS-keychain-backed DEK storage.
 
 fn entry() -> Result<keyring_core::Entry, keyring_core::Error> {
     keyring_core::Entry::new(SERVICE, ACCOUNT)
 }
 
-/// Get-or-generate the local DEK. First call after a fresh install
-/// creates one and stashes it in the OS keychain.
+/// Get-or-generate the local DEK (stored in the OS keychain).
 pub fn ensure_key() -> Result<[u8; KEY_LEN], String> {
     if let Some(k) = load_key()? {
         return Ok(k);
@@ -116,13 +86,8 @@ pub fn save_key(key: &[u8; KEY_LEN]) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Wipe this device's cached key material (the DEK + X25519 secret) and the
-/// active-org override. Called on sign-out / account deletion so the NEXT
-/// account on a shared machine can't inherit the previous user's DEK — logout
-/// used to leave `vault-key` intact, and `cloud_sync_key_setup` then republished
-/// it as the new account's sync key, cross-linking their E2E data (audit
-/// finding). Mirrors the mobile client's `clear_local_keys`. Optionally clears
-/// borrowed org DEKs for the given org ids (the keychain can't enumerate).
+/// Wipe this device's key material (DEK, X25519 secret, override, the given borrowed org DEKs)
+/// on sign-out so the next account can't inherit it.
 pub fn clear_local_keys(borrowed_org_ids: &[String]) {
     set_active_dek_override(None);
     if let Ok(e) = entry() {
@@ -138,7 +103,7 @@ pub fn clear_local_keys(borrowed_org_ids: &[String]) {
     }
 }
 
-// --- X25519 secret (Team key sharing) -------------------------------------
+// X25519 secret (Team key sharing)
 
 fn x25519_entry() -> Result<keyring_core::Entry, keyring_core::Error> {
     keyring_core::Entry::new(SERVICE, ACCOUNT_X25519)
@@ -171,14 +136,8 @@ fn save_x25519_sk(sk: &[u8; KEY_LEN]) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Make sure this device holds the user's X25519 secret, given the KEK
-/// (available at setup/unlock time). Recovery order:
-///   1. already cached locally → done.
-///   2. cloud has a KEK-wrapped secret (another device published it) →
-///      unwrap with the KEK + cache.
-///   3. neither → mint a fresh keypair, wrap the secret with the KEK,
-///      publish the public key + wrapped secret, cache locally.
-/// The public key is stable per user; owners seal the org DEK to it.
+/// Ensure this device holds the user's X25519 secret: cached, or recovered from the cloud's
+/// KEK-wrapped copy, or freshly minted and published. The pubkey is stable per user.
 async fn ensure_keypair(kek: &[u8; KEY_LEN], token: &str) -> Result<(), super::api::ApiError> {
     use super::api;
     let local_sk =
@@ -186,13 +145,8 @@ async fn ensure_keypair(kek: &[u8; KEY_LEN], token: &str) -> Result<(), super::a
     let me = localforge_cloud_client::auth::fetch_me(token).await?;
 
     if let Some(sk) = local_sk {
-        // We already hold the secret. Ensure the cloud's KEK-wrapped copy is
-        // wrapped with the CURRENT KEK: a passphrase rotation changes the KEK,
-        // and a stale wrapped_x25519_sk made every OTHER device fail to unwrap
-        // it and mint a FRESH keypair — overwriting the published pubkey and
-        // orphaning every existing grant, locking the member out for good
-        // (audit finding). Re-publishing the SAME pubkey with a freshly-wrapped
-        // secret keeps grants valid and only refreshes the wrap.
+        // Re-wrap with the CURRENT KEK after a passphrase change; minting a new keypair instead
+        // would orphan every existing grant.
         let needs_rewrap = match &me.wrapped_x25519_sk {
             Some(w) => crypto::unwrap_dek(kek, w).is_err(),
             None => true,
@@ -212,11 +166,7 @@ async fn ensure_keypair(kek: &[u8; KEY_LEN], token: &str) -> Result<(), super::a
             save_x25519_sk(&sk).map_err(|e| api::ApiError::Decode(format!("x25519: {e}")))?;
             return Ok(());
         }
-        // Wrapped present but unwrap failed. With the re-wrap-on-rotation fix
-        // above this is now rare (a legacy/corrupt blob). Minting a fresh
-        // keypair overwrites the pubkey and orphans grants — the owner's
-        // process_grants re-seals us because cloud_unlock_org_dek DELETEs the
-        // now-unopenable grant, so pending_grants lists us again.
+        // Unwrap failed (legacy/corrupt blob): mint a new keypair; the cloud re-lists us for re-sealing.
     }
     let (sk, pk) = crypto::generate_keypair();
     let wrapped_sk = crypto::wrap_dek(kek, &sk).map_err(api::ApiError::Decode)?;
@@ -226,13 +176,8 @@ async fn ensure_keypair(kek: &[u8; KEY_LEN], token: &str) -> Result<(), super::a
     Ok(())
 }
 
-// --- Per-org DEK cache (a member's borrowed org key) ----------------------
-//
-// When a member obtains an org's DEK — via an invite handoff or by opening a
-// sealed grant — we cache it in the keychain keyed by org. That makes access
-// durable across restarts WITHOUT needing the grant re-opened (or even a
-// keypair, for the invite-handoff path) every time. Never the user's OWN org
-// (that's the plain `vault-key` DEK).
+// Per-org DEK cache: a member's borrowed org key, kept in the keychain so access survives
+// restarts without re-opening the grant. Never the user's own org.
 
 fn org_dek_entry(org_id: &str) -> Result<keyring_core::Entry, keyring_core::Error> {
     keyring_core::Entry::new(SERVICE, &format!("org-dek:{org_id}"))
@@ -258,22 +203,14 @@ fn save_org_dek(org_id: &str, dek: &[u8; KEY_LEN]) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Adopt an org DEK we just obtained (invite handoff): cache it durably +
-/// make it the active decryption key. Used by the accept-invite command.
+/// Adopt an org DEK obtained via invite handoff: cache it and make it the active key.
 pub fn adopt_org_dek(org_id: &str, dek: &[u8; KEY_LEN]) {
     let _ = save_org_dek(org_id, dek);
     set_active_dek_override(Some(*dek));
 }
 
-/// Member side: seal the org DEK we just obtained (via invite handoff) to OUR
-/// OWN pubkey and upload it as a durable grant — so our *other* devices get
-/// access without waiting for the owner to seal one (matching how the
-/// invite-handoff device already has it via the local cache). Best-effort:
-///   - returns `Ok(false)` if we have no X25519 secret yet (sync not set up);
-///     the owner's background `process_grants` will cover us once we publish a
-///     key, so this is a pure optimization, never required for correctness.
-///   - the cloud's `POST /grants` permits a member to self-seal for their own
-///     user id (the `isSelf` branch), and it's idempotent (re-seal is fine).
+/// Member side: seal a handoff DEK to our own pubkey as a durable grant for our other devices.
+/// `Ok(false)` when this device has no keypair yet (the owner's grant will cover us).
 pub async fn self_seal_grant(
     org_id: &str,
     my_user_id: &str,
@@ -284,7 +221,7 @@ pub async fn self_seal_grant(
     let Some(sk) =
         load_x25519_sk().map_err(|e| api::ApiError::Decode(format!("x25519: {e}")))?
     else {
-        return Ok(false); // no keypair on this device yet — nothing to seal to
+        return Ok(false);
     };
     let pk = crypto::public_from_secret(&sk);
     let (epk_b64, sealed) = crypto::seal_to(&pk, dek).map_err(api::ApiError::Decode)?;
@@ -292,22 +229,16 @@ pub async fn self_seal_grant(
     Ok(true)
 }
 
-// ---------------------------------------------------------------------------
 // Tauri commands
-// ---------------------------------------------------------------------------
 
-/// Returns the base64-encoded DEK for the user to write down / paste
-/// into a second device. Generates one if absent.
+/// Base64 DEK for the user to copy to a second device (generated if absent).
 #[tauri::command]
 pub async fn cloud_vault_export_key() -> Result<String, String> {
     let key = ensure_key()?;
     Ok(base64::engine::general_purpose::STANDARD.encode(key))
 }
 
-/// Replace the local DEK with the one pasted by the user (typically
-/// the recovery key from another device). Validates length before
-/// persisting; corrupt input is rejected without touching the
-/// existing key.
+/// Replace the local DEK with a pasted recovery key; bad input leaves the existing key untouched.
 #[tauri::command]
 pub async fn cloud_vault_import_key(key_b64: String) -> Result<(), String> {
     let bytes = base64::engine::general_purpose::STANDARD
@@ -325,25 +256,14 @@ pub async fn cloud_vault_import_key(key_b64: String) -> Result<(), String> {
     save_key(&key)
 }
 
-/// True if a vault key is stored on this device — used by the UI to
-/// gate the "Show recovery key" vs "Set up sync key" prompts.
+/// Whether a vault key is stored on this device.
 #[tauri::command]
 pub async fn cloud_vault_has_key() -> Result<bool, String> {
     Ok(load_key()?.is_some())
 }
 
-/// Set up envelope encryption for the current user. Used at signup
-/// time (when the password is in hand) and on first-time sync setup
-/// for OAuth users (when they pick a passphrase).
-///
-/// Generates a fresh DEK + salt, derives the KEK from the password or
-/// passphrase, wraps the DEK, and POSTs everything to the cloud. The
-/// DEK is cached locally in the OS keychain so subsequent
-/// encrypt/decrypt calls are instant.
-///
-/// Idempotency: the cloud rejects with 409 if a wrap already exists
-/// for this user. Pass `force = true` to rotate (this orphans every
-/// existing blob — use only for password change with re-wrap).
+/// Set up envelope encryption: derive the KEK from the password/passphrase, wrap the DEK and
+/// POST it. 409 if a wrap exists unless `force` (which orphans existing blobs).
 #[tauri::command]
 pub async fn cloud_sync_key_setup(
     secret: String,
@@ -356,16 +276,13 @@ pub async fn cloud_sync_key_setup(
         message: None,
     })?;
 
-    // Use the local DEK if we already generated one (existing v0.1.14
-    // users), otherwise generate a fresh one.
-    let dek = match load_key().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))? {
-        Some(k) => k,
-        None => {
-            let k = crypto::generate_key();
-            save_key(&k).map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
-            k
-        }
-    };
+    // A fresh DEK is persisted only after the cloud accepts the wrap, so the keychain can never
+    // disagree with the server.
+    let (dek, freshly_generated) =
+        match load_key().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))? {
+            Some(k) => (k, false),
+            None => (crypto::generate_key(), true),
+        };
 
     let salt = crypto::generate_salt();
     let kek = crypto::derive_kek(&secret, &salt).map_err(api::ApiError::Decode)?;
@@ -386,21 +303,15 @@ pub async fn cloud_sync_key_setup(
         force: force.unwrap_or(false),
     };
     let _: serde_json::Value = api::post("/v1/account/sync-key", &body, Some(&token)).await?;
-    // Also establish + publish the X25519 keypair so this user can be granted
-    // (and grant) access to org-shared data. Best-effort: a failure here
-    // doesn't undo the sync-key setup.
+    if freshly_generated {
+        save_key(&dek).map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
+    }
+    // Best-effort: publish the X25519 keypair so this user can receive and grant org access.
     let _ = ensure_keypair(&kek, &token).await;
     Ok(())
 }
 
-/// Unlock the DEK on a fresh device. Fetches the wrapped_dek from
-/// /me, re-derives the KEK from the user's secret, unwraps, and
-/// caches the DEK locally.
-///
-/// `secret` is the password (email/pwd users) or sync passphrase
-/// (OAuth users) — whichever the user gave at setup time. Wrong
-/// secret → AES-GCM authentication fails → returns `wrong_secret` so
-/// the UI can prompt again without locking anything out.
+/// Unlock the DEK on a fresh device from the cloud's wrap; a wrong secret returns `wrong_secret`.
 #[tauri::command]
 pub async fn cloud_sync_key_unlock(secret: String) -> Result<(), super::api::ApiError> {
     use super::api;
@@ -415,7 +326,6 @@ pub async fn cloud_sync_key_unlock(secret: String) -> Result<(), super::api::Api
     struct SyncKey {
         wrapped_dek: String,
         kek_salt: String,
-        // kek_params currently always scrypt; we'd use it for rotation later.
     }
     #[derive(serde::Deserialize)]
     struct Me {
@@ -446,14 +356,8 @@ pub async fn cloud_sync_key_unlock(secret: String) -> Result<(), super::api::Api
     Ok(())
 }
 
-/// Unlock the DEK for an org we DON'T own (a sub-user viewing the owner's
-/// org): fetch our sealed grant, open it with our X25519 secret, and stash it
-/// as the active-org decryption DEK. `cloud_sync_pull` then decrypts the
-/// owner's blobs with it. Returns:
-///   - `granted`   — DEK unlocked, ready to decrypt.
-///   - `no_grant`  — the owner hasn't sealed us in yet (they're offline, or
-///                   we just joined). The UI shows "waiting for access".
-///   - `no_keypair`— we have no X25519 secret yet (set up sync first).
+/// Unlock the DEK of an org we don't own from our sealed grant. Returns `granted`, `no_grant`
+/// (the owner hasn't sealed us yet) or `no_keypair` (set up sync first).
 #[tauri::command(rename_all = "camelCase")]
 pub async fn cloud_unlock_org_dek(org_id: String) -> Result<&'static str, super::api::ApiError> {
     use super::api;
@@ -462,11 +366,7 @@ pub async fn cloud_unlock_org_dek(org_id: String) -> Result<&'static str, super:
         code: "unauthenticated".into(),
         message: None,
     })?;
-    // Prefer the CURRENT grant from the cloud so a rotated DEK is picked up
-    // (the owner re-seals a fresh grant after rotating). The cached DEK is
-    // only a fallback — for the invite-handoff member (no grant yet) and for
-    // offline use. This costs one small GET per org switch, which is fine for
-    // a user-initiated action and is the price of correctness across rotation.
+    // Prefer the current cloud grant so a rotated DEK is picked up; the cache is the fallback.
     let have_keypair = match load_x25519_sk() {
         Ok(opt) => opt,
         Err(e) => return Err(api::ApiError::Decode(format!("x25519: {e}"))),
@@ -479,15 +379,13 @@ pub async fn cloud_unlock_org_dek(org_id: String) -> Result<&'static str, super:
                     set_active_dek_override(Some(dek));
                     return Ok("granted");
                 }
-                // A grant exists but won't open with our key (our keypair was
-                // regenerated) — fall through to the cache / no_grant.
+                // Grant won't open with our key (keypair regenerated): fall through to the cache.
             }
             Ok(None) => { /* no grant yet — invite-handoff member uses the cache */ }
             Err(_) => { /* offline / transient — use the cache if we have one */ }
         }
     }
-    // Fallback: a DEK we cached earlier (invite handoff, or a previously
-    // opened grant). Durable across restarts + works offline.
+    // Fallback: a cached DEK (invite handoff or a previously opened grant); works offline.
     if let Some(dek) = load_org_dek(&org_id) {
         set_active_dek_override(Some(dek));
         return Ok("granted");
@@ -498,17 +396,14 @@ pub async fn cloud_unlock_org_dek(org_id: String) -> Result<&'static str, super:
     Ok("no_grant")
 }
 
-/// Clear the active-org DEK override — call when switching back to an org we
-/// own, so sync/pull goes back to our own keychain DEK.
+/// Clear the borrowed-org DEK override (switching back to an org we own).
 #[tauri::command]
 pub async fn cloud_clear_org_dek() -> Result<(), String> {
     set_active_dek_override(None);
     Ok(())
 }
 
-/// Owner side: seal OUR org DEK to every member of `org_id` who has published
-/// a key but doesn't have a grant yet. Idempotent + safe to call often (on
-/// sign-in, when a member joins). No-op / 403 if we don't own the org.
+/// Owner side: seal our org DEK to every member with a published key but no grant.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn cloud_process_grants(org_id: String) -> Result<usize, super::api::ApiError> {
     let token = super::auth::current_token().ok_or_else(|| super::api::ApiError::Server {
@@ -519,15 +414,11 @@ pub async fn cloud_process_grants(org_id: String) -> Result<usize, super::api::A
     process_grants(&org_id, &token).await
 }
 
-/// Seal OUR org DEK to every member of `org_id` who has a published key but no
-/// grant yet. Reused by the grant-on-presence flow AND by DEK rotation (after
-/// a rotation, all grants were wiped → everyone is "pending" → re-sealed with
-/// the new DEK). 403 (not the owner) → no-op.
+/// Seal our org DEK to every pending member; also used after rotation (all grants wiped). 403 = no-op.
 pub async fn process_grants(org_id: &str, token: &str) -> Result<usize, super::api::ApiError> {
     use super::api;
     let pending = match localforge_cloud_client::keys::pending_grants(org_id, token).await {
         Ok(p) => p,
-        // Not the owner of this org → nothing for us to do.
         Err(api::ApiError::Server { status: 403, .. }) => return Ok(0),
         Err(e) => return Err(e),
     };
@@ -548,9 +439,7 @@ pub async fn process_grants(org_id: &str, token: &str) -> Result<usize, super::a
         let Ok((epk_b64, sealed)) = crypto::seal_to(&pk_bytes, &dek) else {
             continue;
         };
-        // Surface per-member failures (don't silently undercount) — a failed
-        // re-seal after rotation leaves that member unable to decrypt new data,
-        // which is exactly when a silent skip is most dangerous.
+        // Log per-member failures: a silent skip after rotation would leave that member locked out.
         match localforge_cloud_client::keys::put_grant(org_id, &m.user_id, &sealed, &epk_b64, token)
             .await
         {
@@ -566,21 +455,17 @@ pub async fn process_grants(org_id: &str, token: &str) -> Result<usize, super::a
     Ok(granted)
 }
 
-/// Three-state status the UI uses to decide which dialog to show.
-///   `not_set_up`  — no wrapped_dek on the server yet (first time)
-///   `locked`      — wrap exists, but the DEK isn't cached locally
-///   `unlocked`    — DEK cached, ready to sync
+/// `not_set_up` (no wrap on the server), `locked` (wrap exists, DEK not cached) or `unlocked`.
 #[tauri::command]
 pub async fn cloud_sync_key_status() -> Result<&'static str, super::api::ApiError> {
     use super::api;
     let Some(token) = super::auth::current_token() else {
-        return Ok("not_set_up"); // not signed in at all
+        return Ok("not_set_up");
     };
     let local = load_key().ok().flatten();
 
     #[derive(serde::Deserialize)]
     struct SyncKey {
-        /* fields ignored — only existence matters */
     }
     #[derive(serde::Deserialize)]
     struct Me {

@@ -4,12 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
 import { useNodesStore } from '../stores/nodesStore';
 
-/**
- * Compact dropdown at the top of the sidebar. Shows the active node and,
- * when expanded, the list of all paired nodes so the user can switch.
- * Switching kicks off a re-fetch in serverStore and dockerStore (they
- * subscribe to nodesStore.activeNodeId).
- */
+/** Sidebar node dropdown; switching re-fetches serverStore and dockerStore via nodesStore. */
 export function NodeSelector() {
   const { nodes, activeNodeId, setActiveNode, fetchNodes } = useNodesStore();
   const [open, setOpen] = useState(false);
@@ -18,10 +13,7 @@ export function NodeSelector() {
 
   useEffect(() => {
     fetchNodes();
-    // The backend loads persisted remote nodes asynchronously at startup
-    // (after Docker connects), so this initial fetch can race ahead of them
-    // and show only the local node until you open the Nodes page. Re-fetch
-    // when the backend signals remotes are loaded.
+    // Remote nodes load asynchronously at startup; re-fetch when the backend signals them.
     const un = listen('nodes-changed', () => {
       void fetchNodes();
     });

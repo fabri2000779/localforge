@@ -1,8 +1,4 @@
-//! Org / members / invitations — pure HTTP slice of the Team-plan
-//! features. Mirrors `/v1/orgs/*` in the cloud API.
-//!
-//! Wire types live here so the desktop and mobile React layers see
-//! identical JSON shapes. Tauri command wrappers stay on each consumer.
+//! Org, member and invitation HTTP surface (`/v1/orgs/*`) with the shared wire types.
 
 use serde::{Deserialize, Serialize};
 
@@ -55,21 +51,17 @@ pub struct OrgSummary {
 struct InviteBody<'a> {
     email: &'a str,
     role: &'a str,
-    /// Org DEK wrapped with the invite secret (which travels in the link
-    /// #fragment, never sent here). Omitted on a plain invite.
+    /// Org DEK wrapped with the invite secret (the secret travels only in the link fragment).
     #[serde(rename = "wrappedDek", skip_serializing_if = "Option::is_none")]
     wrapped_dek: Option<&'a str>,
 }
 
-/// Result of accepting an invite — the org joined + (when the invite carried
-/// the handoff) the DEK wrapped with the invite secret, for the client to
-/// unwrap with the fragment secret.
+/// Accept result: the org joined, plus the handoff `wrapped_dek` when the invite carried one.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AcceptResult {
     #[serde(rename = "organizationId")]
     pub org_id: String,
-    /// The caller's own user id (echoed by the accept endpoint) — used to
-    /// self-seal a durable grant to our own pubkey right after accepting.
+    /// Caller's user id, used to self-seal a durable grant right after accepting.
     #[serde(rename = "userId", default)]
     pub user_id: Option<String>,
     #[serde(rename = "wrappedDek", default)]
@@ -86,14 +78,12 @@ pub async fn list(token: &str) -> Result<Vec<OrgSummary>, ApiError> {
     Ok(r.orgs)
 }
 
-/// Detail view of the user's primary org — name, role, current
-/// membership list.
+/// The active org's detail view: name, role and member list.
 pub async fn me(token: &str) -> Result<OrgInfo, ApiError> {
     api::get("/v1/orgs/me", Some(token)).await
 }
 
-/// Send an invitation. The cloud emails the invitee a `localforge://`
-/// deep link; if they're already a member it rejects with a 409.
+/// Send an invitation; the cloud emails a deep link and 409s if already a member.
 pub async fn invite(
     org_id: &str,
     email: &str,
@@ -103,10 +93,7 @@ pub async fn invite(
     invite_with_dek(org_id, email, role, None, token).await
 }
 
-/// Send an invitation carrying an invite-secret-wrapped org DEK so the
-/// invitee can decrypt the moment they accept (handoff). `wrapped_dek` is the
-/// org DEK encrypted under the invite secret; the secret itself goes in the
-/// link #fragment, never here.
+/// Invite with an invite-secret-wrapped org DEK so the invitee can decrypt on accept.
 pub async fn invite_with_dek(
     org_id: &str,
     email: &str,
@@ -136,70 +123,34 @@ pub async fn list_invitations(org_id: &str, token: &str) -> Result<Vec<Invitatio
     Ok(r.invitations)
 }
 
-/// Cancel an outstanding invitation by id. DELETE — uses the raw
-/// reqwest client because our `api::post` / `api::get` helpers only
-/// cover the verbs we use most. Stage-5 cleanup adds an `api::delete`
-/// so this can go through the standard path.
+/// Cancel a pending invitation. `_api_origin` is kept for call-site compatibility.
 pub async fn revoke_invitation(
     org_id: &str,
     invitation_id: &str,
     token: &str,
-    api_origin: &str,
+    _api_origin: &str,
 ) -> Result<(), ApiError> {
-    let url = format!("{api_origin}/v1/orgs/{org_id}/invitations/{invitation_id}");
-    let res = api::client()
-        .delete(&url)
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(ApiError::Network)?;
-    if res.status().is_success() {
-        Ok(())
-    } else {
-        Err(ApiError::Server {
-            status: res.status().as_u16(),
-            code: "delete_failed".into(),
-            message: None,
-        })
-    }
+    let _: serde_json::Value = api::delete(
+        &format!("/v1/orgs/{org_id}/invitations/{invitation_id}"),
+        Some(token),
+    )
+    .await?;
+    Ok(())
 }
 
-/// Kick a member out of the org. Same DELETE-via-raw-client story as
-/// `revoke_invitation`.
+/// Remove a member from the org.
 pub async fn remove_member(
     org_id: &str,
     user_id: &str,
     token: &str,
-    api_origin: &str,
+    _api_origin: &str,
 ) -> Result<(), ApiError> {
-    let url = format!("{api_origin}/v1/orgs/{org_id}/members/{user_id}");
-    let res = api::client()
-        .delete(&url)
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(ApiError::Network)?;
-    if res.status().is_success() {
-        Ok(())
-    } else {
-        Err(ApiError::Server {
-            status: res.status().as_u16(),
-            code: "delete_failed".into(),
-            message: None,
-        })
-    }
+    let _: serde_json::Value =
+        api::delete(&format!("/v1/orgs/{org_id}/members/{user_id}"), Some(token)).await?;
+    Ok(())
 }
 
-/// Accept an invitation token (delivered via the `localforge://invite`
-/// deep link OR pasted by the user). Returns the org id they joined
-/// so the UI can switch to it.
-pub async fn accept_invite(invite_token: &str, bearer: &str) -> Result<String, ApiError> {
-    Ok(accept_invite_full(invite_token, bearer).await?.org_id)
-}
-
-/// Accept an invite and also return the handoff `wrapped_dek` (if the invite
-/// carried one), so the client can unwrap the org DEK with the fragment
-/// secret and decrypt immediately.
+/// Accept an invite; returns the org id and the handoff DEK when present.
 pub async fn accept_invite_full(invite_token: &str, bearer: &str) -> Result<AcceptResult, ApiError> {
     api::post(
         &format!("/v1/orgs/invitations/{invite_token}/accept"),

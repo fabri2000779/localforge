@@ -1,23 +1,17 @@
-/**
- * Listens for `cloud://invite-received` (the deep-link handler emits
- * this when the user clicks an invitation email). Pops a toast with
- * an Accept button. If they're not signed in, the toast routes them
- * to the LoginDialog first; we keep the token in component state and
- * accept once the user is logged in.
- */
+/** Toast for `cloud://invite-received` (invitation email deep link); routes through login first if needed. */
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Mail, X, Check } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { LoginDialog } from './LoginDialog';
+import { describeError } from '../utils/errors';
 
 export function AcceptInviteToast() {
   const me = useAuthStore((s) => s.me);
   const refreshMe = useAuthStore((s) => s.refreshMe);
   const [token, setToken] = useState<string | null>(null);
-  // Handoff secret from the invite link #fragment — lets us decrypt the
-  // owner's org the instant we accept. Optional (plain invites have none).
+  // Optional handoff secret from the invite link #fragment.
   const [secret, setSecret] = useState<string | null>(null);
   const [pendingLogin, setPendingLogin] = useState(false);
   const [accepting, setAccepting] = useState(false);
@@ -33,8 +27,7 @@ export function AcceptInviteToast() {
     return () => { if (unlisten) unlisten(); };
   }, []);
 
-  // Once the user signs in (if they had a pending invite), kick the
-  // accept flow automatically.
+  // Accept automatically once the user signs in.
   useEffect(() => {
     if (pendingLogin && me && token) {
       setPendingLogin(false);
@@ -51,10 +44,7 @@ export function AcceptInviteToast() {
       setToken(null);
       setSecret(null);
       await refreshMe();
-      // Switch to the org we just joined so active-org scoping + the handoff
-      // DEK kick in and the owner's servers appear right away. The new
-      // membership can lag a beat, and setCurrentOrg silently no-ops if the org
-      // isn't in the list yet — so poll fetchOrgs until it shows up, then switch.
+      // Switch to the joined org; membership can lag, so poll fetchOrgs until it appears.
       const auth = useAuthStore.getState();
       for (let i = 0; i < 5; i++) {
         await auth.fetchOrgs();
@@ -68,7 +58,7 @@ export function AcceptInviteToast() {
         msg.code === 'wrong_account' ? "This invite is for a different email — sign out and use the right account." :
         msg.code === 'expired'       ? 'Invitation expired. Ask the inviter to resend.' :
         msg.code === 'already_accepted' ? 'You already accepted this invitation.' :
-        msg.message ?? String(e),
+        msg.message ?? describeError(e),
       );
     } finally { setAccepting(false); }
   }

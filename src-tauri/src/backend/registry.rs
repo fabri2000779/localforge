@@ -1,8 +1,5 @@
-//! Multi-node registry: keeps an [`Arc<dyn NodeBackend>`] per known node
-//! and persists their connection configs to `~/LocalForge/nodes.toml`.
-//!
-//! The local node always exists with id `"local"`; remote nodes are
-//! added/removed at runtime via the "Add Node" UI.
+//! Node registry: one [`Arc<dyn NodeBackend>`] per known node, remote configs persisted in
+//! `~/LocalForge/nodes.toml`. The local node always exists with id `"local"`.
 
 use crate::backend::DynBackend;
 use crate::paths;
@@ -16,10 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Sync-export shape: every remote node WITH the secret token. Used
-/// once-per-sync to build the encrypted blob the cloud stores. Never
-/// surfaced to the frontend (it'd defeat the whole "tokens stay
-/// local" guarantee).
+/// Remote node WITH its secret token, for the encrypted cloud-sync blob; never sent to the frontend.
 #[derive(Debug, Clone)]
 pub struct RemoteNodeForSync {
     pub id: String,
@@ -29,39 +23,19 @@ pub struct RemoteNodeForSync {
     pub fingerprint: Option<String>,
 }
 
-/// Stable identity for THIS physical machine, persisted to
-/// `~/LocalForge/this_machine.toml`.
-///
-/// `id` is a UUID minted once and never changed. It is the machine's
-/// GLOBAL identity: when the user later signs in + upgrades, the cloud
-/// ADOPTS this exact id (the device owns the id, the cloud merely borrows
-/// it), so servers + history survive the unlogged→paid transition without
-/// re-identification. `name` is a free-form, NON-unique label the user can
-/// rename (two machines may share a name; they're told apart by `id`).
-///
-/// Note the deliberate split: INTERNALLY the local node keeps the relative
-/// id "local" (see [`NodeId::LOCAL`]) so every existing call site is
-/// untouched. This record is only used at the CLOUD boundary (sync tag,
-/// enrollment claim, relay addressing) — wired up in later phases.
+/// This machine's stable identity (`this_machine.toml`): a UUID the cloud adopts as the device id plus a
+/// user-editable name. Internally the local node keeps the id "local"; this record is for the cloud boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThisMachine {
     pub id: String,
     pub name: String,
-    /// Unix-ms when the user accepted or skipped the "name this machine"
-    /// first-run prompt. Lives here (not in localStorage) because the dialog
-    /// gate must survive WebView profile resets, reinstalls and dev/prod
-    /// switching — anything `~/LocalForge/` survives, the browser store
-    /// doesn't. `None` means the user has never dismissed it.
-    ///
-    /// Optional with a serde default so older `this_machine.toml` files
-    /// (without this field) deserialise cleanly, and `skip_serializing_if`
-    /// keeps the toml clean when the prompt hasn't been dismissed yet.
+    /// Unix ms when the first-run "name this machine" prompt was dismissed; stored here rather
+    /// than in localStorage so it survives WebView resets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name_prompt_dismissed_at: Option<i64>,
 }
 
-/// Best-effort OS hostname for the default machine name. The user can
-/// rename it afterwards, so a generic fallback is fine.
+/// OS hostname as the default machine name.
 fn default_machine_name() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
@@ -71,8 +45,7 @@ fn default_machine_name() -> String {
         .unwrap_or_else(|| "My machine".to_string())
 }
 
-/// User-visible record of a node (everything except its live backend
-/// handle). This is what the UI lists in the "Nodes" page.
+/// User-visible node record (everything except the live backend handle).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeRecord {
     pub id: NodeId,
@@ -88,8 +61,7 @@ pub enum NodeKindRecord {
         url: String,
         /// `None` when the agent has a real CA-signed cert.
         fingerprint: Option<String>,
-        // Token is intentionally not surfaced in the listing — UI uses a
-        // separate command to "reveal" it if the user wants to re-copy it.
+        // The token is deliberately not surfaced in the listing.
     },
 }
 
@@ -119,8 +91,7 @@ pub struct NodeRegistry {
 struct RegistryInner {
     backends: HashMap<NodeId, DynBackend>,
     records: HashMap<NodeId, NodeRecord>,
-    /// Identity of the local machine (loaded/minted on `install_local`).
-    /// `None` until Docker is reachable and the local node is installed.
+    /// Local machine identity; `None` until the local node is installed.
     this_machine: Option<ThisMachine>,
 }
 
@@ -133,9 +104,7 @@ impl NodeRegistry {
         paths::home_root().join("this_machine.toml")
     }
 
-    /// Load the persisted machine identity, or mint a fresh one (UUID +
-    /// hostname-derived default name) and write it. The id is stable
-    /// forever after; only the name is user-editable.
+    /// Load the persisted machine identity or mint one (UUID + hostname name).
     fn load_or_create_this_machine() -> ThisMachine {
         let path = Self::this_machine_file();
         if let Ok(body) = std::fs::read_to_string(&path) {
@@ -154,9 +123,7 @@ impl NodeRegistry {
         machine
     }
 
-    /// Replace the local backend (called once Docker is reachable). Also
-    /// loads/mints this machine's stable identity and uses its name as the
-    /// local node's label.
+    /// Install the local backend once Docker is reachable; the machine name becomes the node label.
     pub async fn install_local(&self, backend: DynBackend) {
         let machine = Self::load_or_create_this_machine();
         let mut state = self.inner.write().await;
@@ -172,23 +139,18 @@ impl NodeRegistry {
         state.this_machine = Some(machine);
     }
 
-    /// This machine's stable identity (id + name), or `None` before the
-    /// local node is installed.
+    /// This machine's identity, or `None` before the local node is installed.
     pub async fn this_machine(&self) -> Option<ThisMachine> {
         self.inner.read().await.this_machine.clone()
     }
 
-    /// Rename this machine — updates the persisted record AND the live
-    /// local node label. The id is never touched.
+    /// Rename this machine (record and live label); the id never changes.
     pub async fn set_machine_name(&self, name: String) -> anyhow::Result<ThisMachine> {
         let name = name.trim().to_string();
         if name.is_empty() {
             anyhow::bail!("machine name cannot be empty");
         }
-        // Update in-memory state under the lock, capture the bytes to persist,
-        // then DROP the guard before the blocking fs write — holding an async
-        // RwLock across disk IO stalls every other registry consumer (relay,
-        // sync) for the write's duration.
+        // Drop the lock before the blocking fs write so other registry users aren't stalled.
         let (machine, body) = {
             let mut state = self.inner.write().await;
             let mut machine = state
@@ -210,14 +172,8 @@ impl NodeRegistry {
         Ok(machine)
     }
 
-    /// Record that the user dismissed (accepted or skipped) the first-run
-    /// "name this machine" prompt. Persists a timestamp into
-    /// `this_machine.toml` so the dialog never fires again on this device,
-    /// no matter what the WebView's localStorage does. Idempotent — the
-    /// original timestamp wins if called multiple times.
+    /// Record the first-run prompt dismissal (idempotent; the first timestamp wins).
     pub async fn set_name_prompt_dismissed(&self) -> anyhow::Result<ThisMachine> {
-        // Same lock-then-write discipline as set_machine_name: never hold the
-        // async RwLock across the blocking fs write.
         let (machine, body) = {
             let mut state = self.inner.write().await;
             let mut machine = state
@@ -242,10 +198,7 @@ impl NodeRegistry {
         Ok(machine)
     }
 
-    /// Reload remote node configs from disk and try to connect to each.
-    /// Errors per-node are logged but don't fail the whole load — a node
-    /// that's offline still appears in the list, just without a live
-    /// backend.
+    /// Reload remote configs and connect to each; an offline node still gets a record.
     pub async fn load_remotes(&self) -> anyhow::Result<()> {
         let path = Self::nodes_file();
         if !path.exists() {
@@ -260,8 +213,7 @@ impl NodeRegistry {
             let url = node.url.clone();
             let fingerprint = node.fingerprint.clone();
 
-            // Record always present so the UI can show it as offline if
-            // the connection fails.
+            // Record first so the UI can show the node as offline if the connection fails.
             {
                 let mut state = self.inner.write().await;
                 state.records.insert(
@@ -296,10 +248,7 @@ impl NodeRegistry {
         Ok(())
     }
 
-    /// Try to connect a candidate remote agent (without persisting it) —
-    /// used by the UI's "Test connection" button. Returns the agent's
-    /// reported Docker info so the user can confirm they reached the
-    /// right machine.
+    /// Connect to a candidate agent without persisting it ("Test connection").
     pub async fn probe(
         cfg: RemoteAgentConfig,
     ) -> Result<localforge_core::DockerInfo, localforge_core::BackendError> {
@@ -308,60 +257,86 @@ impl NodeRegistry {
         backend.docker_info().await
     }
 
-    /// Persist + activate a new remote node. Fails if `id` already
-    /// exists or the agent isn't reachable.
+    /// Persist + activate a new remote node; fails if the id exists or the agent is unreachable.
     pub async fn add_remote(
         &self,
         id: String,
         label: String,
         cfg: RemoteAgentConfig,
     ) -> anyhow::Result<NodeRecord> {
-        let node_id = NodeId::new(&id);
-        if node_id.is_local() {
-            anyhow::bail!("'{}' is reserved for the local node", NodeId::LOCAL);
-        }
-        {
-            let state = self.inner.read().await;
-            if state.records.contains_key(&node_id) {
-                anyhow::bail!("a node with id '{}' already exists", id);
-            }
-        }
-
+        let node_id = self.ensure_new_remote_id(&id).await?;
         let backend = RemoteAgentBackend::connect(cfg.clone())
             .await
             .map_err(|e| anyhow::anyhow!("agent unreachable: {}", e))?;
 
-        // Persist BEFORE inserting into memory so the file is the source
-        // of truth on next launch.
-        let mut file = self.read_nodes_file()?;
-        file.nodes.push(StoredRemoteNode {
-            id: id.clone(),
-            label: label.clone(),
-            url: cfg.url.clone(),
-            token: cfg.token.clone(),
-            fingerprint: cfg.fingerprint.clone(),
-        });
-        self.write_nodes_file(&file)?;
-
-        let record = NodeRecord {
-            id: node_id.clone(),
-            label,
-            kind: NodeKindRecord::Remote {
-                url: cfg.url,
-                fingerprint: cfg.fingerprint,
-            },
-        };
+        // Persist before inserting into memory so the file is the source of truth on next launch.
+        let record = self.persist_remote(&id, &label, &cfg)?;
         let mut state = self.inner.write().await;
         state.backends.insert(node_id.clone(), Arc::new(backend));
         state.records.insert(node_id, record.clone());
         Ok(record)
     }
 
-    /// Plaintext snapshot of every remote node, INCLUDING the secret
-    /// token. Used by cloud sync to encrypt-and-push to the cloud — the
-    /// resulting blob lets the user restore the same nodes on a second
-    /// device with full credentials. The token never leaves the
-    /// keychain-protected JSON file in plaintext anywhere else.
+    /// Restore a node pulled from cloud sync. Unlike `add_remote`, an unreachable agent still gets
+    /// a record (as on startup), so a fresh install shows the whole fleet before every VPS answers.
+    pub async fn import_remote(
+        &self,
+        id: String,
+        label: String,
+        cfg: RemoteAgentConfig,
+    ) -> anyhow::Result<()> {
+        let node_id = self.ensure_new_remote_id(&id).await?;
+        let record = self.persist_remote(&id, &label, &cfg)?;
+        let backend = RemoteAgentBackend::connect(cfg).await;
+        let mut state = self.inner.write().await;
+        state.records.insert(node_id.clone(), record);
+        match backend {
+            Ok(b) => {
+                state.backends.insert(node_id, Arc::new(b));
+            }
+            Err(e) => tracing::warn!("imported node '{}' unreachable: {}", node_id, e),
+        }
+        Ok(())
+    }
+
+    async fn ensure_new_remote_id(&self, id: &str) -> anyhow::Result<NodeId> {
+        let node_id = NodeId::new(id);
+        if node_id.is_local() {
+            anyhow::bail!("'{}' is reserved for the local node", NodeId::LOCAL);
+        }
+        if self.inner.read().await.records.contains_key(&node_id) {
+            anyhow::bail!("a node with id '{}' already exists", id);
+        }
+        Ok(node_id)
+    }
+
+    /// Append a remote node to `nodes.toml` and return its UI record.
+    fn persist_remote(
+        &self,
+        id: &str,
+        label: &str,
+        cfg: &RemoteAgentConfig,
+    ) -> anyhow::Result<NodeRecord> {
+        let mut file = self.read_nodes_file()?;
+        file.nodes.push(StoredRemoteNode {
+            id: id.to_string(),
+            label: label.to_string(),
+            url: cfg.url.clone(),
+            token: cfg.token.clone(),
+            fingerprint: cfg.fingerprint.clone(),
+        });
+        self.write_nodes_file(&file)?;
+        Ok(NodeRecord {
+            id: NodeId::new(id),
+            label: label.to_string(),
+            kind: NodeKindRecord::Remote {
+                url: cfg.url.clone(),
+                fingerprint: cfg.fingerprint.clone(),
+            },
+        })
+    }
+
+    /// Every remote node including its token, for cloud sync's encrypted push.
     pub fn list_remote_for_sync(&self) -> anyhow::Result<Vec<RemoteNodeForSync>> {
         let file = self.read_nodes_file()?;
         Ok(file
@@ -395,7 +370,6 @@ impl NodeRegistry {
         let state = self.inner.read().await;
         let mut out: Vec<_> = state.records.values().cloned().collect();
         out.sort_by(|a, b| {
-            // Local first, then by label.
             match (a.id.is_local(), b.id.is_local()) {
                 (true, false) => std::cmp::Ordering::Less,
                 (false, true) => std::cmp::Ordering::Greater,
@@ -410,11 +384,7 @@ impl NodeRegistry {
         if let Some(b) = state.backends.get(id) {
             return Some(b.clone());
         }
-        // The local node is keyed under "local" INTERNALLY, but the cloud +
-        // relay address it by this machine's GLOBAL device id (this_machine.id).
-        // So a command relayed from a sub-user (or the owner's other device)
-        // arrives targeting that device id — map it back to the local backend,
-        // otherwise it'd fail with "node not connected" even though it's us.
+        // The relay addresses the local node by this machine's global id; map it back to "local".
         if state
             .this_machine
             .as_ref()
@@ -425,19 +395,10 @@ impl NodeRegistry {
         None
     }
 
-    /// Every server across ALL connected nodes (this desktop + reachable
-    /// remote agents), each paired with the node id to TAG it with for cloud
-    /// sync + relay routing.
-    ///
-    /// Crucially the LOCAL node's servers are tagged with this machine's
-    /// GLOBAL device id (`this_machine.id`), not the relative "local" — that's
-    /// the id the cloud adopts and the relay routes to, so a sub-user (or the
-    /// owner's other desktop) addresses commands to THIS specific machine.
-    /// Remote agents use their own id. Offline/unreachable nodes contribute
-    /// nothing — sync is best-effort and re-runs on the next change.
+    /// Every server across all connected nodes, tagged with the id cloud sync and the relay route
+    /// by: this machine's global id for the local node, the agent id for remotes.
     pub async fn list_servers_for_sync(&self) -> Vec<(Server, String)> {
-        // Snapshot under the lock, then do the (awaiting) backend calls
-        // without holding it.
+        // Snapshot under the lock; await backend calls without holding it.
         let (records, backends, this_id) = {
             let state = self.inner.read().await;
             (
@@ -452,8 +413,7 @@ impl NodeRegistry {
                 continue;
             };
             let tag = if rec.id.is_local() {
-                // No global identity yet (local node minted but not loaded) →
-                // skip; nothing to address it by.
+                // No global identity yet: nothing to address it by.
                 match &this_id {
                     Some(id) => id.clone(),
                     None => continue,
@@ -461,10 +421,7 @@ impl NodeRegistry {
             } else {
                 rec.id.to_string()
             };
-            // Best-effort + bounded: a remote that was reachable at startup
-            // but has since gone down would otherwise block here for the
-            // full request timeout (~60s) and stall the whole sync. Cap each
-            // node at a few seconds and skip on timeout/error.
+            // Bound each node so a downed remote can't stall the whole sync.
             match tokio::time::timeout(
                 std::time::Duration::from_secs(6),
                 backend.list_servers(),
@@ -484,11 +441,9 @@ impl NodeRegistry {
         out
     }
 
-    /// Re-attempt connection to a remote node (used by the "reconnect"
-    /// button on offline nodes).
+    /// Re-attempt a connection to a node ("reconnect" on offline nodes).
     pub async fn reconnect(&self, id: &NodeId) -> anyhow::Result<()> {
         if id.is_local() {
-            // Local reconnect is handled separately via Docker probe.
             let backend = LocalDockerBackend::connect(paths::home_root()).await?;
             let mut state = self.inner.write().await;
             state.backends.insert(id.clone(), Arc::new(backend));
@@ -528,7 +483,12 @@ impl NodeRegistry {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, toml::to_string_pretty(file)?)?;
+        // Temp + rename: a torn write used to drop every remote node on the next launch.
+        let mut tmp = path.clone().into_os_string();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        std::fs::write(&tmp, toml::to_string_pretty(file)?)?;
+        std::fs::rename(&tmp, &path)?;
         Ok(())
     }
 }

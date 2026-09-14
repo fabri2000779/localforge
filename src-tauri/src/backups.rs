@@ -1,9 +1,4 @@
-//! Local S3 backup-target storage (named list per org).
-//!
-//! The list of `OrgBackupTarget` values (id, name + S3 credentials) lives in
-//! the OS keychain. The secret key is never returned to the frontend — only the
-//! redacted view is surfaced. On first load after the v0.1.47→v0.1.48 upgrade
-//! the old single-target format is auto-migrated to a one-element list.
+//! Org backup-target list stored in the OS keychain; only the redacted view reaches the frontend.
 
 use localforge_core::types::{BackupTarget, OrgBackupTarget};
 
@@ -21,18 +16,13 @@ pub fn load_targets() -> Vec<OrgBackupTarget> {
     };
     match e.get_password() {
         Ok(json) => {
-            // Try Vec<OrgBackupTarget> first (v0.1.48+ format).
             if let Ok(v) = serde_json::from_str::<Vec<OrgBackupTarget>>(&json) {
                 return v;
             }
-            // New-account entry exists but holds an unrecognised format.
             Vec::new()
         }
         Err(keyring_core::Error::NoEntry) => {
-            // One-time migration: check the OLD account name ("backup-target"
-            // without the 's') used before v0.1.48. If found, promote to the
-            // new multi-target list and save under the new account so the next
-            // load finds it directly, then delete the stale entry.
+            // One-time migration from the pre-0.1.48 single-target entry.
             migrate_from_legacy()
         }
         Err(err) => {
@@ -53,7 +43,6 @@ fn migrate_from_legacy() -> Vec<OrgBackupTarget> {
         Ok(j) => j,
         Err(_) => return Vec::new(),
     };
-    // Old format was a bare BackupTarget JSON object.
     let target = match serde_json::from_str::<BackupTarget>(&json) {
         Ok(t) => t,
         Err(_) => return Vec::new(),
@@ -63,9 +52,7 @@ fn migrate_from_legacy() -> Vec<OrgBackupTarget> {
         name: "Default".into(),
         credentials: target,
     }];
-    // Persist under the new account name.
     if save_targets(&promoted).is_ok() {
-        // Clean up the stale entry; failure is non-fatal.
         let _ = legacy.delete_credential();
         tracing::info!("[backups] migrated legacy single-target to multi-target list");
     }
@@ -95,16 +82,6 @@ pub fn remove_target(id: &str) -> Result<(), String> {
     save_targets(&list)
 }
 
-/// Clear ALL targets.
-pub fn clear_targets() -> Result<(), String> {
-    let e = entry()?;
-    match e.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring_core::Error::NoEntry) => Ok(()),
-        Err(err) => Err(err.to_string()),
-    }
-}
-
 /// Find by id (or the first entry when id is None).
 pub fn find_target(id: Option<&str>) -> Option<(String, BackupTarget)> {
     let list = load_targets();
@@ -115,27 +92,4 @@ pub fn find_target(id: Option<&str>) -> Option<(String, BackupTarget)> {
             .map(|t| (t.id, t.credentials)),
         None => list.into_iter().next().map(|t| (t.id, t.credentials)),
     }
-}
-
-// ── Legacy aliases kept for call sites that haven't been updated ───────────
-
-/// Save a single target (replaces the old single-target API; wraps as
-/// id="local-default", name="Default"). Existing multi-target list is
-/// preserved; the default slot is updated.
-pub fn save_target(target: &BackupTarget) -> Result<(), String> {
-    upsert_target(OrgBackupTarget {
-        id: "local-default".into(),
-        name: "Default".into(),
-        credentials: target.clone(),
-    })
-}
-
-/// Return the first target's credentials (old single-target callers).
-pub fn load_target() -> Option<BackupTarget> {
-    find_target(None).map(|(_, t)| t)
-}
-
-/// Drop all targets (old single-target callers).
-pub fn clear_target() -> Result<(), String> {
-    clear_targets()
 }

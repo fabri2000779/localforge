@@ -1,21 +1,13 @@
-/**
- * Org-level backup storage management — lives in Settings, not per-server.
- *
- * The S3 credentials are an org resource (shared across all servers and all
- * devices in the org). This panel lets the owner/admin add, view, and remove
- * named storage targets. Each target's credentials are stored in the OS
- * keychain (locally) and synced E2E encrypted to the cloud so other devices
- * pick them up automatically.
- *
- * Per-server backup OPERATIONS (back up now / restore / delete) live in the
- * server's Backups tab — this panel is purely about managing WHERE backups go.
- */
+/** Org-level backup storage targets (Settings): credentials live in the keychain and sync E2E.
+ *  Per-server backup operations live in the server's Backups tab. */
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   Archive, Plus, Trash2, ChevronDown, ChevronUp,
   Loader2, Save, Check,
 } from 'lucide-react';
+import { appAlert, appConfirm } from '../stores/dialogStore';
+import { describeError } from '../utils/errors';
 
 interface OrgBackupTargetView {
   id: string;
@@ -27,7 +19,7 @@ interface OrgBackupTargetView {
   pathStyle: boolean;
 }
 
-// ── helpers ────────────────────────────────────────────────────────────────
+// helpers
 
 function Field({
   label, value, onChange, placeholder, type = 'text', required = false,
@@ -55,7 +47,7 @@ function Field({
   );
 }
 
-// ── add form ───────────────────────────────────────────────────────────────
+// add form
 
 function AddTargetForm({ onSaved, onCancel }: { onSaved: (t: OrgBackupTargetView) => void; onCancel: () => void }) {
   const [name, setName] = useState('');
@@ -89,7 +81,7 @@ function AddTargetForm({ onSaved, onCancel }: { onSaved: (t: OrgBackupTargetView
       });
       onSaved(view);
     } catch (e) {
-      setErr(String(e));
+      setErr(describeError(e));
     } finally {
       setSaving(false);
     }
@@ -132,20 +124,26 @@ function AddTargetForm({ onSaved, onCancel }: { onSaved: (t: OrgBackupTargetView
   );
 }
 
-// ── target row ─────────────────────────────────────────────────────────────
+// target row
 
 function TargetRow({ t, onRemoved }: { t: OrgBackupTargetView; onRemoved: (id: string) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [removing, setRemoving] = useState(false);
 
   async function remove() {
-    if (!confirm(`Remove backup storage "${t.name}"? Existing backups in the bucket are NOT deleted.`)) return;
+    const ok = await appConfirm({
+      title: `Remove backup storage "${t.name}"?`,
+      message: 'Existing backups in the bucket are NOT deleted.',
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
     setRemoving(true);
     try {
       await invoke('cloud_remove_backup_target', { id: t.id });
       onRemoved(t.id);
     } catch (e) {
-      alert(String(e));
+      await appAlert({ title: "Couldn't remove backup storage", message: describeError(e) });
       setRemoving(false);
     }
   }
@@ -190,7 +188,7 @@ function TargetRow({ t, onRemoved }: { t: OrgBackupTargetView; onRemoved: (id: s
   );
 }
 
-// ── main panel ─────────────────────────────────────────────────────────────
+// main panel
 
 export function BackupStoragePanel() {
   const [targets, setTargets] = useState<OrgBackupTargetView[] | null>(null);
@@ -204,7 +202,7 @@ export function BackupStoragePanel() {
       const list = await invoke<OrgBackupTargetView[]>('cloud_pull_backup_targets');
       setTargets(list);
     } catch (e) {
-      setErr(String(e));
+      setErr(describeError(e));
       // Fall back to locally cached list.
       try {
         setTargets(await invoke<OrgBackupTargetView[]>('cloud_list_backup_targets'));

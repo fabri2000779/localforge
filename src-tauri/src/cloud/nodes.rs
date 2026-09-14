@@ -1,27 +1,17 @@
-//! Desktop cloud-node (relay agent) enrollment commands.
-//!
-//! Thin `#[tauri::command]` adapters over `localforge-cloud-client::nodes`:
-//! read the bearer token from the OS keychain and delegate. The desktop
-//! passes its OWN NodeId on enroll so the cloud row id equals the nodeId the
-//! mobile stamps on commands — which is what makes a command route to this
-//! agent instead of falling back through the desktop.
+//! Node enrollment commands; the desktop passes its own NodeId so the cloud row id matches
+//! the id commands are routed by.
 
 use super::{api, auth};
 use crate::backend::NodeRegistry;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::State;
 
-#[allow(unused_imports)]
-pub use localforge_cloud_client::nodes::{Machine, NodeCreated, NodeRef, NodeSummary};
+pub use localforge_cloud_client::nodes::{Machine, NodeCreated, NodeSummary};
 
-/// Whether THIS machine has already been claimed into the cloud during this
-/// session. Guards `cloud_claim_desktop` so we hit the Worker at most once per
-/// login (the call is idempotent server-side; this just spares requests — see
-/// the sync/relay request-budget rules). Reset on logout / account switch.
+/// Once-per-session guard for `cloud_claim_desktop` (idempotent server-side; spares requests).
 static DESKTOP_CLAIMED: AtomicBool = AtomicBool::new(false);
 
-/// Clear the once-per-session claim guard so the next sign-in re-claims (e.g.
-/// after logout or switching accounts, where the target org may differ).
+/// Reset the claim guard on logout / account switch.
 pub fn reset_desktop_claim() {
     DESKTOP_CLAIMED.store(false, Ordering::Relaxed);
 }
@@ -34,9 +24,7 @@ fn unauth() -> api::ApiError {
     }
 }
 
-/// Enroll (or re-link) a node for direct relay control. `node_id` is the
-/// desktop's NodeId for the agent. Returns a one-time enrollment blob to
-/// paste into `localforge-agent link <blob>` on the VPS.
+/// Enroll (or re-link) a node; returns the one-time blob for `localforge-agent link`.
 #[tauri::command]
 pub async fn cloud_node_create(node_id: String, name: String) -> Result<NodeCreated, api::ApiError> {
     let token = auth::current_token().ok_or_else(unauth)?;
@@ -50,8 +38,7 @@ pub async fn cloud_node_list() -> Result<Vec<NodeSummary>, api::ApiError> {
     localforge_cloud_client::nodes::list(&token).await
 }
 
-/// List EVERY machine in the org — desktops + agents — for the cross-machine
-/// switcher. Sub-users use this to see and target all of the owner's machines.
+/// Every machine in the org (desktops + agents) for the cross-machine switcher.
 #[tauri::command]
 pub async fn cloud_list_machines() -> Result<Vec<Machine>, api::ApiError> {
     let token = auth::current_token().ok_or_else(unauth)?;
@@ -65,12 +52,8 @@ pub async fn cloud_node_revoke(node_id: String) -> Result<(), api::ApiError> {
     localforge_cloud_client::nodes::revoke(&node_id, &token).await
 }
 
-/// Claim THIS machine as a desktop node in the signed-in user's org so the
-/// cloud adopts its stable id — enabling relay routing to this specific
-/// machine and sub-user visibility. Idempotent server-side; guarded to once
-/// per session here to spare Worker requests. Silently no-ops when signed out
-/// or before the local node exists (Docker not yet reachable), and returns
-/// `false` in those cases. Safe to call on every login / startup.
+/// Claim this machine as a desktop node in the signed-in user's org (once per session).
+/// Returns `false` when signed out or before the local node exists.
 #[tauri::command]
 pub async fn cloud_claim_desktop(state: State<'_, NodeRegistry>) -> Result<bool, api::ApiError> {
     if DESKTOP_CLAIMED.load(Ordering::Relaxed) {
@@ -79,10 +62,7 @@ pub async fn cloud_claim_desktop(state: State<'_, NodeRegistry>) -> Result<bool,
     let Some(token) = auth::current_token() else {
         return Ok(false);
     };
-    // The local node is installed asynchronously once Docker is reachable,
-    // which races with sign-in at startup. Wait briefly for it rather than
-    // giving up on the first miss — otherwise a fresh launch would never
-    // register this machine until the user happened to sign in again.
+    // The local node is installed asynchronously once Docker is up; wait briefly for it.
     let mut machine = state.this_machine().await;
     let mut waited = 0;
     while machine.is_none() && waited < 20 {
@@ -99,9 +79,7 @@ pub async fn cloud_claim_desktop(state: State<'_, NodeRegistry>) -> Result<bool,
             Ok(true)
         }
         Err(e) => {
-            // Surface in logs (the frontend call is fire-and-forget) so a
-            // real failure isn't invisible; leave the guard unset so a later
-            // sign-in retries.
+            // Log it (the frontend call is fire-and-forget); the guard stays unset so a later sign-in retries.
             tracing::warn!("[cloud] desktop claim failed: {}", e);
             Err(e)
         }

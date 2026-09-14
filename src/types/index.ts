@@ -2,7 +2,7 @@
 
 export type GameType = string;
 
-export type ServerStatus =
+type ServerStatus =
   | 'stopped'
   | 'starting'
   | 'installing'
@@ -26,7 +26,7 @@ export interface Server {
   install_container_id?: string;
 }
 
-export type PortProtocol = 'tcp' | 'udp' | 'both';
+type PortProtocol = 'tcp' | 'udp' | 'both';
 
 export interface PortConfig {
   container_port: number;
@@ -38,7 +38,7 @@ export interface PortConfig {
 export type SystemMapping = 'none' | 'ram' | 'port';
 export type FieldType = 'text' | 'number' | 'password' | 'select';
 
-export interface SelectOption {
+interface SelectOption {
   value: string;
   label: string;
 }
@@ -118,11 +118,9 @@ export interface CreateServerRequest {
   memory_mb?: number;
 }
 
-// ---------------------------------------------------------------------------
 // Node / multi-host types
-// ---------------------------------------------------------------------------
 
-export type NodeKind =
+type NodeKind =
   | { kind: 'local' }
   | { kind: 'remote'; url: string; fingerprint: string | null };
 
@@ -132,24 +130,15 @@ export interface NodeRecord {
   kind: NodeKind;
 }
 
-/** This desktop's stable local identity, as returned by `get_this_machine`.
- *  `id` is the GLOBAL device id the cloud adopts (and the synced-server
- *  `node_id` for everything hosted on the local Docker); `name` is the
- *  user-facing label shown in the fleet. */
+/** This desktop's identity; `id` is the global device id the cloud adopts. */
 export interface ThisMachine {
   id: string;
   name: string;
-  /** Unix-ms when the user accepted/skipped the first-run "name this machine"
-   *  prompt. Persisted in `~/LocalForge/this_machine.toml` so the dialog never
-   *  fires twice on the same install — see MachineNameDialog. Undefined/null
-   *  on toml files written before this field existed. */
+  /** Unix ms when the first-run "name this machine" prompt was dismissed (persisted in this_machine.toml). */
   name_prompt_dismissed_at?: number | null;
 }
 
-/** A machine registered in the cloud org — a desktop OR an agent — as
- *  returned by `cloud_list_machines` (GET /v1/nodes/machines). Powers the
- *  cross-machine fleet view: owner + sub-users see everything they can
- *  address over the relay, with live online status. */
+/** A machine in the cloud org (desktop or agent) with live online status. */
 export interface Machine {
   id: string;
   name: string;

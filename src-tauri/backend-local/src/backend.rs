@@ -1,9 +1,4 @@
-//! Local Docker backend — implements [`NodeBackend`] using the user's own
-//! Docker daemon via bollard plus the on-disk server registry.
-//!
-//! Tauri commands receive an `Arc<dyn NodeBackend>` from app state and never
-//! create [`DockerManager`] themselves; this is what makes "local" and
-//! "remote" nodes interchangeable from the UI's point of view.
+//! Local Docker [`NodeBackend`]: bollard plus the on-disk server registry.
 
 use crate::docker::{CreateContainerSpec, DockerManager};
 use crate::persistence;
@@ -33,25 +28,14 @@ use uuid::Uuid;
 pub struct LocalDockerBackend {
     docker: DockerManager,
     data_root: PathBuf,
-    /// Long-lived sysinfo snapshot, refreshed by a background task so
-    /// CPU readings are accurate (sysinfo needs two refreshes ~200ms
-    /// apart to compute per-CPU deltas).
+    /// Sysinfo snapshot refreshed in the background (CPU deltas need two refreshes).
     system: Arc<RwLock<System>>,
-    /// Server ids with an install currently in flight. Guards against two
-    /// concurrent installs (a double Start, or a relayed cmd racing a local
-    /// one) writing two install containers over the same bind-mount and
-    /// corrupting the server (audit finding).
+    /// Server ids with an install in flight, so two installs can't share one bind-mount.
     installing: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 impl LocalDockerBackend {
-    /// Try to connect to the local Docker daemon. Returns an error if the
-    /// socket is unreachable; the caller can surface that to the UI as the
-    /// Docker-required screen.
-    ///
-    /// `data_root` is the directory under which servers/, config/ and
-    /// other on-disk state live. The desktop passes `~/LocalForge`, the
-    /// agent passes whatever was configured at install time.
+    /// Connect to the local Docker daemon; `data_root` holds servers/, config/ and other state.
     pub async fn connect(data_root: PathBuf) -> Result<Self> {
         let docker = DockerManager::new()
             .await
@@ -68,7 +52,6 @@ impl LocalDockerBackend {
             s.refresh_cpu_usage();
             s.refresh_memory();
         }
-        // Background refresh loop. Lives until the backend is dropped.
         let bg = system.clone();
         tokio::spawn(async move {
             loop {
@@ -87,7 +70,6 @@ impl LocalDockerBackend {
         })
     }
 
-    /// Borrow the configured data root.
     pub fn data_root(&self) -> &Path {
         &self.data_root
     }
@@ -116,7 +98,6 @@ impl NodeBackend for LocalDockerBackend {
     async fn node_stats(&self) -> Result<NodeStats> {
         let s = self.system.read().await;
 
-        // CPU% averaged across all logical cores.
         let cpus = s.cpus();
         let cpu_count = cpus.len() as u32;
         let cpu_percent = if cpu_count > 0 {
@@ -130,9 +111,7 @@ impl NodeBackend for LocalDockerBackend {
         let swap_total_bytes = s.total_swap();
         let swap_used_bytes = s.used_swap();
 
-        // Disk stats: pick the mount point that's the longest prefix of
-        // the data root path — that's the filesystem where the server
-        // data lives.
+        // Disk of the mount point that is the longest prefix of the data root.
         let disks = Disks::new_with_refreshed_list();
         let data_root_str = self.data_root.to_string_lossy().to_string();
         let mut best_match: Option<&sysinfo::Disk> = None;
@@ -220,8 +199,7 @@ impl NodeBackend for LocalDockerBackend {
 
     async fn get_logs(&self, id: &str, lines: usize) -> Result<Vec<String>> {
         let server = self.require_server(id)?;
-        // Prefer install-container logs while installing, otherwise the
-        // running container's logs.
+        // Install-container logs while installing, else the running container's.
         let container_id = server
             .install_container_id
             .clone()
@@ -379,11 +357,7 @@ impl NodeBackend for LocalDockerBackend {
 
         let memory_mb = request.memory_mb.unwrap_or(game.recommended_ram_mb);
 
-        // game_type is used as a path component under the data root. An imported
-        // / shared game definition could set it to "../../.." or an absolute
-        // path and escape the root — PathBuf::join with ".." or an absolute path
-        // silently walks out (audit finding). Reject anything that isn't a
-        // single, relative, separator-free component before it touches the FS.
+        // game_type is a path component under the data root; reject anything that could escape it.
         validate_path_component(&game.game_type.to_string())
             .map_err(|e| BackendError::invalid(format!("invalid game_type: {e}")))?;
 
@@ -459,8 +433,7 @@ impl NodeBackend for LocalDockerBackend {
     async fn delete_server(&self, id: &str) -> Result<()> {
         let server = self.require_server(id)?;
 
-        // Best-effort stop + remove of the runtime container (ignore errors —
-        // the container may already be gone).
+        // Best-effort: the container may already be gone.
         if let Some(container_id) = &server.container_id {
             let _ = self.docker.stop_container(container_id).await;
             let _ = self.docker.remove_container(container_id).await;
@@ -472,15 +445,34 @@ impl NodeBackend for LocalDockerBackend {
                 .await;
         }
 
-        // Delete on-disk data.
         if server.data_path.exists() {
             std::fs::remove_dir_all(&server.data_path).map_err(BackendError::io)?;
         }
         persistence::delete_server_record(&self.data_root, id).map_err(BackendError::io)?;
 
-        // Clean up host-side artifacts so a deleted server leaves no dead space.
-        // (S3 backups are intentionally kept — they're the user's off-box safety
-        // net and shouldn't vanish just because the local server was removed.)
+        // S3 backups are intentionally kept: they're the user's off-box safety net.
+        crate::metrics::remove_server(&self.data_root, id);
+        let _ = crate::schedules::delete_for_server(&self.data_root, id);
+        Ok(())
+    }
+
+    async fn delete_server_keep_data(&self, id: &str) -> Result<()> {
+        let server = self.require_server(id)?;
+
+        // Same teardown as `delete_server`; only the world directory is left behind.
+        if let Some(container_id) = &server.container_id {
+            let _ = self.docker.stop_container(container_id).await;
+            let _ = self.docker.remove_container(container_id).await;
+        }
+        if let Some(install_container_id) = &server.install_container_id {
+            let _ = self
+                .docker
+                .remove_install_container(install_container_id)
+                .await;
+        }
+
+        persistence::delete_server_record(&self.data_root, id).map_err(BackendError::io)?;
+        // Schedules and metrics belong to the record, so drop them like the full delete does.
         crate::metrics::remove_server(&self.data_root, id);
         let _ = crate::schedules::delete_for_server(&self.data_root, id);
         Ok(())
@@ -493,13 +485,8 @@ impl NodeBackend for LocalDockerBackend {
             .clone()
             .ok_or_else(|| BackendError::invalid("server has no container"))?;
 
-        // Self-heal volume permissions on boot. Servers created before the
-        // data dir was made world-writable (or whose dir was created by a
-        // differently-owned process) may be unwritable by the container's
-        // uid 1000 while the agent runs as the localforge user (uid ~999),
-        // which crashes the server on first start (e.g. it can't create the
-        // jar's cache dir). Best-effort widen so the existing dir heals
-        // without a reset. cfg-gated out on Windows/macOS.
+        // Self-heal volume permissions: the container's uid 1000 must be able to write a dir that
+        // may have been created by a differently-owned process. Unix only.
         #[cfg(unix)]
         if server.data_path.exists() {
             use std::os::unix::fs::PermissionsExt;
@@ -514,11 +501,8 @@ impl NodeBackend for LocalDockerBackend {
             .await
             .map_err(BackendError::docker)?;
 
-        // Persist Running IMMEDIATELY — the container IS started. If the
-        // status probe below hiccups we must not bail with the persisted
-        // state still saying Stopped/Crashed while a live container runs
-        // (that parks the server outside crash-watcher coverage and shows a
-        // stale badge; audit finding). The probe below only refines this.
+        // Persist Running first: the container IS started, and a failed probe must not leave the
+        // record at Stopped/Crashed (outside crash-watcher coverage) while it runs.
         server.status = ServerStatus::Running;
         let _ = persistence::save_server(&self.data_root, &server);
 
@@ -531,8 +515,7 @@ impl NodeBackend for LocalDockerBackend {
         };
 
         if status == ServerStatus::Stopped || status == ServerStatus::Error {
-            // It really failed to start — roll the optimistic Running back so
-            // the persisted state reflects reality.
+            // It really failed to start; roll the optimistic Running back.
             server.status = status;
             let _ = persistence::save_server(&self.data_root, &server);
             return Err(BackendError::Docker("container failed to start".into()));
@@ -550,20 +533,13 @@ impl NodeBackend for LocalDockerBackend {
             .clone()
             .ok_or_else(|| BackendError::invalid("server has no container"))?;
 
-        // Persist `Stopping` BEFORE asking Docker to stop. A graceful shutdown
-        // can take several seconds, and during that window the container is
-        // already going down while the persisted state would otherwise still
-        // read `Running` — which the crash-watcher would mistake for an
-        // unexpected exit and try to "recover". Marking Stopping first closes
-        // that race (the watcher only acts on `Running`).
+        // Persist Stopping first so the crash-watcher (which only acts on Running) doesn't
+        // mistake the graceful shutdown for a crash.
         server.status = ServerStatus::Stopping;
         let _ = persistence::save_server(&self.data_root, &server);
 
         if let Err(e) = self.docker.stop_container(&container_id).await {
-            // Roll the persisted status back to reality — bailing with it
-            // stuck at Stopping parks a still-running server outside crash-
-            // watcher coverage forever (it only acts on Running; audit
-            // finding).
+            // Roll back to reality; a record stuck at Stopping is outside crash-watcher coverage.
             if let Ok(actual) = self.docker.get_container_status(&container_id).await {
                 server.status = actual;
                 let _ = persistence::save_server(&self.data_root, &server);
@@ -571,8 +547,7 @@ impl NodeBackend for LocalDockerBackend {
             return Err(BackendError::docker(e));
         }
 
-        // The stop succeeded — a probe hiccup here shouldn't strand the
-        // persisted state at Stopping, so fall back to Stopped.
+        // Stop succeeded; a probe hiccup must not strand the record at Stopping.
         let status = self
             .docker
             .get_container_status(&container_id)
@@ -589,8 +564,7 @@ impl NodeBackend for LocalDockerBackend {
         let container_id = server
             .container_id
             .ok_or_else(|| BackendError::invalid("server has no container"))?;
-        // Newline-terminate so the container's shell/console treats it as a
-        // complete command.
+        // Newline-terminate so the console treats it as a complete command.
         let payload = if command.ends_with('\n') {
             command.to_string()
         } else {
@@ -650,11 +624,7 @@ impl NodeBackend for LocalDockerBackend {
 
     async fn reset_server_data(&self, id: &str) -> Result<()> {
         let mut server = self.require_server(id)?;
-        // Persist Stopping BEFORE docker stop, exactly like stop_server: the
-        // remove_dir_all below can take longer than a crash-watcher tick, and
-        // without this the watcher saw persisted Running + an exited container,
-        // logged a false crash and could auto-restart the server on top of the
-        // directory being wiped (audit finding).
+        // Persist Stopping first (as in stop_server): the wipe below can outlast a watcher tick.
         if server.status != ServerStatus::Stopping && server.status != ServerStatus::Stopped {
             server.status = ServerStatus::Stopping;
             persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
@@ -676,10 +646,7 @@ impl NodeBackend for LocalDockerBackend {
     async fn run_install(&self, id: &str, game: GameConfig) -> Result<InstallStream> {
         let server = self.require_server(id)?;
 
-        // Reject a second install of the same server while one is already in
-        // flight — otherwise two install containers run the script over the same
-        // bind-mount and corrupt it (audit finding). The guard's Drop frees the
-        // slot when the spawned task finishes (or on any early return below).
+        // A second concurrent install would run over the same bind-mount and corrupt it.
         let install_guard = InstallGuard::acquire(&self.installing, id).ok_or_else(|| {
             BackendError::invalid("an install is already in progress for this server")
         })?;
@@ -704,8 +671,7 @@ impl NodeBackend for LocalDockerBackend {
             .unwrap_or_else(|| game.docker_image.clone());
         let volume_path = game.volume_path.clone();
 
-        // Mark Installing in the persisted record so the UI's status
-        // queries surface it even if a refresh happens mid-install.
+        // Mark Installing so status queries reflect it mid-install.
         let mut server = server;
         server.status = ServerStatus::Installing;
         persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
@@ -717,8 +683,7 @@ impl NodeBackend for LocalDockerBackend {
         let server_data_path = server.data_path.clone();
 
         tokio::spawn(async move {
-            // Hold the guard for the lifetime of the install; dropped here (on
-            // completion or error) so the server can be installed again.
+            // Held for the install's lifetime; dropping frees the slot.
             let _guard = install_guard;
             let install_result = run_install_inner(
                 docker,
@@ -749,16 +714,12 @@ impl NodeBackend for LocalDockerBackend {
 
     async fn upload_file(&self, path: &str, mut body: ByteStream) -> Result<()> {
         let path = confine_path(&self.data_root, path)?;
-        // Make sure the destination directory exists.
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(BackendError::io)?;
         }
-        // Write to a sibling temp file and rename on success, so a stream that
-        // fails mid-transfer (network drop, read error) can't truncate/destroy
-        // the file the user was overwriting (audit finding). Mirrors the
-        // temp+rename pattern persistence::save_server already uses.
+        // Temp file + rename so a stream that fails mid-transfer can't truncate the existing file.
         let tmp_path = {
             let mut name = path
                 .file_name()
@@ -789,7 +750,6 @@ impl NodeBackend for LocalDockerBackend {
                 Ok(())
             }
             Err(e) => {
-                // Leave the existing destination untouched; drop the partial temp.
                 let _ = tokio::fs::remove_file(&tmp_path).await;
                 Err(e)
             }
@@ -831,13 +791,8 @@ impl NodeBackend for LocalDockerBackend {
         if !data_path.exists() {
             return Err(BackendError::not_found("server data directory"));
         }
-        // Minecraft Java: flush the world to disk and pause autosave before
-        // archiving a RUNNING server, so the backup isn't a half-written region
-        // file. Best-effort — if the console doesn't respond we still take the
-        // (live) backup. Autosave is re-enabled afterwards regardless of the
-        // upload's outcome. (Bedrock + other games use different/no console
-        // save commands; for those v1 just archives live — the UI suggests
-        // stopping the server for a fully consistent snapshot.)
+        // Minecraft Java: flush the world and pause autosave while archiving a running server
+        // (best-effort); autosave is re-enabled afterwards. Other games are archived live.
         let flush =
             server.game_type.0 == "minecraft-java" && server.status == ServerStatus::Running;
         let cid = server.container_id.clone();
@@ -858,7 +813,6 @@ impl NodeBackend for LocalDockerBackend {
     }
 
     async fn list_backups(&self, id: &str, target: &BackupTarget) -> Result<Vec<BackupEntry>> {
-        // Cheap existence guard so we never list for an unknown id.
         self.require_server(id)?;
         crate::backups::list(target, id).await
     }
@@ -866,6 +820,10 @@ impl NodeBackend for LocalDockerBackend {
     async fn restore_backup(&self, id: &str, target: &BackupTarget, key: &str) -> Result<()> {
         let mut server = self.require_server(id)?;
         let data_path = persistence::server_data_path(&self.data_root, &server);
+
+        // Download first: a bad key or a network drop must not leave the server with an empty data dir.
+        let archive = crate::backups::download_archive(target, id, key).await?;
+
         // Restoring over a live world corrupts it — stop the container first.
         if let Some(cid) = server.container_id.clone() {
             let _ = self.docker.stop_container(&cid).await;
@@ -874,15 +832,32 @@ impl NodeBackend for LocalDockerBackend {
                 let _ = persistence::save_server(&self.data_root, &server);
             }
         }
-        // Move the current data aside (never destroy it) before extracting, so a
-        // failed restore stays recoverable.
-        if data_path.exists() {
+        // Move the current data aside (never destroy it) so a failed restore stays recoverable.
+        let aside = if data_path.exists() {
             let aside =
                 data_path.with_extension(format!("bak-{}", chrono::Utc::now().timestamp()));
-            std::fs::rename(&data_path, &aside).map_err(BackendError::io)?;
+            if let Err(e) = std::fs::rename(&data_path, &aside) {
+                let _ = std::fs::remove_file(&archive);
+                return Err(BackendError::io(e));
+            }
+            Some(aside)
+        } else {
+            None
+        };
+        let extracted = match create_server_data_dir(&data_path) {
+            Ok(()) => crate::backups::extract_archive(&archive, &data_path).await,
+            Err(e) => Err(e),
+        };
+        let _ = tokio::fs::remove_file(&archive).await;
+        if let Err(e) = extracted {
+            // Put the previous world back; the aside copy is kept if this fails.
+            let _ = std::fs::remove_dir_all(&data_path);
+            if let Some(aside) = aside {
+                let _ = std::fs::rename(&aside, &data_path);
+            }
+            return Err(e);
         }
-        create_server_data_dir(&data_path)?;
-        crate::backups::download_extract(target, id, key, &data_path).await
+        Ok(())
     }
 
     async fn delete_backup(&self, id: &str, target: &BackupTarget, key: &str) -> Result<()> {
@@ -915,7 +890,6 @@ impl NodeBackend for LocalDockerBackend {
 
     async fn list_players(&self, server_id: &str) -> Result<Vec<Player>> {
         let server = self.require_server(server_id)?;
-        // Only meaningful while running, and only for games we adapt.
         if server.status != ServerStatus::Running || !crate::players::supports(&server.game_type.0) {
             return Ok(Vec::new());
         }
@@ -943,25 +917,8 @@ impl NodeBackend for LocalDockerBackend {
     }
 }
 
-/// Create a server's on-disk data directory and make it writable by the
-/// container's runtime user.
-///
-/// Game images run their process as uid 1000 (`container`), but the agent's
-/// systemd service runs as the unprivileged `localforge` user (uid ~999). A
-/// bind-mounted volume is created owned by whoever runs the agent, so without
-/// this the container can't create its working files (e.g. the server jar's
-/// `/mnt/server/cache`) on first boot and dies with `AccessDeniedException`.
-/// We can't `chown` to another uid as a non-root process, but we own the dir
-/// we just created, so we widen its mode to 0o777. On the desktop (where the
-/// user is usually uid 1000 already) this is a harmless no-op; on Windows and
-/// macOS the cfg-gate compiles it out entirely.
-/// Resolve a file-manager `path` and ensure it stays within the servers data
-/// root. The file-manager API takes absolute paths from a potentially hostile
-/// caller (an agent-token holder, or an XSS'd WebView), so without this a
-/// crafted path could read/write/delete anywhere on the host. Canonicalising
-/// resolves `..` and symlinks; for a not-yet-existing target (create / write /
-/// rename or move/copy destination) we canonicalise the parent and re-append
-/// the final component. The resolved path must live under `<data_root>/servers`.
+/// Resolve a file-manager path and confine it under `<data_root>/servers` (canonicalising `..`
+/// and symlinks; a not-yet-existing final component canonicalises its parent).
 fn confine_path(data_root: &Path, path: &str) -> Result<PathBuf> {
     let root = std::fs::canonicalize(persistence::servers_data_root(data_root))
         .map_err(BackendError::io)?;
@@ -988,9 +945,7 @@ fn confine_path(data_root: &Path, path: &str) -> Result<PathBuf> {
     Ok(canon)
 }
 
-/// RAII guard for the per-server install in-flight set. `acquire` returns
-/// `None` when an install is already running for the id; otherwise it inserts
-/// the id and removes it again on drop.
+/// RAII guard for the per-server install set; `acquire` returns `None` while an install runs.
 struct InstallGuard {
     set: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     id: String,
@@ -1020,11 +975,8 @@ impl Drop for InstallGuard {
     }
 }
 
-/// Validate that `s` is safe to use as a SINGLE path component under the data
-/// root: non-empty, no path separators, not `.`/`..`, and not an absolute or
-/// drive-qualified path. Guards `create_server` against an imported game
-/// definition whose `game_type` escapes the root via `..` or an absolute path
-/// (audit finding).
+/// A single relative, separator-free path component; guards `create_server` against a
+/// game_type that escapes the data root.
 fn validate_path_component(s: &str) -> std::result::Result<(), String> {
     if s.is_empty() {
         return Err("must not be empty".into());
@@ -1035,13 +987,10 @@ fn validate_path_component(s: &str) -> std::result::Result<(), String> {
     if s.contains('/') || s.contains('\\') {
         return Err("must not contain path separators".into());
     }
-    // Reject Windows drive prefixes ("C:...") and any other colon usage that a
-    // path could interpret as a stream/drive qualifier.
+    // Also reject Windows drive/stream qualifiers.
     if s.contains(':') {
         return Err("must not contain ':'".into());
     }
-    // Belt-and-suspenders: the rendered component must have exactly one
-    // normal path segment.
     let mut comps = Path::new(s).components();
     match (comps.next(), comps.next()) {
         (Some(std::path::Component::Normal(_)), None) => Ok(()),
@@ -1049,6 +998,8 @@ fn validate_path_component(s: &str) -> std::result::Result<(), String> {
     }
 }
 
+/// Create the data dir and widen it to 0o777 on Unix so the container's uid 1000 can write it
+/// even when the host process (agent as `localforge`) has a different uid.
 fn create_server_data_dir(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path).map_err(BackendError::io)?;
     #[cfg(unix)]
@@ -1075,8 +1026,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// The actual install pipeline. Lives outside the impl so it can be
-/// spawned onto its own task without borrowing `&self`.
+/// Install pipeline body; a free function so it can be spawned without borrowing `&self`.
 #[allow(clippy::too_many_arguments)]
 async fn run_install_inner(
     docker: DockerManager,
@@ -1088,8 +1038,7 @@ async fn run_install_inner(
     install_script: String,
     tx: tokio::sync::mpsc::UnboundedSender<Result<InstallEvent>>,
 ) -> Result<()> {
-    // Persist the install container id as soon as the helper creates
-    // it, so log recovery works if the install is interrupted.
+    // Persist the install container id immediately so log recovery works if interrupted.
     let id_for_callback = server_id.clone();
     let data_root_for_callback = data_root.clone();
     let on_container_created = move |container_id: &str| {
@@ -1099,14 +1048,8 @@ async fn run_install_inner(
         }
     };
 
-    // Channel adapter: DockerManager::run_script takes a sync callback,
-    // but the events flow out on an mpsc. The channel is UNBOUNDED so
-    // `send` is synchronous and never blocks. This is critical: the
-    // callback runs on a tokio worker thread (run_script awaits the log
-    // stream inline), and `blocking_send` on a *full* bounded channel
-    // tries to park the runtime thread → panics ("Cannot block the
-    // current thread from within a runtime"), which with panic=abort
-    // crashed the whole app on a burst of install output.
+    // The channel is UNBOUNDED on purpose: the callback runs on a runtime thread, and a
+    // blocking send on a full bounded channel would panic ("Cannot block the current thread").
     let tx_lines = tx.clone();
     let on_output = move |line: String| {
         if let Some(url) = detect_oauth_url(&line) {
@@ -1129,12 +1072,7 @@ async fn run_install_inner(
     let (exit_code, install_container_id) = match run_result {
         Ok(v) => v,
         Err(e) => {
-            // The install failed before we got an exit code (pull failed, no
-            // network, start_container errored). Without this the record stayed
-            // Installing forever and any container the helper created before
-            // the error was orphaned with a stale install_container_id (audit
-            // finding). Recover the state: remove the container if one was
-            // created, clear the id, and mark Error.
+            // Failed before an exit code: remove any container created, clear the id, mark Error.
             if let Ok(mut srv) = persistence::load_server(&data_root, &server_id) {
                 if let Some(cid) = srv.install_container_id.take() {
                     let _ = docker.remove_install_container(&cid).await;
@@ -1149,7 +1087,6 @@ async fn run_install_inner(
     // Clean up the install container (best-effort).
     let _ = docker.remove_install_container(&install_container_id).await;
 
-    // Update the persisted server record with the install outcome.
     if let Ok(mut srv) = persistence::load_server(&data_root, &server_id) {
         srv.install_container_id = None;
         if exit_code == 0 {

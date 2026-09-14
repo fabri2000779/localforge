@@ -1,11 +1,5 @@
-//! Scheduled actions.
-//!
-//! Schedules are persisted host-side (`<data_root>/schedules.json`) and fired
-//! by a single per-process scheduler loop. Because the loop lives in
-//! `backend-local`, it runs both on the desktop (while the app is open) and on
-//! the headless agent (24/7) — wherever the server actually lives. Actions are
-//! dispatched through the public `NodeBackend` trait so they reuse the exact
-//! lifecycle logic (no duplicated start/stop/send paths).
+//! Cron schedules persisted in `<data_root>/schedules.json` and fired by one per-process
+//! loop through the `NodeBackend` trait (desktop while open, agent 24/7).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,15 +7,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Local, TimeZone};
-use croner::Cron;
+use croner::parser::{CronParser, Seconds, Year};
 use localforge_core::backend::NodeBackend;
 use localforge_core::types::{BackupTarget, Schedule, ScheduleAction};
 
-/// Resolves a backup `target_id` (None = the first/default target) to its S3
-/// credentials. Injected per host at [`spawn_scheduler`] time because the
-/// desktop keeps targets in the OS keychain while the headless agent keeps them
-/// in a file under its data root — `backend-local` can reach neither layer
-/// directly, so each host hands in its own lookup closure.
+/// Resolves a backup `target_id` (None = default) to credentials; injected per host because
+/// the desktop keeps targets in the keychain and the agent in a file.
 pub type BackupTargetResolver =
     Arc<dyn Fn(Option<&str>) -> Option<BackupTarget> + Send + Sync>;
 
@@ -51,8 +42,7 @@ pub fn list_for(data_root: &Path, server_id: &str) -> Vec<Schedule> {
         .collect()
 }
 
-/// Create or replace a schedule (matched by id). A replace preserves the
-/// existing `last_run` so editing a schedule doesn't make it re-fire.
+/// Create or replace a schedule; a replace keeps `last_run` so an edit doesn't re-fire.
 pub fn upsert(data_root: &Path, mut schedule: Schedule) -> std::io::Result<()> {
     let mut list = load(data_root);
     if let Some(slot) = list.iter_mut().find(|s| s.id == schedule.id) {
@@ -72,14 +62,13 @@ pub fn delete(data_root: &Path, id: &str) -> std::io::Result<()> {
     save(data_root, &list)
 }
 
-/// Remove every schedule belonging to a server. Called when the server is
-/// deleted so its cron entries don't linger (and never fire against a gone id).
+/// Remove every schedule of a deleted server.
 pub fn delete_for_server(data_root: &Path, server_id: &str) -> std::io::Result<()> {
     let mut list = load(data_root);
     let before = list.len();
     list.retain(|s| s.server_id != server_id);
     if list.len() == before {
-        return Ok(()); // nothing belonged to this server — don't rewrite
+        return Ok(());
     }
     save(data_root, &list)
 }
@@ -88,10 +77,18 @@ fn ms_to_local(ms: i64) -> Option<DateTime<Local>> {
     Local.timestamp_millis_opt(ms).single()
 }
 
+/// Strict 5-field cron parser (croner 3+ would otherwise accept 6/7-field patterns with a shifted meaning).
+fn cron_parser() -> CronParser {
+    CronParser::builder()
+        .seconds(Seconds::Disallowed)
+        .year(Year::Disallowed)
+        .build()
+}
+
 /// Next fire time strictly after `from`, per the cron expression (local time).
 fn next_fire(expr: &str, from: &DateTime<Local>) -> Option<DateTime<Local>> {
-    Cron::new(expr)
-        .parse()
+    cron_parser()
+        .parse(expr)
         .ok()?
         .find_next_occurrence(from, false)
         .ok()
@@ -144,10 +141,8 @@ async fn run_action(backend: &dyn NodeBackend, s: &Schedule, resolve_target: &Ba
     }
 }
 
-/// Prune a server's backup objects after a scheduled upload. `keep_last` is a
-/// floor (the N most recent are never deleted); `max_age_days` deletes anything
-/// older than that. With both set, the N newest are kept and older-than-max
-/// beyond them are pruned. Best-effort: a failed delete is logged, not fatal.
+/// Prune after an upload: the `keep_last` newest are never deleted; `max_age_days` prunes
+/// older objects beyond them. Best-effort.
 async fn enforce_retention(
     backend: &dyn NodeBackend,
     target: &BackupTarget,
@@ -159,12 +154,10 @@ async fn enforce_retention(
         .list_backups(server_id, target)
         .await
         .map_err(|e| e.to_string())?;
-    // Sort newest-first ourselves rather than trusting the listing order.
     entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut deleted = 0u32;
     for (i, e) in entries.iter().enumerate() {
-        // keep_last is a floor: never delete the N most recent.
         if let Some(n) = keep_last {
             if i < n as usize {
                 continue;
@@ -194,11 +187,8 @@ async fn enforce_retention(
 
 static SCHEDULER_STARTED: AtomicBool = AtomicBool::new(false);
 
-/// Spawn the host scheduler loop ONCE per process (extra calls are no-ops).
-/// Ticks every 30s and fires any enabled schedule whose next cron occurrence
-/// — after its last run, or the loop's start for a never-run schedule — has
-/// passed. A schedule that came due while the host was off fires once on the
-/// next tick after startup.
+/// Spawn the scheduler loop once per process: every 30 s, fire enabled schedules whose next
+/// occurrence after their last run (or the loop start) has passed.
 pub fn spawn_scheduler(
     backend: Arc<dyn NodeBackend>,
     data_root: PathBuf,
@@ -207,8 +197,7 @@ pub fn spawn_scheduler(
     if SCHEDULER_STARTED.swap(true, Ordering::SeqCst) {
         return;
     }
-    // Start the metrics sampler alongside the scheduler — both are the host's
-    // background loops and share the same lifecycle/spawn sites.
+    // The metrics sampler shares the host's background-loop lifecycle.
     crate::metrics::spawn_sampler(backend.clone(), data_root.clone());
     tokio::spawn(async move {
         let start = Local::now();
@@ -222,8 +211,6 @@ pub fn spawn_scheduler(
                 }
                 let baseline = s.last_run.and_then(ms_to_local).unwrap_or(start);
                 let Some(next) = next_fire(&s.cron, &baseline) else {
-                    // A schedule with an unparseable cron expression will never
-                    // fire. Log a warning so the operator can spot-fix it.
                     tracing::warn!(
                         "[scheduler] schedule {} has unparseable cron {:?} — skipping",
                         s.id, s.cron,
@@ -237,12 +224,8 @@ pub fn spawn_scheduler(
                         s.server_id
                     );
                     run_action(&*backend, s, &resolve_target).await;
-                    // Re-load and patch ONLY this schedule's last_run.
-                    // run_action can await for minutes (backups) — saving the
-                    // whole pre-tick snapshot afterwards resurrected schedules
-                    // the user deleted meanwhile and clobbered concurrent
-                    // edits (audit finding). A schedule deleted mid-run simply
-                    // isn't patched.
+                    // Re-load and patch only this schedule: run_action can take minutes, and saving the
+                    // pre-tick snapshot would resurrect deleted schedules and clobber edits.
                     let mut fresh = load(&data_root);
                     if let Some(cur) = fresh.iter_mut().find(|x| x.id == s.id) {
                         cur.last_run = Some(now.timestamp_millis());
@@ -254,4 +237,46 @@ pub fn spawn_scheduler(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Datelike, Timelike};
+
+    #[test]
+    fn five_field_patterns_parse_and_advance() {
+        let from = Local.with_ymd_and_hms(2026, 3, 10, 12, 3, 7).single().unwrap();
+        let next = next_fire("*/5 * * * *", &from).unwrap();
+        assert_eq!((next.hour(), next.minute(), next.second()), (12, 5, 0));
+        assert_eq!(next.day(), 10);
+        // "0 4 * * *" from 12:03 → tomorrow 04:00.
+        let next = next_fire("0 4 * * *", &from).unwrap();
+        assert_eq!((next.day(), next.hour(), next.minute()), (11, 4, 0));
+    }
+
+    #[test]
+    fn next_fire_is_strictly_after_from() {
+        // Exactly on a boundary → the NEXT boundary, never the same instant.
+        let from = Local.with_ymd_and_hms(2026, 3, 10, 12, 5, 0).single().unwrap();
+        let next = next_fire("*/5 * * * *", &from).unwrap();
+        assert_eq!(next.minute(), 10);
+    }
+
+    #[test]
+    fn six_and_seven_field_patterns_are_rejected() {
+        let from = Local.with_ymd_and_hms(2026, 3, 10, 12, 3, 7).single().unwrap();
+        assert!(next_fire("0 */5 * * * *", &from).is_none());
+        assert!(next_fire("0 0 4 * * * 2026", &from).is_none());
+        assert!(next_fire("not a cron", &from).is_none());
+        assert!(next_fire("", &from).is_none());
+    }
+
+    #[test]
+    fn dom_dow_keep_or_semantics() {
+        // Standard cron: DOM OR DOW. 2026-03-10 is a Tuesday; the next Monday is 03-16.
+        let from = Local.with_ymd_and_hms(2026, 3, 10, 12, 0, 0).single().unwrap();
+        let next = next_fire("0 0 1 * 1", &from).unwrap();
+        assert_eq!((next.month(), next.day()), (3, 16));
+    }
 }

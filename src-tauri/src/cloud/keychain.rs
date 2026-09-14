@@ -1,26 +1,10 @@
-//! OS-native JWT storage. Backed by:
-//!   - Windows: Credential Manager
-//!   - macOS:   Keychain
-//!   - Linux:   Secret Service (gnome-keyring / KWallet)
-//!
-//! Both `service` and `account` strings show up in the OS credential
-//! UI, so they need to read sensibly there.
+//! JWT storage in the OS credential store (Credential Manager / Keychain / Secret Service).
 
 const SERVICE: &str = "LocalForge Cloud";
 const ACCOUNT: &str = "session-jwt";
 
-/// Install the OS-native credential store as keyring's process-wide
-/// default. MUST run once at startup, before anything creates an
-/// `Entry` (cloud login, sync-key storage and the relay all read the
-/// keychain).
-///
-/// keyring 4 no longer selects the backend at compile time via Cargo
-/// features — the application installs the store at runtime. On Linux we
-/// deliberately pick the pure-Rust **zbus** Secret Service backend (no
-/// system libdbus needed). If installation fails we log loudly instead
-/// of letting `Entry::new` silently fall back to a no-op store, which is
-/// what produced the v0.1.14 "logs in, then immediately asks to log in
-/// again" bug.
+/// Install the OS credential store as keyring's process default. Must run before any
+/// `Entry` is created; a failure is logged loudly instead of silently using a no-op store.
 pub fn init() {
     match install_native_store() {
         Ok(_) => tracing::info!("[keychain] OS credential store installed"),
@@ -32,13 +16,8 @@ pub fn init() {
     }
 }
 
-/// Install the per-platform native store as keyring-core's process-wide
-/// default. This is the install snippet keyring's docs tell apps to copy from
-/// the crate's `cli` module rather than linking the umbrella crate's `cli`
-/// feature. The `cfg`s here mirror the per-target deps in `Cargo.toml`, so each
-/// build only references the one store crate it actually links.
+/// Per-platform store install; the `cfg`s mirror the per-target deps in Cargo.toml.
 fn install_native_store() -> keyring_core::Result<()> {
-    // Empty config = the store's defaults.
     let config: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
 
     #[cfg(target_os = "windows")]
@@ -90,7 +69,7 @@ pub fn clear_token() -> Result<(), String> {
     let e = entry().map_err(|e| e.to_string())?;
     match e.delete_credential() {
         Ok(()) => Ok(()),
-        // Treating "nothing to delete" as success — logout is idempotent.
+        // Logout is idempotent.
         Err(keyring_core::Error::NoEntry) => Ok(()),
         Err(err) => Err(err.to_string()),
     }

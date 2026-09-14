@@ -1,4 +1,4 @@
-// Docker Manager - Handles all Docker operations
+//! bollard-backed Docker operations for game-server containers.
 
 use bollard::container::{AttachContainerResults, LogOutput};
 use bollard::models::{ContainerCreateBody, ContainerStateStatusEnum, HostConfig, PortBinding};
@@ -17,14 +17,9 @@ use uuid::Uuid;
 pub use localforge_core::{ContainerStats, DockerInfo, PortConfig, PortProtocol, ServerStatus};
 
 #[derive(Error, Debug)]
-#[allow(dead_code)]
 pub enum DockerError {
-
     #[error("Docker connection error: {0}")]
     ConnectionError(#[from] bollard::errors::Error),
-
-    #[error("Container not found: {0}")]
-    ContainerNotFound(String),
 
     #[error("Image pull failed: {0}")]
     ImagePullFailed(String),
@@ -38,9 +33,7 @@ pub struct DockerManager {
     docker: Docker,
 }
 
-/// Inputs for [`DockerManager::create_container`]. Grouped into a struct
-/// because creating a game-server container legitimately needs many knobs;
-/// a 9-positional-argument call is easy to get wrong at the call site.
+/// Inputs for [`DockerManager::create_container`], grouped to avoid a 9-argument call.
 pub struct CreateContainerSpec<'a> {
     pub name: &'a str,
     pub image: &'a str,
@@ -54,24 +47,20 @@ pub struct CreateContainerSpec<'a> {
 }
 
 impl DockerManager {
-    /// Create a new Docker manager instance
     pub async fn new() -> Result<Self, DockerError> {
         let docker = Docker::connect_with_local_defaults()?;
         Ok(Self { docker })
     }
 
-    /// Get the underlying Docker client (for advanced operations)
     pub fn client(&self) -> &Docker {
         &self.docker
     }
 
-    /// Ping Docker to check if it's running
     pub async fn ping(&self) -> Result<(), DockerError> {
         self.docker.ping().await?;
         Ok(())
     }
 
-    /// Get Docker system information
     pub async fn get_info(&self) -> Result<DockerInfo, DockerError> {
         let info = self.docker.info().await?;
         let version = self.docker.version().await?;
@@ -87,7 +76,6 @@ impl DockerManager {
         })
     }
 
-    /// Pull a Docker image
     pub async fn pull_image(&self, image: &str) -> Result<(), DockerError> {
         tracing::info!("Pulling image: {}", image);
         let options = Some(CreateImageOptions {
@@ -115,7 +103,6 @@ impl DockerManager {
         Ok(())
     }
 
-    /// Create a new container
     pub async fn create_container(
         &self,
         spec: CreateContainerSpec<'_>,
@@ -131,14 +118,10 @@ impl DockerManager {
             memory_mb,
             startup_command,
         } = spec;
-        // Ensure image is available
         self.pull_image(image).await?;
 
-        // Build environment variables
         let env_vars: Vec<String> = env.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
-        // Redact secret-ish values before logging — env can carry RCON/admin
-        // passwords, API tokens, etc. The real (unredacted) `env_vars` still
-        // goes to the container below; only this log line is sanitized.
+        // Redact secret-ish values in the debug log; the real env still goes to the container.
         if tracing::enabled!(tracing::Level::DEBUG) {
             let redacted: Vec<String> = env
                 .iter()
@@ -157,7 +140,6 @@ impl DockerManager {
             tracing::debug!("Environment variables: {:?}", redacted);
         }
 
-        // Build port bindings
         let mut port_bindings = HashMap::new();
         let mut exposed_ports: Vec<String> = Vec::new();
 
@@ -184,7 +166,6 @@ impl DockerManager {
         exposed_ports.push(container_port_tcp);
         exposed_ports.push(container_port_udp);
 
-        // Extra ports
         for extra in extra_ports {
             let protocols = match extra.protocol {
                 PortProtocol::Tcp => vec!["tcp"],
@@ -208,7 +189,7 @@ impl DockerManager {
             tracing::info!("Added extra port: {} ({:?}) - {}", extra.container_port, extra.protocol, desc);
         }
 
-        // Build volume mounts - use forward slashes for Docker on Windows
+        // Docker on Windows wants forward slashes in bind paths.
         let data_path_str = data_path.to_string_lossy().replace('\\', "/");
         let container_volume_path = volume_path.unwrap_or("/data");
         let data_mount = format!("{}:{}", data_path_str, container_volume_path);
@@ -226,7 +207,6 @@ impl DockerManager {
         }
         let machine_id_mount = format!("{}/.machine-id:/etc/machine-id:ro", data_path_str);
 
-        // Calculate memory limit in bytes (Docker expects bytes)
         let memory_limit = memory_mb.map(|mb| (mb as i64) * 1024 * 1024);
         if let Some(mb) = memory_mb {
             tracing::info!("Container memory limit: {} MB", mb);
@@ -237,19 +217,8 @@ impl DockerManager {
             binds: Some(vec![data_mount, machine_id_mount]),
             memory: memory_limit,
             memory_swap: memory_limit, // Same as memory to disable swap
-            // NO Docker restart policy — the crash-watcher owns restarts.
-            // `unless-stopped` used to auto-restart a crashed container in
-            // ~100ms, so the 20s watcher only ever saw it Running/RESTARTING and
-            // `continue`d: no CrashEvent journaled, no webhook/push fired, and
-            // the crash-loop backoff never engaged — a mod-broken server flapped
-            // forever in silence, and a per-server RestartPolicy::Off was
-            // ignored (audit finding). Letting the container stay exited makes
-            // every crash visible to the watcher, which restarts it per the
-            // user's policy WITH backoff + alerts. Trade-off: a crash while the
-            // host process is down no longer auto-recovers via Docker; the
-            // watcher recovers persisted-Running servers on its first tick after
-            // (re)start instead. (Existing containers keep their old policy
-            // until recreated via reinstall/update.)
+            // No Docker restart policy: the crash-watcher owns restarts (backoff, alerts, per-server
+            // RestartPolicy), and Docker auto-restarting in ~100 ms hid every crash from it.
             restart_policy: Some(bollard::models::RestartPolicy {
                 name: Some(bollard::models::RestartPolicyNameEnum::NO),
                 ..Default::default()
@@ -257,15 +226,12 @@ impl DockerManager {
             ..Default::default()
         };
 
-        // Build the container command if startup_command provided
         let cmd: Option<Vec<String>> = startup_command.and_then(|startup| {
             if startup.is_empty() {
                 None
             } else {
-                // Build command that changes to volume dir and runs startup
                 let full_cmd = format!("cd {} && exec {}", container_volume_path, startup);
-                // debug, not info: a custom startup command can carry sensitive
-                // args, and this can surface in shared agent logs.
+                // debug, not info: a custom startup command can carry sensitive args.
                 tracing::debug!("Container command: {}", full_cmd);
                 Some(vec!["/bin/bash".to_string(), "-c".to_string(), full_cmd])
             }
@@ -298,7 +264,6 @@ impl DockerManager {
         Ok(response.id)
     }
 
-    /// Start a container
     pub async fn start_container(&self, container_id: &str) -> Result<(), DockerError> {
         tracing::info!("Starting container: {}", container_id);
         self.docker
@@ -308,7 +273,6 @@ impl DockerManager {
         Ok(())
     }
 
-    /// Stop a container
     pub async fn stop_container(&self, container_id: &str) -> Result<(), DockerError> {
         tracing::info!("Stopping container: {}", container_id);
         let options = Some(StopContainerOptions {
@@ -319,7 +283,6 @@ impl DockerManager {
         Ok(())
     }
 
-    /// Remove a container
     pub async fn remove_container(&self, container_id: &str) -> Result<(), DockerError> {
         tracing::info!("Removing container: {}", container_id);
         let options = Some(RemoveContainerOptions {
@@ -331,12 +294,10 @@ impl DockerManager {
         Ok(())
     }
 
-    /// Get container status by inspecting it directly
     pub async fn get_container_status(
         &self,
         container_id: &str,
     ) -> Result<ServerStatus, DockerError> {
-        // Use inspect for more accurate status
         match self.docker.inspect_container(container_id, None).await {
             Ok(info) => {
                 if let Some(state) = info.state {
@@ -358,19 +319,13 @@ impl DockerManager {
                 Ok(ServerStatus::Stopped)
             }
             Err(e) => {
-                // Propagate the failure. Mapping it to Ok(Stopped) made a
-                // transient Docker-daemon hiccup look like a mass exit — the
-                // crash watcher's Err-guard never fired and it marked every
-                // running server Crashed (audit finding). Callers that want
-                // to tolerate this (the list_servers reconcile) already keep
-                // the persisted status on Err.
+                // Propagate: mapping this to Ok(Stopped) made a daemon hiccup look like a mass exit to the crash-watcher.
                 tracing::warn!("Failed to inspect container {}: {}", container_id, e);
                 Err(e.into())
             }
         }
     }
 
-    /// Get container stats (CPU, memory)
     pub async fn get_container_stats(
         &self,
         container_id: &str,
@@ -383,10 +338,7 @@ impl DockerManager {
         let mut stream = self.docker.stats(container_id, options);
 
         if let Some(Ok(stats)) = stream.next().await {
-            // In bollard 0.21 every layer of the stats tree is Option<T>.
-            // We pull values out with and_then chains and fall back to 0
-            // (or 1 for online_cpus, so the multiplier doesn't zero the
-            // percentage on platforms that don't report it).
+            // Every layer of bollard's stats tree is Option; fall back to 0 (1 for online_cpus).
             let cpu_total = stats
                 .cpu_stats
                 .as_ref()
@@ -425,7 +377,6 @@ impl DockerManager {
                 0.0
             };
 
-            // Calculate memory
             let memory_usage = stats
                 .memory_stats
                 .as_ref()
@@ -446,7 +397,6 @@ impl DockerManager {
                 0.0
             };
 
-            // Cumulative network counters, summed across all interfaces.
             let (net_rx_bytes, net_tx_bytes) = stats
                 .networks
                 .as_ref()
@@ -480,7 +430,6 @@ impl DockerManager {
         })
     }
 
-    /// Send input to container's stdin using attach
     pub async fn send_stdin(&self, container_id: &str, input: &str) -> Result<(), DockerError> {
         use tokio::io::AsyncWriteExt;
         
@@ -497,10 +446,7 @@ impl DockerManager {
 
         match self.docker.attach_container(container_id, Some(options)).await {
             Ok(AttachContainerResults { input: mut stdin_writer, .. }) => {
-                // Write the input verbatim. Every caller already newline-
-                // terminates (send_command, the backup save fence, players.rs);
-                // adding another `\n` here sent "cmd\n\n" to the container's TTY,
-                // an extra blank line per command (audit finding).
+                // Write verbatim: every caller newline-terminates already.
                 stdin_writer.write_all(input.as_bytes()).await
                     .map_err(|e| DockerError::AttachFailed(format!("Failed to write to stdin: {}", e)))?;
                 stdin_writer.flush().await
@@ -515,7 +461,6 @@ impl DockerManager {
         }
     }
 
-    /// Get container logs (non-streaming, for initial load)
     pub async fn get_logs(
         &self,
         container_id: &str,
@@ -564,86 +509,8 @@ impl DockerManager {
         Ok(logs)
     }
 
-    /// Execute a command inside a running container with streaming output
-    #[allow(dead_code)]
-    pub async fn exec_command<F>(
-        &self,
-        container_id: &str,
-        cmd: Vec<&str>,
-        working_dir: Option<&str>,
-        mut on_output: F,
-    ) -> Result<i64, DockerError>
-    where
-        F: FnMut(String),
-    {
-        use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
-        
-        let cmd_strings: Vec<String> = cmd.iter().map(|s| s.to_string()).collect();
-        tracing::info!("Executing in container {}: {:?}", container_id, cmd_strings);
-        
-        let exec_options = CreateExecOptions {
-            cmd: Some(cmd_strings),
-            attach_stdout: Some(true),
-            attach_stderr: Some(true),
-            tty: Some(false), // Don't use tty for proper streaming
-            working_dir: working_dir.map(|s| s.to_string()),
-            ..Default::default()
-        };
-
-        let exec = self.docker
-            .create_exec(container_id, exec_options)
-            .await
-            .map_err(|e| DockerError::AttachFailed(e.to_string()))?;
-
-        let start_options = Some(StartExecOptions {
-            detach: false,
-            tty: false,
-            ..Default::default()
-        });
-
-        match self.docker.start_exec(&exec.id, start_options).await {
-            Ok(StartExecResults::Attached { output: mut stream, .. }) => {
-                tracing::info!("Exec attached, streaming output...");
-                while let Some(result) = stream.next().await {
-                    match result {
-                        Ok(output) => {
-                            let text = match output {
-                                LogOutput::StdOut { message } => String::from_utf8_lossy(&message).to_string(),
-                                LogOutput::StdErr { message } => String::from_utf8_lossy(&message).to_string(),
-                                _ => String::new(),
-                            };
-                            for line in text.lines() {
-                                if !line.is_empty() {
-                                    tracing::debug!("Exec output: {}", line);
-                                    on_output(line.to_string());
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("Exec output error: {}", e);
-                        }
-                    }
-                }
-                tracing::info!("Exec stream finished");
-            }
-            Ok(StartExecResults::Detached) => {
-                tracing::warn!("Exec started in detached mode unexpectedly");
-            }
-            Err(e) => return Err(DockerError::AttachFailed(e.to_string())),
-        }
-
-        // Get exit code
-        let inspect = self.docker.inspect_exec(&exec.id).await
-            .map_err(|e| DockerError::AttachFailed(e.to_string()))?;
-        let exit_code = inspect.exit_code.unwrap_or(-1);
-        tracing::info!("Exec finished with exit code: {}", exit_code);
-        Ok(exit_code)
-    }
-
-    /// Run a script in a temporary container with streaming output
-    /// Creates a one-off container, runs the script, streams output, then removes the container
-    /// Returns (exit_code, container_id)
-    /// on_container_created is called with the container_id after creation but before starting
+    /// Run `script` in a one-off container, streaming its output; returns `(exit_code, container_id)`.
+    /// `on_container_created` receives the id before start so it can be persisted for log recovery.
     pub async fn run_script<F, C>(
         &self,
         image: &str,
@@ -661,17 +528,14 @@ impl DockerManager {
         
         tracing::info!("Running install script in temporary container");
         
-        // Ensure image is available
         self.pull_image(image).await?;
         
-        // Build volume mount
         let data_path_str = data_path.to_string_lossy().replace('\\', "/");
         let data_mount = format!("{}:{}", data_path_str, volume_path);
         
         // Create a persistent machine-id file for hardware identification (needed by Hytale)
         let machine_id_path = data_path.join(".machine-id");
         if !machine_id_path.exists() {
-            // Format: 32 hex chars with newline (standard machine-id format)
             let machine_id = format!("{}\n", Uuid::new_v4().to_string().replace("-", ""));
             if let Err(e) = std::fs::write(&machine_id_path, &machine_id) {
                 tracing::warn!("Failed to create machine-id file: {}", e);
@@ -684,7 +548,6 @@ impl DockerManager {
         // Encode script to base64 to avoid shell escaping issues
         let encoded_script = base64::engine::general_purpose::STANDARD.encode(script);
         
-        // Command: decode script, save to file, execute it
         let cmd = format!(
             "echo '{}' | base64 -d > /tmp/install.sh && chmod +x /tmp/install.sh && exec /tmp/install.sh",
             encoded_script
@@ -720,17 +583,14 @@ impl DockerManager {
         let container = self.docker.create_container(options, config).await?;
         let container_id = container.id.clone();
 
-        // Notify caller of container ID so they can save it for log recovery
         on_container_created(&container_id);
 
         tracing::info!("Starting install container: {}", container_id);
 
-        // Start the container
         self.docker
             .start_container(&container_id, None::<StartContainerOptions>)
             .await?;
 
-        // Follow the container's logs and forward them line-by-line.
         let log_options = LogsOptions {
             follow: true,
             stdout: true,
@@ -740,14 +600,8 @@ impl DockerManager {
         };
         let mut log_stream = self.docker.logs(&container_id, Some(log_options));
 
-        // Authoritative completion signal. `wait_container` resolves the
-        // instant the container leaves the running state, carrying the exit
-        // code. We race it against the log stream so trailing output is
-        // still forwarded — but completion NEVER hinges on the follow-log
-        // stream terminating. On Windows that follow stream over the Docker
-        // named pipe doesn't reliably end (and inspect-on-timeout could
-        // wedge), which previously left installs stuck in "installing"
-        // forever even though the container had exited 0.
+        // wait_container is the authoritative completion signal: on Windows the follow-log stream
+        // over the named pipe doesn't reliably end, which left installs stuck in "installing".
         let mut wait_stream = self
             .docker
             .wait_container(&container_id, None::<WaitContainerOptions>);
@@ -766,8 +620,7 @@ impl DockerManager {
                 wait = wait_stream.next() => {
                     exit_code = Some(match wait {
                         Some(Ok(resp)) => resp.status_code,
-                        // bollard surfaces a non-zero exit as an error that
-                        // carries the code; treat it as the exit status.
+                        // A non-zero exit surfaces as an error carrying the code.
                         Some(Err(bollard::errors::Error::DockerContainerWaitError { code, .. })) => code,
                         Some(Err(e)) => {
                             tracing::warn!("wait_container error: {}", e);
@@ -779,9 +632,7 @@ impl DockerManager {
             }
         }
 
-        // Drain logs buffered up to the exit so the final lines (e.g.
-        // "installed successfully!") aren't truncated. Bounded by a short
-        // timeout so a non-terminating follow stream can't wedge us.
+        // Drain buffered logs so the final lines aren't truncated; bounded so a stuck stream can't wedge us.
         while let Ok(Some(Ok(output))) = tokio::time::timeout(
             tokio::time::Duration::from_millis(500),
             log_stream.next(),
@@ -791,8 +642,7 @@ impl DockerManager {
             emit_log_lines(output, &mut on_output);
         }
 
-        // If the log stream ended before the wait produced a code, fall back
-        // to inspecting the container for its exit status.
+        // Log stream ended before wait produced a code: inspect for the exit status.
         let exit_code = match exit_code {
             Some(code) => code,
             None => match self.docker.inspect_container(&container_id, None).await {
@@ -806,12 +656,10 @@ impl DockerManager {
 
         tracing::info!("Install container finished with exit code: {}", exit_code);
 
-        // Don't remove the container yet — keep it for log retrieval. It's
-        // removed when install completes (run_install_inner) or on delete.
+        // Kept for log retrieval; removed by run_install_inner or on delete.
         Ok((exit_code, container_id))
     }
 
-    /// Remove install container after installation completes
     pub async fn remove_install_container(&self, container_id: &str) -> Result<(), DockerError> {
         let _ = self
             .docker
@@ -827,8 +675,7 @@ impl DockerManager {
     }
 }
 
-/// Decode a Docker log frame to UTF-8 and forward each non-empty line to
-/// `on_output`. Shared by the live install loop and the post-exit drain.
+/// Decode a log frame and forward each non-empty line.
 fn emit_log_lines<F: FnMut(String)>(output: LogOutput, on_output: &mut F) {
     let text = match output {
         LogOutput::StdOut { message } => String::from_utf8_lossy(&message).to_string(),

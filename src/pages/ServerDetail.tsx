@@ -6,6 +6,7 @@ import {
   Clock, Network, FolderOpen, Check, Save, Globe, Wifi, ExternalLink, Key, Archive, Activity, Users, QrCode, X
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { appAlert, appConfirm, appPrompt } from '../stores/dialogStore';
 import { useServerStore } from '../stores/serverStore';
 import { useGamesStore } from '../stores/gamesStore';
 import { useNodesStore } from '../stores/nodesStore';
@@ -23,24 +24,21 @@ import { SchedulesPanel } from '../components/SchedulesPanel';
 import { MetricsPanel } from '../components/MetricsPanel';
 import { PlayersPanel } from '../components/PlayersPanel';
 import { useEscapeClose } from '../hooks/useEscapeClose';
+import { describeError } from '../utils/errors';
 
 type TabType = 'console' | 'files' | 'network' | 'players' | 'backups' | 'schedules' | 'metrics' | 'settings';
 
 /** Games whose live roster + moderation the backend currently adapts. */
 const PLAYER_ADMIN_GAMES = new Set(['minecraft-java']);
 
-/** Cap for the in-memory console buffer (mirror of serverStore's). Beyond this
- *  the oldest lines are dropped so a long-running console doesn't leak memory
- *  or make every append O(n) (audit finding). */
+/** Cap for the in-memory console buffer (mirrors serverStore). */
 const MAX_CONSOLE_LINES = 2000;
 
 export function ServerDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   
-  // Owner → local servers; sub-user → the owner's synced servers, so the
-  // detail view resolves by id in both modes (returns the local list
-  // unchanged for owners).
+  // Owner → local servers; sub-user → the owner's synced servers.
   const servers = useDisplayedServers();
   const isLoading = useServerStore((s) => s.isLoading);
   const stats = useServerStore((s) => s.stats);
@@ -55,29 +53,21 @@ export function ServerDetail() {
   const reinstallServer = useServerStore((s) => s.reinstallServer);
   const updateServerGame = useServerStore((s) => s.updateServerGame);
 
-  // Role-based UI gating for sub-users. Both are always true for the
-  // owner / local mode, so this never restricts your own machine — the
-  // cloud also enforces these server-side regardless.
+  // Role gating for sub-users (always true for the owner / local mode).
   const canOperate = useCanAct('server.start'); // start / stop / restart / send
   const canAdmin = useCanAct('server.delete');  // delete / reinstall / config
 
   const { games } = useGamesStore();
-  // The node this detail view is scoped to — so logs/stats/disk/attach hit the
-  // RIGHT machine when the active node is a remote agent (not always 'local').
+  // The node this view is scoped to, so calls hit the right machine.
   const activeNodeId = useNodesStore((s) => s.activeNodeId);
   const activeNode = useNodesStore((s) => s.nodes.find((n) => n.id === s.activeNodeId));
-  // A remote agent node hosts the server elsewhere, so localhost + this
-  // desktop's public IP are wrong. Derive the host from the node's URL and
-  // suppress the (misleading) public IP for remote nodes (audit finding).
+  // A remote agent hosts the server elsewhere: derive the host from the node URL.
   const isRemoteNode = activeNode?.kind.kind === 'remote';
   const remoteHost = (() => {
     if (activeNode?.kind.kind !== 'remote') return null;
     try { return new URL(activeNode.kind.url).hostname; } catch { return null; }
   })();
-  // Sub-user mode: this server lives on the OWNER's machine, reachable only
-  // over the relay. The raw local attach_server / get_server_logs calls would
-  // hit OUR Docker (the wrong machine) and silently show no console — route
-  // through the relay instead, mirroring serverStore.attachToServer.
+  // Sub-user mode: the server lives on the owner's machine; route console access over the relay.
   const isSubUser = useIsSubUser();
 
   const [activeTab, setActiveTab] = useState<TabType>('console');
@@ -144,9 +134,7 @@ export function ServerDetail() {
     fetchServers();
     
     const fetchInitialLogs = async () => {
-      // Sub-user: no historical-logs-over-relay endpoint; the live tail arrives
-      // via RelayLogBridge re-emitting the owner's lines. Calling the local
-      // get_server_logs here would just hit our own (wrong) Docker and error.
+      // Sub-user: no historical logs over the relay; the live tail arrives via RelayLogBridge.
       if (isSubUser) return;
       try {
         const response = await invoke<{ logs: string[] }>('get_server_logs', { serverId: id, lines: 500, nodeId: activeNodeId });
@@ -156,16 +144,13 @@ export function ServerDetail() {
       }
     };
 
-    // `listen()` resolves asynchronously — if this effect is cleaned up
-    // (navigation / id change) before it lands, the resolved listener used
-    // to leak and double every log line on the next mount (audit finding).
+    // `cancelled` guards a listen() that resolves after cleanup.
     let cancelled = false;
     const setupStreaming = async () => {
       try {
         const unlisten = await listen<{ server_id: string; line: string }>('server-log', (event) => {
           if (event.payload.server_id === id) {
-            // Cap the buffer to the last MAX_CONSOLE_LINES — see serverStore
-            // (audit finding: unbounded growth + O(n) appends on chatty servers).
+            // Cap the buffer (see serverStore).
             setLogs((prev) => {
               const next = [...prev, event.payload.line];
               return next.length > MAX_CONSOLE_LINES ? next.slice(-MAX_CONSOLE_LINES) : next;
@@ -179,9 +164,7 @@ export function ServerDetail() {
 
         unlistenRef.current = unlisten;
         if (isSubUser) {
-          // Ask the owner's machine (over the relay) to start streaming; their
-          // RelayLogBridge forwards each line back as a local `server-log`
-          // event, which the listener above already consumes.
+          // Ask the owner's machine to stream; lines come back as local `server-log` events.
           await invoke('cloud_relay_send_cmd', {
             payload: {
               type: 'cmd',
@@ -228,11 +211,10 @@ export function ServerDetail() {
     }
   }, [server?.config]);
 
-  // Uptime — measured from the moment we SAW the server enter 'running'.
-  // (It used created_at, the server's INSTALL date, so "uptime" showed days
-  // for a server started seconds ago; audit finding.) If the app opened onto
-  // an already-running server the real start time is unknown → hide uptime
-  // rather than lie.
+  // Uptime is measured from when we SAW the server enter 'running' (created_at is the install date);
+  // unknown start (mounted onto a running server) → hidden. prevStatusRef is declared before the first
+  // effect that reads it and starts undefined (the lint rule forbids seeding a ref from a prop).
+  const prevStatusRef = useRef<string | undefined>(undefined);
   const startedAtRef = useRef<number | null>(null);
   useEffect(() => {
     if (server?.status !== 'running') {
@@ -242,13 +224,10 @@ export function ServerDetail() {
       return;
     }
     if (startedAtRef.current === null) {
-      // This effect runs BEFORE the prevStatusRef updater below, so on a
-      // transition prevStatusRef still holds the PRIOR status; equal-to-
-      // 'running' means we mounted onto an already-running server.
+      // Runs before the prevStatusRef updater, so prev still holds the PRIOR status.
       if (prevStatusRef.current && prevStatusRef.current !== 'running') {
         startedAtRef.current = Date.now();
       } else {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setUptime('');
         return;
       }
@@ -274,13 +253,7 @@ export function ServerDetail() {
     return () => clearInterval(interval);
   }, [server?.status]);
 
-  // Clear the console whenever the server transitions INTO 'stopped'
-  // from any other state. The previous check required the prior status
-  // to be exactly 'running', but the real flow is
-  // 'running' → 'stopping' → 'stopped' under status polling, so by the
-  // time we saw 'stopped' the prior status was 'stopping' and the logs
-  // were never cleared.
-  const prevStatusRef = useRef(server?.status);
+  // Clear the console on any transition INTO 'stopped' (the real flow passes through 'stopping').
   useEffect(() => {
     const prev = prevStatusRef.current;
     if (prev && prev !== 'stopped' && server?.status === 'stopped') {
@@ -292,10 +265,9 @@ export function ServerDetail() {
     prevStatusRef.current = server?.status;
   }, [server?.status]);
 
-  // Auto-scroll - use instant for fast updates
+  // Auto-scroll.
   useEffect(() => {
     if (autoScroll && consoleEndRef.current && !userScrolledRef.current) {
-      // Use instant scroll for fast log updates
       consoleEndRef.current.scrollIntoView({ behavior: 'instant' });
     }
     lastLogCountRef.current = logs.length;
@@ -303,7 +275,6 @@ export function ServerDetail() {
 
   // Detect OAuth URLs in logs (for Hytale and similar games)
   useEffect(() => {
-    // Don't detect if server is stopped or user dismissed or we already have a URL
     if (server?.status === 'stopped' || server?.status === 'error') {
       if (oauthUrl) {
         // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -315,20 +286,16 @@ export function ServerDetail() {
       return;
     }
     
-    // Don't re-detect if user dismissed or already detected
     if (oauthDismissed || oauthUrl) return;
     
-    // Search from newest to oldest log lines
     const recentLogs = logs.slice(-30).reverse();
     for (const line of recentLogs) {
-      // Strip ANSI codes and any special characters
       const cleanLine = line
         .replace(/\x1b\[[0-9;]*m/g, '')
         .replace(/\u001b\[[0-9;]*m/g, '')
-        .replace(/[\x00-\x1F]/g, ''); // Remove control characters
+        .replace(/[\x00-\x1F]/g, '');
       
-      // Look for the specific Hytale OAuth URL with user_code parameter
-      // The URL format is: https://oauth.accounts.hytale.com/oauth2/device/verify?user_code=XXXXX
+      // Hytale device-auth URL with user_code.
       const urlRegex = /https:\/\/oauth\.accounts\.hytale\.com\/oauth2\/device\/verify\?user_code=([A-Za-z0-9]+)/;
       const match = cleanLine.match(urlRegex);
       
@@ -347,13 +314,11 @@ export function ServerDetail() {
       const { scrollTop, scrollHeight, clientHeight } = consoleRef.current;
       const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
       
-      // If user scrolled up, mark as user-scrolled
       if (!isAtBottom && lastLogCountRef.current === logs.length) {
         userScrolledRef.current = true;
         setAutoScroll(false);
       }
       
-      // If user scrolled back to bottom, re-enable auto-scroll
       if (isAtBottom) {
         userScrolledRef.current = false;
         setAutoScroll(true);
@@ -361,7 +326,6 @@ export function ServerDetail() {
     }
   };
 
-  // Open folder in file explorer
   const openFolder = async (path: string) => {
     try {
       await open(path);
@@ -370,7 +334,6 @@ export function ServerDetail() {
     }
   };
 
-  // Copy to clipboard with feedback
   const copyToClipboard = async (text: string, key: string) => {
     await navigator.clipboard.writeText(text);
     setCopied(key);
@@ -404,9 +367,7 @@ export function ServerDetail() {
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
-      // Gate Enter behind canOperate too — the Send button is disabled for
-      // viewers, but Enter bypassed it, echoing a `> cmd` the server rejects
-      // and giving misleading "accepted" feedback (audit finding).
+      // Enter must respect canOperate too (the Send button already does).
       if (canOperate) handleSendCommand();
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
@@ -447,10 +408,7 @@ export function ServerDetail() {
 
   const handleRestart = async () => {
     setLogs(['Restarting server...']);
-    // Only start if the stop actually succeeded. stopServer/startServer swallow
-    // their own errors (the try/catch here was dead code), so a failed stop
-    // used to fall straight through to a start that clobbered the stop's error
-    // and raced a still-running container (audit finding).
+    // Only start if the stop succeeded (the store swallows its own errors).
     const stopped = await stopServer(server.id);
     if (!stopped) return;
     await startServer(server.id);
@@ -492,7 +450,6 @@ export function ServerDetail() {
     }
   };
 
-  // Get friendly label for config key
   const getConfigLabel = (key: string): string => {
     const labels: Record<string, string> = {
       'TYPE': 'Server Type',
@@ -520,12 +477,10 @@ export function ServerDetail() {
     return labels[key] || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
   };
 
-  // Check if a config value should be hidden
   const isSecretConfig = (key: string): boolean => {
     return key.toLowerCase().includes('password') || key.toLowerCase().includes('secret');
   };
 
-  // Check if a config value is internal (shouldn't be edited)
   const isInternalConfig = (key: string): boolean => {
     return ['EULA', 'CREATE_CONSOLE_IN_PIPE', 'ENABLE_RCON'].includes(key);
   };
@@ -540,7 +495,6 @@ export function ServerDetail() {
     crashed: { bg: 'bg-rose-500/10', border: 'border-rose-500/30', text: 'text-rose-400', dot: 'bg-rose-500' },
   };
 
-  // Format bytes to human readable
   const formatBytes = (bytes: number): string => {
     if (bytes === 0) return '0 B';
     const k = 1024;
@@ -550,8 +504,7 @@ export function ServerDetail() {
   };
 
   const status = statusColors[server.status] || statusColors.stopped;
-  // For a remote agent node, connections go to the node's host, not localhost /
-  // this desktop's public IP (audit finding).
+  // A remote agent node: connections go to the node's host, not localhost.
   const serverAddress = remoteHost
     ? `${remoteHost}:${server.port}`
     : `localhost:${server.port}`;
@@ -738,9 +691,7 @@ export function ServerDetail() {
         {/* Action Buttons */}
         <div className="flex items-center gap-3 mt-6 pt-6 border-t border-zinc-800">
           {server.status === 'stopped' || server.status === 'crashed' || server.status === 'error' ? (
-            // Crashed / errored servers get a way back up — the old
-            // stopped-only branch left them on a permanent spinner (audit
-            // finding: dead-end).
+            // Crashed / errored servers need a way back up.
             <button onClick={handleStart} disabled={isLoading || !canOperate} className="btn btn-success">
               <Play size={18} /> {server.status === 'crashed' ? 'Restart Server' : 'Start Server'}
             </button>
@@ -759,8 +710,7 @@ export function ServerDetail() {
             </button>
           )}
           
-          {/* Open Folder opens a path on THIS machine's shell — meaningless for
-              a server whose data dir lives on a remote agent (audit finding). */}
+          {/* Open Folder opens a path on THIS machine; meaningless for a server on a remote agent. */}
           {!isRemoteNode && (
             <button
               onClick={() => openFolder(String(server.data_path))}
@@ -772,10 +722,13 @@ export function ServerDetail() {
 
           <button
             onClick={async () => {
-              const name = window.prompt(
-                'Save this server’s setup as a reusable template:',
-                `${server.name} template`,
-              );
+              const name = await appPrompt({
+                title: 'Save as template',
+                message: 'Reuse this server’s setup to spin up new servers from Games.',
+                label: 'Template name',
+                defaultValue: `${server.name} template`,
+                confirmLabel: 'Save',
+              });
               if (!name || !name.trim()) return;
               try {
                 await invoke('save_server_as_template', {
@@ -783,9 +736,9 @@ export function ServerDetail() {
                   templateName: name.trim(),
                   nodeId: activeNodeId,
                 });
-                alert('Template saved — find it under Games to spin up new servers from it.');
+                await appAlert({ title: 'Template saved', message: 'Find it under Games to spin up new servers from it.' });
               } catch (e) {
-                alert('Couldn’t save template: ' + String(e));
+                await appAlert({ title: 'Couldn’t save template', message: describeError(e) });
               }
             }}
             className="btn btn-secondary"
@@ -1274,10 +1227,15 @@ export function ServerDetail() {
                   </div>
                   <button 
                     onClick={async () => {
-                      if (confirm('Are you sure you want to reinstall? This will DELETE ALL server data including worlds and configs!')) {
-                        setLogs([]);
-                        await reinstallServer(server.id);
-                      }
+                      const ok = await appConfirm({
+                        title: 'Reinstall this server?',
+                        message: 'This DELETES ALL server data, including worlds and configs, and installs from scratch.',
+                        confirmLabel: 'Reinstall',
+                        danger: true,
+                      });
+                      if (!ok) return;
+                      setLogs([]);
+                      await reinstallServer(server.id);
                     }}
                     disabled={isLoading || server.status === 'running' || server.status === 'installing' || !canAdmin}
                     className="btn btn-secondary border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/10"

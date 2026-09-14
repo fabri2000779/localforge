@@ -1,23 +1,12 @@
-//! Desktop org / member / invitation commands.
-//!
-//! All wire types + HTTP calls live in
-//! `localforge-cloud-client::orgs` so desktop and mobile see the
-//! identical shapes. The desktop layer here is just `#[tauri::command]`
-//! adapters that read the bearer token from the OS keychain and
-//! delegate. Re-exports keep `cloud::orgs::{OrgInfo, Member, …}` at
-//! the same path so the React layer's TypeScript bindings don't
-//! shift.
+//! Desktop org / member / invitation commands over `localforge-cloud-client::orgs`.
 
 use base64::Engine;
 
 use super::{api, auth};
 
-#[allow(unused_imports)]
-pub use localforge_cloud_client::orgs::{Invitation, Member, OrgInfo, OrgSummary};
+pub use localforge_cloud_client::orgs::{Invitation, OrgInfo, OrgSummary};
 
-/// Result of creating an invite: the invitation id + the base64 invite
-/// secret the caller embeds in the link #fragment (so the invitee can unwrap
-/// the handoff DEK on accept). The secret is NEVER sent to the cloud.
+/// New invitation: id plus the base64 invite secret for the link #fragment (never sent to the cloud).
 #[derive(serde::Serialize)]
 pub struct InviteCreated {
     pub id: String,
@@ -39,13 +28,22 @@ pub async fn cloud_orgs_list() -> Result<Vec<OrgSummary>, api::ApiError> {
     localforge_cloud_client::orgs::list(&token).await
 }
 
-/// Point every subsequent cloud call at a specific org (the active org in
-/// the switcher). A sub-user viewing the owner's org sets it here so sync +
-/// machine listing resolve to the OWNER's org (sent as `X-LocalForge-Org`,
-/// membership-verified server-side). Pass `None`/empty on sign-out to fall
-/// back to the primary org.
+/// Whether the active org is ours; `true` when no org is pinned. The sync push consults it.
+static ACTIVE_ORG_OWNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn active_org_owned() -> bool {
+    ACTIVE_ORG_OWNED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Pin every subsequent cloud call to an org (`X-LocalForge-Org`); `None` on sign-out.
+/// `is_owner` says whether we own it (defaults to owned only when nothing is pinned).
 #[tauri::command(rename_all = "camelCase")]
-pub fn cloud_set_active_org(org_id: Option<String>) {
+pub fn cloud_set_active_org(org_id: Option<String>, is_owner: Option<bool>) {
+    let pinned = org_id.as_deref().is_some_and(|s| !s.trim().is_empty());
+    ACTIVE_ORG_OWNED.store(
+        is_owner.unwrap_or(!pinned),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     localforge_cloud_client::api::set_active_org(org_id);
 }
 
@@ -62,10 +60,7 @@ pub async fn cloud_orgs_invite(
     role: String,
 ) -> Result<InviteCreated, api::ApiError> {
     let token = auth::current_token().ok_or_else(unauth)?;
-    // Handoff: wrap the ACTIVE org's DEK with a fresh per-invite secret so the
-    // invitee decrypts the instant they accept — no waiting for us to seal.
-    // active_dek() is our own DEK when inviting to our own org, or the org DEK
-    // we hold (admin-member) when inviting to an org we belong to.
+    // Handoff: wrap the active org's DEK with a fresh per-invite secret so the invitee can decrypt on accept.
     let dek = super::vault::active_dek().map_err(|e| api::ApiError::Decode(format!("vault: {e}")))?;
     let secret = super::vault::generate_key();
     let wrapped = super::vault::wrap_dek(&secret, &dek).map_err(api::ApiError::Decode)?;
@@ -122,10 +117,9 @@ pub async fn cloud_orgs_remove_member(
     .await
 }
 
-// ── Per-server access scopes (Team) ─────────────────────────────────────────
+// Per-server access scopes (Team)
 
-/// One server a member is scoped to. `expires_at` (ms) = temporary grant; None
-/// = permanent. Empty list (set) = unrestricted (full org access).
+/// A server a member is scoped to; `expires_at` (ms) marks a temporary grant. Empty list = unrestricted.
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MemberScope {
@@ -176,11 +170,7 @@ pub async fn cloud_member_scopes_set(
     Ok(())
 }
 
-/// Accept an invitation token (delivered via the `localforge://invite`
-/// deep link OR pasted by the user). Returns the org id they joined so the UI
-/// can switch to it. `secret` is the base64 invite secret from the link
-/// #fragment — when present (handoff invite), we unwrap the org DEK and adopt
-/// it so the new member decrypts immediately + durably.
+/// Accept an invite; with a handoff `secret` the org DEK is unwrapped and adopted immediately.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn cloud_orgs_accept_invite(
     token: String,
@@ -195,10 +185,7 @@ pub async fn cloud_orgs_accept_invite(
                 sk.copy_from_slice(&s);
                 if let Ok(dek) = super::vault::unwrap_dek(&sk, wrapped) {
                     super::vault::adopt_org_dek(&res.org_id, &dek);
-                    // Durable cross-device access without waiting for the owner:
-                    // seal the DEK to our own pubkey now. Best-effort — silently
-                    // skips if we have no keypair yet (sync not set up), in which
-                    // case the owner's background grant still covers us.
+                    // Seal the DEK to our own pubkey for durable cross-device access (best-effort).
                     if let Some(uid) = res.user_id.as_deref() {
                         let _ = super::vault::self_seal_grant(&res.org_id, uid, &dek, &bearer).await;
                     }

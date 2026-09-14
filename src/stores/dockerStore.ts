@@ -1,5 +1,4 @@
-// Docker status store. Tied to the currently-active node — switching
-// nodes invalidates the cached status/info so callers refetch.
+// Docker status for the active node; switching nodes invalidates the cache.
 
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
@@ -17,11 +16,7 @@ interface DockerState {
 
 const currentNodeId = () => useNodesStore.getState().activeNodeId;
 
-/// Monotonic token for status checks. A dead remote node's check_docker_status
-/// can hang for seconds; after the user switches to a healthy node, that stale
-/// rejection used to overwrite the good status with {available:false} and gate
-/// the whole UI behind "Docker Required" (audit finding). A newer check / node
-/// switch bumps this and the stale resolution self-drops.
+// Monotonic token: a slow check from a previous node must not overwrite the current node's status.
 let checkGeneration = 0;
 
 export const useDockerStore = create<DockerState>((set) => ({
@@ -64,9 +59,7 @@ export const useDockerStore = create<DockerState>((set) => ({
   },
 }));
 
-// Re-fetch Docker status whenever the active node changes. Using
-// nodesStore.subscribe gives us a clean unidirectional flow without
-// component-side useEffects everywhere.
+// Re-fetch whenever the active node changes.
 let lastActive = useNodesStore.getState().activeNodeId;
 useNodesStore.subscribe((state) => {
   if (state.activeNodeId !== lastActive) {

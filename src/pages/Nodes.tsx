@@ -18,11 +18,12 @@ import {
 } from 'lucide-react';
 import { useNodesStore, type CloudNodeSummary } from '../stores/nodesStore';
 import { useAuthStore } from '../stores/authStore';
+import { appAlert, appConfirm } from '../stores/dialogStore';
 import type { NodeRecord, NodeStats } from '../types';
 import { AddNodeWizard } from '../components/AddNodeWizard';
+import { describeError } from '../utils/errors';
 
-/** Agent-node caps per plan — mirrors the cloud's NODE_CAP. Counts
- *  cloud-linked agents only; desktop installs are unlimited. */
+/** Agent-node caps per plan (mirrors the cloud's NODE_CAP); desktops are unlimited. */
 const NODE_CAP: Record<string, number> = { free: 0, hobby: 2, team: 10 };
 
 export function NodesPage() {
@@ -71,27 +72,24 @@ export function NodesPage() {
   const handleRemove = async (node: NodeRecord) => {
     if (node.kind.kind === 'local') return;
     const linked = cloudNodes.find((cn) => cn.id === node.id && !cn.revoked);
-    if (
-      !window.confirm(
-        linked
-          ? `Remove "${node.label}"? It's linked to the cloud relay, so this also unlinks it — mobile / other desktops lose direct access and the node slot is freed. The agent on the server keeps running until you stop it manually.`
-          : `Remove "${node.label}"? Its persisted token will be deleted; the agent on the server keeps running until you stop it manually.`,
-      )
-    ) {
-      return;
-    }
+    const ok = await appConfirm({
+      title: `Remove "${node.label}"?`,
+      message: linked
+        ? "It's linked to the cloud relay, so this also unlinks it — mobile / other desktops lose direct access and the node slot is freed. The agent on the server keeps running until you stop it manually."
+        : 'Its persisted token will be deleted; the agent on the server keeps running until you stop it manually.',
+      confirmLabel: 'Remove node',
+      danger: true,
+    });
+    if (!ok) return;
     setBusyId(node.id);
     try {
-      // Cascade: unlink from the cloud FIRST (hard-deletes the enrollment +
-      // frees the cap slot + drops the relay socket). Doing it before the
-      // local removal means a failure here aborts cleanly instead of leaving
-      // an orphaned cloud node with no UI left to unlink it.
+      // Unlink from the cloud FIRST so a failure aborts cleanly instead of orphaning a cloud node.
       if (linked) {
         await revokeCloudNode(node.id);
       }
       await removeNode(node.id);
     } catch (e) {
-      window.alert(`Couldn't remove node: ${e}`);
+      await appAlert({ title: "Couldn't remove node", message: describeError(e) });
     } finally {
       setBusyId(null);
     }
@@ -112,20 +110,20 @@ export function NodesPage() {
       const res = await linkNodeToCloud(node.id, node.label);
       setLinkCmd(`localforge-agent link ${res.enrollmentBlob}`);
     } catch (e) {
-      window.alert(`Couldn't link to cloud: ${e}`);
+      await appAlert({ title: "Couldn't link to cloud", message: describeError(e) });
     } finally {
       setBusyId(null);
     }
   };
 
   const handleUnlink = async (node: NodeRecord) => {
-    if (
-      !window.confirm(
-        `Unlink "${node.label}" from the cloud relay? Mobile / other desktops won't control it directly until you re-link. The agent keeps running.`,
-      )
-    ) {
-      return;
-    }
+    const ok = await appConfirm({
+      title: `Unlink "${node.label}" from the cloud relay?`,
+      message: "Mobile / other desktops won't control it directly until you re-link. The agent keeps running.",
+      confirmLabel: 'Unlink',
+      danger: true,
+    });
+    if (!ok) return;
     setBusyId(node.id);
     try {
       await revokeCloudNode(node.id);
@@ -275,9 +273,7 @@ export function NodesPage() {
   );
 }
 
-/** Shows the one-time `localforge-agent link <blob>` command after enrolling
- *  a node. The operator runs it on the VPS (then restarts the agent) and the
- *  agent connects to the relay. Shown once — the token isn't recoverable. */
+/** Shows the one-time `localforge-agent link <blob>` command after enrolling a node. */
 function LinkCommandDialog({
   command,
   onClose,

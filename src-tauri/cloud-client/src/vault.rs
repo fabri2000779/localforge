@@ -1,76 +1,45 @@
-//! Envelope encryption — pure crypto primitives.
-//!
-//! Two layers, both used by the cloud sync stack:
-//!
-//!   **DEK** (Data Encryption Key) — 256-bit AES-GCM key that
-//!   encrypts every server / node blob before it leaves the device.
-//!   Cached locally (in the OS keychain on desktop, app-data dir on
-//!   mobile) so day-to-day operation is instant.
-//!
-//!   **KEK** (Key Encryption Key) — 256-bit AES-GCM key NEVER stored
-//!   anywhere; re-derived on demand from the user's password (for
-//!   email/pwd accounts) or sync passphrase (for OAuth accounts) via
-//!   scrypt. Used to wrap/unwrap the DEK.
-//!
-//! The cloud stores `wrapped_dek = AES-GCM(DEK, KEK)` plus the scrypt
-//! salt + params. On a new device the user authenticates as normal,
-//! fetches the wrap from /me, re-derives the KEK from their secret,
-//! unwraps the DEK, caches it locally, and decryption proceeds. The
-//! cloud never sees an unwrapped DEK.
-//!
-//! Everything here is pure Rust — no keyring, no Tauri, nothing
-//! platform-specific. Storage (loading + saving the DEK and the
-//! token) lives in the consuming app behind the `DekStore` /
-//! `TokenStore` traits defined in `lib.rs`.
+//! Envelope-encryption primitives (pure Rust, no platform code).
+//! DEK: AES-256-GCM key that encrypts every server/node blob on-device.
+//! KEK: derived on demand from the password/passphrase via scrypt and used only to
+//! wrap/unwrap the DEK; the cloud stores the wrap plus the salt and params.
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::Engine;
-use rand::TryRngCore;
+use rand::TryRng;
 
 pub const KEY_LEN: usize = 32;
 pub const NONCE_LEN: usize = 12;
 
-// ---------------------------------------------------------------------------
-// Random material
-// ---------------------------------------------------------------------------
-
-/// Generate a fresh 256-bit AES key — DEK on first cloud-sync setup,
-/// or a fresh wrap on rotation.
+/// Fresh 256-bit key (the DEK, or a new one on rotation).
 pub fn generate_key() -> [u8; KEY_LEN] {
     let mut k = [0u8; KEY_LEN];
-    rand::rngs::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(&mut k)
         .expect("OS RNG must be available");
     k
 }
 
-/// Generate a fresh 16-byte salt for scrypt. Public — stored alongside
-/// the wrapped DEK on the cloud (it doesn't have to be secret, only
-/// unique per user).
+/// Fresh scrypt salt; stored beside the wrapped DEK (unique, not secret).
 pub fn generate_salt() -> [u8; 16] {
     let mut s = [0u8; 16];
-    rand::rngs::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(&mut s)
         .expect("OS RNG must be available");
     s
 }
 
-// ---------------------------------------------------------------------------
-// AES-256-GCM envelope.
-// Format: `v1.<base64(nonce)>.<base64(ciphertext+tag)>`
-// Bumping the prefix is how we'd migrate the format later.
-// ---------------------------------------------------------------------------
+// Envelope format: `v1.<base64(nonce)>.<base64(ciphertext+tag)>`.
 
 pub fn encrypt(key: &[u8; KEY_LEN], plaintext: &[u8]) -> Result<String, String> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(*key));
     let mut nonce_bytes = [0u8; NONCE_LEN];
-    rand::rngs::OsRng
+    rand::rngs::SysRng
         .try_fill_bytes(&mut nonce_bytes)
         .map_err(|e| format!("rng: {e}"))?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = Nonce::from(nonce_bytes);
     let ct = cipher
-        .encrypt(nonce, plaintext)
+        .encrypt(&nonce, plaintext)
         .map_err(|e| format!("encrypt: {e}"))?;
     Ok(format!(
         "v1.{}.{}",
@@ -90,28 +59,19 @@ pub fn decrypt(key: &[u8; KEY_LEN], envelope: &str) -> Result<Vec<u8>, String> {
     let ciphertext = base64::engine::general_purpose::STANDARD
         .decode(parts[2])
         .map_err(|e| format!("ct decode: {e}"))?;
-    if nonce_bytes.len() != NONCE_LEN {
-        return Err("nonce wrong length".into());
-    }
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce_arr: [u8; NONCE_LEN] = nonce_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| "nonce wrong length".to_string())?;
+    let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(*key));
+    let nonce = Nonce::from(nonce_arr);
     cipher
-        .decrypt(nonce, ciphertext.as_slice())
+        .decrypt(&nonce, ciphertext.as_slice())
         .map_err(|e| format!("decrypt (key mismatch?): {e}"))
 }
 
-// ---------------------------------------------------------------------------
-// KEK derivation (scrypt) + DEK wrap/unwrap (AES-GCM)
-// ---------------------------------------------------------------------------
-
-/// Scrypt parameters. log2(N)=15 (N=32768), r=8, p=1, key_len=32.
-/// ~150ms on a modern desktop CPU and roughly equivalent on a current
-/// flagship phone — slow enough that a stolen-DB brute force takes
-/// years per password, fast enough that a real user doesn't notice.
-///
-/// Bumping these would invalidate every existing wrap, so the cloud
-/// stores them alongside the wrap (`kek_params` field on /me) and we
-/// only consult them on rotation.
+/// Scrypt parameters (N=2^15, r=8, p=1, 32-byte key): ~150 ms on a modern CPU. Changing them
+/// invalidates every existing wrap; the cloud stores them beside the wrap for rotation.
 pub const KEK_LOG_N: u8 = 15;
 pub const KEK_R: u32 = 8;
 pub const KEK_P: u32 = 1;
@@ -119,7 +79,7 @@ pub const KEK_LEN: usize = 32;
 
 /// scrypt(password_or_passphrase, salt) → 32-byte KEK.
 pub fn derive_kek(password: &str, salt: &[u8]) -> Result<[u8; KEK_LEN], String> {
-    let params = scrypt::Params::new(KEK_LOG_N, KEK_R, KEK_P, KEK_LEN)
+    let params = scrypt::Params::new(KEK_LOG_N, KEK_R, KEK_P)
         .map_err(|e| format!("scrypt params: {e}"))?;
     let mut out = [0u8; KEK_LEN];
     scrypt::scrypt(password.as_bytes(), salt, &params, &mut out)
@@ -127,16 +87,12 @@ pub fn derive_kek(password: &str, salt: &[u8]) -> Result<[u8; KEK_LEN], String> 
     Ok(out)
 }
 
-/// Wrap the DEK with the KEK so it's safe to store server-side. Same
-/// envelope format as the rest of the vault — reuses `encrypt()`.
+/// Wrap the DEK with the KEK for server-side storage (same v1 envelope).
 pub fn wrap_dek(kek: &[u8; KEY_LEN], dek: &[u8; KEY_LEN]) -> Result<String, String> {
     encrypt(kek, dek)
 }
 
-/// Unwrap a server-stored wrapped_dek with a freshly-derived KEK.
-/// AES-GCM authentication failure here means a wrong passphrase —
-/// callers should surface that gently rather than treating it like a
-/// data-corruption error.
+/// Unwrap a stored DEK; an AES-GCM failure means a wrong passphrase.
 pub fn unwrap_dek(kek: &[u8; KEY_LEN], wrapped: &str) -> Result<[u8; KEY_LEN], String> {
     let plain = decrypt(kek, wrapped)?;
     if plain.len() != KEY_LEN {
@@ -147,8 +103,7 @@ pub fn unwrap_dek(kek: &[u8; KEY_LEN], wrapped: &str) -> Result<[u8; KEY_LEN], S
     Ok(out)
 }
 
-/// What the cloud stores alongside the wrap so the desktop / mobile
-/// can re-derive the KEK on a fresh device. Round-trips through JSON.
+/// Stored beside the wrap so a fresh device can re-derive the KEK.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct KekParams {
     pub algo: &'static str,
@@ -170,22 +125,9 @@ impl KekParams {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Asymmetric key sharing (X25519 sealed box) — Team org DEK distribution.
-//
-// For a Team org the per-org DEK is shared to each member by SEALING it to
-// that member's X25519 public key, so the cloud never sees the raw DEK. The
-// member's X25519 SECRET is itself wrapped by their KEK (same as the DEK) and
-// stored on the cloud, so any of their devices can recover it from the
-// passphrase — the public key is therefore stable per user.
-//
-// Construction (libsodium `crypto_box_seal` style): an ephemeral keypair does
-// ECDH with the recipient's public key; the shared secret is run through
-// SHA-256 (domain-separated, bound to both public keys) to derive a 32-byte
-// AES key; the DEK is sealed with the existing AES-256-GCM envelope. This is
-// confidentiality-only (anonymous sender) — exactly what we need: the owner
-// is the sole holder of the DEK and GCM gives integrity.
-// ---------------------------------------------------------------------------
+// X25519 sealed box for Team org-DEK distribution (libsodium crypto_box_seal style):
+// ephemeral ECDH with the recipient's pubkey, SHA-256 KDF bound to both public keys,
+// then the v1 AES-GCM envelope. Confidentiality-only; the cloud never sees the raw DEK.
 
 use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -193,11 +135,7 @@ use x25519_dalek::{PublicKey, StaticSecret};
 /// Length of an X25519 public key, in bytes.
 pub const X25519_PK_LEN: usize = 32;
 
-/// Generate a fresh X25519 keypair. Returns `(secret_bytes, public_bytes)`.
-/// The secret is stored locally + cloud-wrapped by the KEK (like the DEK);
-/// the public key is published so org owners can seal the DEK to it. We build
-/// the secret from our own OS-random bytes to avoid coupling to x25519-dalek's
-/// rand_core version.
+/// Fresh X25519 keypair as `(secret, public)`; the secret comes from our own OS RNG.
 pub fn generate_keypair() -> ([u8; KEY_LEN], [u8; X25519_PK_LEN]) {
     let sk_bytes = generate_key();
     let pk = PublicKey::from(&StaticSecret::from(sk_bytes));
@@ -209,8 +147,7 @@ pub fn public_from_secret(sk_bytes: &[u8; KEY_LEN]) -> [u8; X25519_PK_LEN] {
     PublicKey::from(&StaticSecret::from(*sk_bytes)).to_bytes()
 }
 
-/// Domain-separated KDF binding the AES key to both public keys, so a sealed
-/// blob can't be replayed against a different recipient.
+/// KDF bound to both public keys, so a sealed blob can't be replayed to another recipient.
 fn seal_kdf(shared: &[u8], epk: &[u8], recipient_pk: &[u8]) -> [u8; KEY_LEN] {
     let mut h = Sha256::new();
     h.update(b"localforge-sealed-dek-v1");
@@ -223,9 +160,7 @@ fn seal_kdf(shared: &[u8], epk: &[u8], recipient_pk: &[u8]) -> [u8; KEY_LEN] {
     key
 }
 
-/// Seal `dek` to `recipient_pk`. Returns `(ephemeral_pubkey_b64, sealed)`
-/// where `sealed` is a standard v1 AES-GCM envelope. Store both on the cloud
-/// as the member's grant.
+/// Seal `dek` to `recipient_pk`; returns `(ephemeral_pubkey_b64, sealed_envelope)`.
 pub fn seal_to(
     recipient_pk: &[u8; X25519_PK_LEN],
     dek: &[u8; KEY_LEN],
@@ -241,9 +176,7 @@ pub fn seal_to(
     ))
 }
 
-/// Open a sealed DEK with the recipient's secret + the ephemeral pubkey the
-/// owner stored alongside it. AES-GCM failure means a wrong key (not us, or a
-/// tampered blob).
+/// Open a sealed DEK; an AES-GCM failure means a wrong key or a tampered blob.
 pub fn open_sealed(
     my_sk: &[u8; KEY_LEN],
     epk_b64: &str,
@@ -269,10 +202,6 @@ pub fn open_sealed(
     out.copy_from_slice(&plain);
     Ok(out)
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -326,8 +255,6 @@ mod tests {
 
     #[test]
     fn sealed_dek_round_trip() {
-        // Owner holds the org DEK; a member has a keypair. Owner seals to the
-        // member's pubkey; member opens it with their secret.
         let (member_sk, member_pk) = generate_keypair();
         let dek = generate_key();
         let (epk_b64, sealed) = seal_to(&member_pk, &dek).unwrap();
@@ -340,7 +267,6 @@ mod tests {
         let (_alice_sk, alice_pk) = generate_keypair();
         let (mallory_sk, _mallory_pk) = generate_keypair();
         let dek = generate_key();
-        // Sealed to Alice — Mallory must not be able to open it.
         let (epk_b64, sealed) = seal_to(&alice_pk, &dek).unwrap();
         assert!(open_sealed(&mallory_sk, &epk_b64, &sealed).is_err());
     }
@@ -354,12 +280,71 @@ mod tests {
     #[test]
     fn kek_params_defaults_stable() {
         let p = KekParams::defaults();
-        // Pinned values — changing these means existing wraps stop
-        // unwrapping. The test exists to catch unintended bumps.
+        // Changing these means existing wraps stop unwrapping.
         assert_eq!(p.algo, "scrypt");
         assert_eq!(p.n, 32768);
         assert_eq!(p.r, 8);
         assert_eq!(p.p, 1);
         assert_eq!(p.len, 32);
+    }
+}
+
+/// Known-answer tests pinning the byte formats every stored blob depends on; a crypto
+/// dependency bump that changed any output would lock every user out of their vault.
+#[cfg(test)]
+mod known_answer {
+    use super::*;
+
+    fn hex(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{:02x}", x)).collect()
+    }
+
+    const SALT: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    const PASSPHRASE: &str = "correct horse battery staple";
+    const KEK_HEX: &str = "1aeba192e2389376c87334c305e9acc97a492085a776c11c0af751e1b42e2d13";
+
+    fn fixed_key() -> [u8; 32] {
+        core::array::from_fn(|i| (i as u8).wrapping_mul(7).wrapping_add(3))
+    }
+    fn fixed_sk() -> [u8; 32] {
+        core::array::from_fn(|i| 200u8.wrapping_sub(i as u8 * 3))
+    }
+    fn fixed_dek() -> [u8; 32] {
+        core::array::from_fn(|i| (i as u8) ^ 0x5a)
+    }
+
+    #[test]
+    fn scrypt_kek_derivation_is_stable() {
+        let kek = derive_kek(PASSPHRASE, &SALT).unwrap();
+        assert_eq!(hex(&kek), KEK_HEX);
+    }
+
+    #[test]
+    fn v1_envelope_decrypts_fixed_vector() {
+        let env = "v1.cl34Zm4+riIyg2sN.aG/zMhCRurLcpqNZWDp0ELfkYo7NHTxIYdNZ+YrgshSEfcGNNCviVdTCr/vIYMo07Q==";
+        let plain = decrypt(&fixed_key(), env).unwrap();
+        assert_eq!(plain, b"localforge known-answer plaintext");
+    }
+
+    #[test]
+    fn wrapped_dek_unwraps_with_derived_kek() {
+        let kek = derive_kek(PASSPHRASE, &SALT).unwrap();
+        let wrapped = "v1.vwmgq2wiQO/BJVJ5.BOxmMMwmrTBZfK4LRoo77or1kLe0suO8NAuzvI7SCPmaoIiVNIx71J64vk/7yYi7";
+        assert_eq!(unwrap_dek(&kek, wrapped).unwrap(), fixed_dek());
+    }
+
+    #[test]
+    fn x25519_public_key_derivation_is_stable() {
+        assert_eq!(
+            hex(&public_from_secret(&fixed_sk())),
+            "36d6b4567333d248860d3aa36e4bd1a0cc3d5ab570c378c58133a85c43bd9d14"
+        );
+    }
+
+    #[test]
+    fn sealed_grant_opens_fixed_vector() {
+        let epk = "5FiO6TRSoyE+wM+VjMH3fu0aFk+85Cy846FLt0dCDQU=";
+        let sealed = "v1.WzTj1wCkUL4Sax6i.QE8nnR7zDSL1Z+TOhd9b6U6HN0r7J5mfSHQ+7eg/QDrP1eVN8t6SW7zP54Igh/lG";
+        assert_eq!(open_sealed(&fixed_sk(), epk, sealed).unwrap(), fixed_dek());
     }
 }

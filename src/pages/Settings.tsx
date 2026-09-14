@@ -1,14 +1,4 @@
-/**
- * Settings page — split into sub-tabs so each concern has its own space.
- *
- *   Account        — cloud account, billing, sync key, org switcher
- *   Team           — members, invitations, roles (Team plan only)
- *   Backup Storage — org-level S3 target management
- *   System         — Docker integration, about, data locations
- *
- * Deep-link via ?tab=<id> so other parts of the app can navigate directly
- * to the right tab (e.g. BackupsPanel → "Configure backup storage").
- */
+/** Settings page with sub-tabs (Account, Team, Backup Storage, System); deep-linkable via ?tab=. */
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -45,11 +35,7 @@ export function Settings() {
     setSearchParams(tab === 'account' ? {} : { tab });
   }
 
-  // The URL is the single source of truth for the active tab: deep-links
-  // (?tab=) AND the browser back/forward buttons both flow through here.
-  // Defaulting a missing param to 'account' makes back-navigation revert
-  // correctly. No stale closure (activeTab isn't read) and no loop
-  // (setActiveTab doesn't mutate searchParams).
+  // The URL is the single source of truth for the active tab (deep links + back/forward).
   useEffect(() => {
     setActiveTab((searchParams.get('tab') as SettingsTab | null) ?? 'account');
   }, [searchParams]);

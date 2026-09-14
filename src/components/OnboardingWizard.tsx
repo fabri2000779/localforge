@@ -1,12 +1,4 @@
-/**
- * First-run onboarding nudge.
- *
- * Shows once, only for a genuinely fresh install: Docker is up and there are no
- * servers yet. It points the user at creating their first server and hints at
- * the optional cloud features (phone control + crash alerts). Dismissal is
- * sticky (localStorage) so it never nags again. No account or network needed —
- * this is pure orchestration over what's already on screen.
- */
+/** First-run onboarding nudge for a fresh install (Docker up, no servers); dismissal is sticky in localStorage. */
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Rocket, Server, Smartphone, X, Check } from 'lucide-react';
@@ -23,9 +15,7 @@ export function OnboardingWizard() {
   const [dismissed, setDismissed] = useState(
     () => typeof localStorage !== 'undefined' && !!localStorage.getItem(SEEN_KEY),
   );
-  // A backdrop click / Escape only hides for THIS session — an accidental
-  // mis-click used to write SEEN_KEY and kill onboarding forever (audit
-  // finding). Only the explicit buttons below dismiss permanently.
+  // Backdrop/Escape only hide for this session; only the explicit buttons dismiss permanently.
   const [hiddenThisSession, setHiddenThisSession] = useState(false);
 
   // Only for a fresh start: Docker ready and no servers yet.

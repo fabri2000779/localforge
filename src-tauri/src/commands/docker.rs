@@ -1,6 +1,4 @@
-//! Docker-related Tauri commands. Thin wrappers around [`NodeBackend`]
-//! so the same code path works for local and remote nodes — the caller
-//! just supplies a `nodeId` (defaulting to "local").
+//! Docker commands routed through [`NodeBackend`] (`nodeId` defaults to "local").
 
 use crate::backend::{LocalDockerBackend, NodeRegistry};
 use crate::commands::require_backend;
@@ -11,9 +9,7 @@ use tauri::State;
 
 pub use localforge_core::{DockerInfo, DockerStatus};
 
-/// Probe the given node's Docker daemon. For the local node we also try
-/// to (re)connect the backend if it wasn't reachable at startup — that's
-/// what the "Retry" button on the Docker-required screen invokes.
+/// Probe a node's Docker; for the local node also (re)connect the backend ("Retry" button).
 #[tauri::command(rename_all = "camelCase")]
 pub async fn check_docker_status(
     node_id: Option<String>,
@@ -24,7 +20,6 @@ pub async fn check_docker_status(
         .map(NodeId::new)
         .unwrap_or_else(NodeId::local);
 
-    // Fast path: backend already connected.
     if let Some(backend) = state.backend(&id).await {
         return match backend.ping().await {
             Ok(_) => Ok(DockerStatus {
@@ -40,7 +35,6 @@ pub async fn check_docker_status(
         };
     }
 
-    // Slow path for the local node: try to connect to the local socket.
     if id.is_local() {
         return match LocalDockerBackend::connect(paths::home_root()).await {
             Ok(backend) => {
@@ -73,7 +67,6 @@ pub async fn check_docker_status(
         };
     }
 
-    // Remote node: offline.
     Ok(DockerStatus {
         available: false,
         running: false,
@@ -81,7 +74,6 @@ pub async fn check_docker_status(
     })
 }
 
-/// Get Docker daemon information for the given node.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_docker_info(
     node_id: Option<String>,

@@ -1,10 +1,4 @@
-//! Thin reqwest wrapper around `api.localforge.gg`. Single shared
-//! client per process so we get connection pooling.
-//!
-//! Moved unchanged from the desktop's `src/cloud/api.rs` as part of
-//! the cloud-client extraction (stage 1). The only edit is the path
-//! that imports `api_origin` / `user_agent` — those now live at the
-//! crate root instead of in a sibling module.
+//! Thin reqwest wrapper around the cloud API; one shared client per process.
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -14,32 +8,21 @@ use crate::{api_origin, user_agent};
 
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-/// The org every subsequent request should act on. Sent as the
-/// `X-LocalForge-Org` header so a sub-user's calls (sync, machine listing)
-/// target the OWNER's org instead of the caller's primary one. `None` →
-/// header omitted → the server falls back to the caller's primary org
-/// (the historical single-org behaviour).
+/// Org every request acts on, sent as `X-LocalForge-Org`; `None` = the caller's primary org.
 static ACTIVE_ORG: OnceLock<RwLock<Option<String>>> = OnceLock::new();
 
 fn active_org_cell() -> &'static RwLock<Option<String>> {
     ACTIVE_ORG.get_or_init(|| RwLock::new(None))
 }
 
-/// Point the API client at a specific org. The host app calls this when the
-/// user switches the active org (and clears it on sign-out). Empty strings
-/// are treated as `None`.
+/// Pin the client to an org (cleared on sign-out). Empty strings mean `None`.
 pub fn set_active_org(org_id: Option<String>) {
-    // Recover from a poisoned lock instead of silently dropping the write: this
-    // value decides which org every subsequent request targets, so a no-op'd
-    // update would leave calls pointed at the previous (wrong) org.
+    // Recover from a poisoned lock: a dropped write would leave requests aimed at the wrong org.
     let mut g = active_org_cell().write().unwrap_or_else(|e| e.into_inner());
     *g = org_id.filter(|s| !s.trim().is_empty());
 }
 
-/// The org the client is currently pointed at (the `X-LocalForge-Org` header
-/// value). Public so producers like the audit log can stamp the SAME org into
-/// their request body, instead of the cloud falling back to the caller's
-/// primary membership (audit finding: sub-user actions landed in the wrong feed).
+/// The pinned org; producers such as the audit log stamp it into request bodies too.
 pub fn active_org() -> Option<String> {
     active_org_cell()
         .read()
@@ -47,44 +30,23 @@ pub fn active_org() -> Option<String> {
         .clone()
 }
 
-/// The shared reqwest client. Public so callers that need a custom
-/// HTTP method (PUT, DELETE) or response handling beyond what `get()`
-/// / `post()` provide can build their own request. Stage 2 of the
-/// refactor will add proper helpers for those cases so this exposure
-/// can shrink back to crate-private.
+/// Shared reqwest client; public for callers that need PUT/DELETE or raw responses.
 pub fn client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .user_agent(user_agent())
             .timeout(std::time::Duration::from_secs(30))
-            // Hand reqwest an explicit rustls config so it does NOT fall
-            // back to its default verifier (rustls-platform-verifier),
-            // which panics on Android without JNI init. See
-            // `webpki_tls_config` below.
+            // Explicit rustls config: reqwest's default platform verifier aborts on Android without JNI init.
             .use_preconfigured_tls(webpki_tls_config())
             .build()
             .expect("reqwest client build")
     })
 }
 
-/// A rustls client config that trusts the bundled Mozilla webpki root
-/// store and nothing else.
-///
-/// reqwest 0.13's rustls backend, left to its defaults, builds a
-/// `rustls_platform_verifier::Verifier`. On Android that verifier
-/// aborts the process ("Expect rustls-platform-verifier to be
-/// initialized") unless the app wires the JNI context + a companion
-/// Kotlin class into it at startup. Rather than carry that brittle
-/// per-platform plumbing, we pin verification to the compiled-in
-/// Mozilla roots — identical behaviour on every OS, no init required.
-/// `api.localforge.gg` (Cloudflare) chains to a public CA in the
-/// bundle. This mirrors `localforge-backend-remote::build_tls_config`.
+/// rustls config trusting only the bundled Mozilla roots: identical on every OS and needs no
+/// platform init. Mirrors `localforge-backend-remote::build_tls_config`.
 fn webpki_tls_config() -> rustls::ClientConfig {
-    // reqwest is built with `rustls-no-provider`, so no process-default
-    // CryptoProvider is installed automatically and
-    // `ClientConfig::builder()` would panic without one. Install ring
-    // here; it's idempotent, so it's harmless if the host app (mobile
-    // `lib.rs`, or backend-remote) already installed it.
+    // Built with `rustls-no-provider`: install ring (idempotent) before touching ClientConfig.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let mut roots = rustls::RootCertStore::empty();
@@ -94,13 +56,7 @@ fn webpki_tls_config() -> rustls::ClientConfig {
         .with_no_client_auth()
 }
 
-/// Shape of an error response from the cloud API.
-/// Most endpoints return `{ "error": "<code>", "message"?: "<detail>" }`.
-///
-/// Public for the same reason `client()` is — call sites that hand-
-/// roll their HTTP request need a way to parse the error body into
-/// the same shape `get()` / `post()` produce. Refactor stage 2 will
-/// hide this again once `put()` / `delete()` helpers exist.
+/// Error body shape: `{ "error": "<code>", "message"?: "<detail>" }`.
 #[derive(Debug, serde::Deserialize)]
 pub struct ApiErrorBody {
     pub error: String,
@@ -114,9 +70,7 @@ pub enum ApiError {
     Network(#[from] reqwest::Error),
     #[error("decode error: {0}")]
     Decode(String),
-    /// Server returned a non-2xx. `status` is the HTTP code, `code` is
-    /// the machine-readable `error` field from the JSON body, `message`
-    /// is the optional human detail.
+    /// Non-2xx response: HTTP status, machine-readable `error` code, optional detail.
     #[error("{code} (HTTP {status})")]
     Server {
         status: u16,
@@ -125,13 +79,7 @@ pub enum ApiError {
     },
 }
 
-/// Serialize for tauri::command return values — the frontend gets a
-/// `{ code, status, message }` object on rejection.
-///
-/// Note: this `Serialize` impl is independent of Tauri (it's just
-/// serde) but exists specifically so consuming apps can return
-/// `Result<_, ApiError>` from their `#[tauri::command]` handlers
-/// without any wrapping. Mobile reuses the exact same contract.
+/// Serialized as `{ status, code, message }` so commands can return `Result<_, ApiError>` directly.
 impl serde::Serialize for ApiError {
     fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
     where
@@ -199,8 +147,7 @@ async fn request<B: Serialize, R: DeserializeOwned>(
     if let Some(t) = bearer {
         req = req.bearer_auth(t);
     }
-    // Act on the user's chosen active org (sub-user → the owner's org). The
-    // server verifies membership before honouring it; omitted → primary org.
+    // Active-org header; the server verifies membership before honouring it.
     if let Some(org) = active_org() {
         req = req.header("x-localforge-org", org);
     }
@@ -211,8 +158,6 @@ async fn request<B: Serialize, R: DeserializeOwned>(
     let status = res.status();
     if status.is_success() {
         if status == reqwest::StatusCode::NO_CONTENT {
-            // R must be `()` here in practice; if it isn't this just
-            // fails at deserialization, which is the right signal.
             return serde_json::from_value(serde_json::Value::Null)
                 .map_err(|e| ApiError::Decode(e.to_string()));
         }

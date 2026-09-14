@@ -3,7 +3,7 @@ members = [".", "core", "backend-local", "backend-remote", "agent", "cloud-clien
 resolver = "2"
 
 [workspace.package]
-version = "0.1.50"
+version = "1.0.0"
 authors = ["Fabrizio"]
 edition = "2021"
 license = "MIT"
@@ -26,10 +26,6 @@ description = "Run game servers locally with a single click"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-
-[lib]
-name = "localforge_lib"
-crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -93,10 +89,10 @@ directories = "6"
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util = { workspace = true }
-base64 = "0.22"
-rand = "0.9"
+base64 = "0.23"
+rand = "0.10"
 # WS client for the cloud relay. rustls so we don't pull OpenSSL.
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
 
 # Per-platform keyring-core native stores. Only the store for the target OS is
 # linked; `cloud::keychain::init` sets it as keyring-core's default at startup.

@@ -1,25 +1,16 @@
-/**
- * Cloud auth state. Optional — the app runs perfectly without an account.
- * `me === null` is the unauthenticated state; it's the steady state for
- * users who never sign up.
- *
- * Source of truth = the Rust `cloud_me` command + the
- * `cloud://signed-in` event emitted by the deep-link handler after an
- * OAuth callback. The store re-hydrates from `cloud_me` at startup so
- * users stay signed in across app launches (the JWT lives in the OS
- * keychain — see src-tauri/src/cloud/keychain.rs).
- */
+/** Cloud auth state (optional; `me === null` is the signed-out steady state). Hydrated from the
+ *  Rust `cloud_me` command and the `cloud://signed-in` deep-link event. */
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { useNodesStore } from './nodesStore';
 
-export interface Subscription {
+interface Subscription {
   plan: 'free' | 'hobby' | 'team';
   currentPeriodEnd: number | null;
   cancelAtPeriodEnd: boolean;
   trialEndsAt: number | null;
-  /** Unix ms when our cloud-side data will be hard-deleted. Set when
-   *  the user dropped to free; null while on a paid plan. */
+  /** Unix ms when cloud-side data is purged (set after dropping to free). */
   purgeAt: number | null;
 }
 
@@ -30,9 +21,7 @@ export interface Me {
   emailVerifiedAt: number | null;
   createdAt: number;
   subscription: Subscription;
-  /** Envelope-encryption material. null when the user hasn't set up
-   *  their sync key — typical for fresh OAuth accounts. The desktop
-   *  prompts them via SyncKeyDialog the first time they log in. */
+  /** Envelope-encryption material; null until the sync key is set up (fresh OAuth accounts). */
   syncKey: {
     wrappedDek: string;
     kekSalt: string;
@@ -40,15 +29,10 @@ export interface Me {
   } | null;
 }
 
-/** Three-state diagnostic that drives the SyncKeyDialog visibility:
- *  - 'not_set_up': nothing on the cloud → setup mode (pick a passphrase)
- *  - 'locked':     cloud has a wrap but local keychain is empty → unlock mode
- *  - 'unlocked':   ready to sync
- *  - null: not signed in / not yet checked
- */
+/** Drives the SyncKeyDialog: 'not_set_up' (setup), 'locked' (unlock), 'unlocked', or null when signed out. */
 export type SyncKeyStatus = 'not_set_up' | 'locked' | 'unlocked' | null;
 
-export interface ApiErrorShape {
+interface ApiErrorShape {
   status: number;
   code: string;
   message: string | null;
@@ -76,27 +60,26 @@ interface AuthState {
   openCheckout: (plan: 'hobby' | 'team') => Promise<boolean>;
   openPortal: () => Promise<boolean>;
 
-  // Phase 5 — multi-org / sub-user mode
+  // Multi-org / sub-user mode
   /** Every org the user belongs to (own + invited). Refreshed via fetchOrgs(). */
   orgs: OrgSummary[];
-  /** Active org id. Defaults to the user's primary org on hydrate.
-   *  Switching is persisted in localStorage so it survives restart. */
+  /** Active org id (persisted in localStorage). */
   currentOrgId: string | null;
   /** Caller's role in the current org. Cached so role gating is sync. */
   currentRole: OrgRole | null;
   fetchOrgs: () => Promise<void>;
   setCurrentOrg: (orgId: string) => void;
-  /** (Re)connect the cloud relay to the ACTIVE org so a sub-user observing
-   *  someone else's machines is routed into the right Durable Object — not
-   *  their own primary org. Idempotent: skips when already on that org. */
+  /** (Re)connect the relay to the ACTIVE org; idempotent. */
   ensureRelay: () => void;
 
-  // Tier 1 — cloud sync
+  // Cloud sync
   syncing: boolean;
   lastSyncedAt: number | null;
   lastSyncResult: SyncResult | null;
   syncNow: () => Promise<SyncResult | null>;
   syncPull: () => Promise<RemoteServer[] | null>;
+  /** Owner-side node sync: restore nodes paired on another desktop, push the local ones. */
+  syncNodes: () => Promise<void>;
   // Vault key
   vaultExportKey: () => Promise<string | null>;
   vaultImportKey: (b64: string) => Promise<boolean>;
@@ -106,17 +89,13 @@ interface AuthState {
 
   // Envelope-encryption sync key status + setup/unlock helpers.
   syncKeyStatus: SyncKeyStatus;
-  /** Counter the SyncKeyDialog watches to re-open after a user
-   *  clicked "Skip for now". Bumping it forces a re-show without
-   *  changing any other state. */
+  /** Bumped to re-open the SyncKeyDialog after "Skip for now". */
   openSyncKeyTick: number;
   openSyncKeyDialog: () => void;
   refreshSyncKeyStatus: () => Promise<SyncKeyStatus>;
-  /** Setup a brand-new sync key — used by OAuth signups picking a
-   *  passphrase. Returns true on success. */
+  /** Set up a brand-new sync key (OAuth signups picking a passphrase). */
   setupSyncKey: (secret: string) => Promise<boolean>;
-  /** Unlock with the passphrase on a second device. Returns true on
-   *  success, false on wrong secret (UI re-prompts). */
+  /** Unlock with the passphrase on a second device; false on a wrong secret. */
   unlockSyncKey: (secret: string) => Promise<boolean>;
 }
 
@@ -162,36 +141,17 @@ export function roleAtLeast(role: OrgRole | null | undefined, min: OrgRole): boo
 
 const CURRENT_ORG_KEY = 'localforge_current_org';
 
-/** The org the relay loop is currently pointed at (module-scoped so
- *  `ensureRelay` can skip redundant reconnects). `'__primary__'` means
- *  "started before orgs loaded, using the Rust primary-org fallback".
- *  Reset to null on sign-in / sign-out so the next `ensureRelay` always
- *  (re)connects fresh (catches plan upgrades mid-session). */
+/** Org the relay loop is pointed at ('__primary__' before orgs load); reset on sign-in/out. */
 let relayOrg: string | null = null;
 
-/** True while an org switch is mid-pivot (Rust active-org header + decryption
- *  DEK are being swapped). Sync pulls are skipped during this window so a
- *  relay `sync-changed` can't run a pull against a half-applied org+DEK pair
- *  and overwrite the visible server list with the wrong org's data. The switch
- *  runs its own pull once the pivot completes, so nothing is missed. */
+/** True while an org switch is mid-pivot; pulls are skipped so none runs against a half-applied org+DEK. */
 let orgSwitchInFlight = false;
 
-/** Monotonic epoch bumped every time the active org pivots (setCurrentOrg /
- *  fetchOrgs). `syncPull` captures it before its invoke and discards the result
- *  if the epoch moved while the pull was in flight — otherwise a slow pull
- *  started under org A lands after a switch to org B and overwrites the visible
- *  list with A's servers under currentOrgId=B (audit finding). The boolean
- *  `orgSwitchInFlight` only blocks STARTING a pull; it can't invalidate one
- *  already running, and two rapid switches reopen its window. */
+/** Bumped on every org pivot; a pull that resolves under a different epoch is discarded. */
 let syncEpoch = 0;
 
-/** Pivot the Rust-side active org and the decryption DEK together so the HTTP
- *  active-org header can never disagree with the key the pull/push uses.
- *  DEK FIRST: `cloud_unlock_org_dek` doesn't depend on the header, and
- *  installing the borrowed-org override before the header means the push path
- *  (which skips while an override is active) can't fire with the wrong key in
- *  the gap. Then the header. Errors are non-fatal (a member with no grant yet
- *  just sees undecrypted rows until the owner seals one). */
+/** Pivot the Rust active org and the decryption DEK together, DEK first so the push path can't
+ *  fire with the wrong key in the gap. Errors are non-fatal. */
 async function applyOrgScope(orgId: string, isOwner: boolean): Promise<void> {
   try {
     if (isOwner) await invoke('cloud_clear_org_dek');
@@ -200,7 +160,8 @@ async function applyOrgScope(orgId: string, isOwner: boolean): Promise<void> {
     /* no grant / no keypair yet — pull shows undecrypted rows */
   }
   try {
-    await invoke('cloud_set_active_org', { orgId });
+    // isOwner tells the Rust push path whether this org is ours.
+    await invoke('cloud_set_active_org', { orgId, isOwner });
   } catch {
     /* server falls back to the caller's primary org */
   }
@@ -231,26 +192,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const me = await invoke<Me | null>('cloud_me');
       relayOrg = null;
       set({ me, loading: false });
-      // Auto-connect the relay on startup so this device is reachable for
-      // sync pushes from elsewhere as soon as the app opens. Uses the
-      // primary org here; `fetchOrgs` re-points it at the active org once
-      // the membership list (and the stored active org) is known.
+      // Connect the relay on startup (primary org; fetchOrgs re-points it at the active org).
       if (me) {
         get().ensureRelay();
       }
-      // Also pull the list of orgs we belong to — needed by the
-      // titlebar switcher + per-role gating across the app.
       if (me) {
         void get().fetchOrgs();
         void get().refreshSyncKeyStatus();
-        // Claim THIS machine in the cloud so it gets a stable, addressable
-        // identity (idempotent + once-per-session server/client-side).
         void invoke('cloud_claim_desktop').catch(() => {});
+        void get().syncNodes();
       }
     } catch (e) {
-      // Network failure / token rejected → land in "not signed in" so
-      // the UI shows the sign-in affordance rather than getting stuck
-      // in a loading state.
+      // Land in "not signed in" rather than a stuck loading state.
       set({ me: null, loading: false, error: asErr(e) });
     }
   },
@@ -259,16 +212,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const unSignedIn = await listen<Me>('cloud://signed-in', (event) => {
       relayOrg = null;
       set({ me: event.payload, error: null, loading: false });
-      // Spin up the relay so other devices' edits land here instantly.
-      // `ensureRelay` no-ops for free owners; `fetchOrgs` re-points it at
-      // the active org once memberships load.
       get().ensureRelay();
       void get().fetchOrgs();
-      // OAuth users will land here with syncKey=null on first device
-      // (or with syncKey set but no local DEK on a second device).
-      // refreshSyncKeyStatus drives the SyncKeyDialog to appear.
+      // refreshSyncKeyStatus drives the SyncKeyDialog for OAuth users without a local DEK.
       void get().refreshSyncKeyStatus();
       void invoke('cloud_claim_desktop').catch(() => {});
+      void get().syncNodes();
     });
     const unPartial = await listen('cloud://signed-in-partial', () => {
       // OAuth landed but /me failed — pull fresh once so the UI catches up.
@@ -277,12 +226,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const unErr = await listen<{ code: string; message: string }>('cloud://auth-error', (event) => {
       set({ error: event.payload, loading: false });
     });
-    // Tier 2: when the relay sees a sync_changed it auto-pulls, we just
-    // patch the store so the visible "Last synced X ago" updates.
     const unSync = await listen('cloud://sync-changed', () => {
-      // sync_changed comes from another device pushing — refresh our
-      // remote list to reflect it. The Rust side already pulled the
-      // decrypted view; we just re-read it cheaply.
+      // Another device pushed: refresh the remote list.
       void get().syncPull();
     });
     return () => {
@@ -323,9 +268,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       await invoke<void>('cloud_oauth_start', { provider });
-      // We DON'T flip loading=false here — the user is now in their
-      // browser. When they return, the deep-link event flips us via
-      // subscribeToEvents.
+      // loading stays true: the user is in the browser; the deep-link event flips it.
     } catch (e) {
       set({ loading: false, error: asErr(e) });
     }
@@ -334,9 +277,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logout: async () => {
     set({ loading: true });
     relayOrg = null;
-    // Clear the active-org pin + any borrowed org DEK so nothing leaks across
-    // a sign-out/sign-in into a different account.
-    void invoke('cloud_set_active_org', { orgId: null }).catch(() => {});
+    // Clear the active-org pin and borrowed DEK so nothing leaks into the next account.
+    void invoke('cloud_set_active_org', { orgId: null, isOwner: true }).catch(() => {});
     void invoke('cloud_clear_org_dek').catch(() => {});
     // Disconnect the relay first so we don't keep an authed WS dangling.
     try { await invoke<void>('cloud_relay_stop'); } catch { /* ignore */ }
@@ -348,10 +290,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       lastSyncResult: null,
       lastSyncedAt: null,
       syncKeyStatus: null,
-      // Clear org state too — leaving it meant a signed-out sub-user still read
-      // as isSubUser (empty server list, actions routed through a stopped
-      // relay) until an app restart, and the next account's signed-in handler
-      // ran ensureRelay against the previous account's orgs (audit finding).
+      // Clear org state too, or a signed-out sub-user still reads as isSubUser until restart.
       orgs: [],
       currentOrgId: null,
       currentRole: null,
@@ -411,9 +350,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  // -------------------------------------------------------------------------
-  // Cloud sync (Tier 1)
-  // -------------------------------------------------------------------------
+  // Cloud sync
   syncing: false,
   lastSyncedAt: null,
   lastSyncResult: null,
@@ -430,18 +367,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
+  syncNodes: async () => {
+    try {
+      const r = await invoke<{ imported: number }>('cloud_sync_nodes_now');
+      if (r.imported > 0) await useNodesStore.getState().fetchNodes();
+    } catch {
+      // Signed out, locked vault or not the org owner: nothing to sync.
+    }
+  },
+
   syncPull: async () => {
-    // Skip while an org switch is mid-pivot — a pull here would run against a
-    // half-applied org+DEK pair. setCurrentOrg pulls once the pivot completes.
+    // Skip mid-pivot; setCurrentOrg pulls once the pivot completes.
     if (orgSwitchInFlight) return null;
     const epochAtStart = syncEpoch;
     try {
       const r = await invoke<RemoteServer[]>('cloud_sync_pull');
-      // Discard a pull that resolved after the active org pivoted — its rows
-      // belong to the previous org and would be shown under the new one.
+      // Discard a pull that resolved after the org pivoted.
       if (epochAtStart !== syncEpoch) return null;
-      // Patch the cached SyncResult so the UI's "remote servers" list
-      // updates on relay-driven pulls too.
       const prev = get().lastSyncResult;
       set({
         lastSyncedAt: Date.now(),
@@ -484,9 +426,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  // -------------------------------------------------------------------------
   // Multi-org / sub-user mode
-  // -------------------------------------------------------------------------
   orgs: [],
   currentOrgId: typeof localStorage !== 'undefined'
     ? localStorage.getItem(CURRENT_ORG_KEY)
@@ -498,8 +438,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const orgs = await invoke<OrgSummary[]>('cloud_orgs_list');
       let current = get().currentOrgId;
-      // If the stored org id is no longer in the list (user got
-      // removed, or first launch), fall back to primary.
+      // Stored org no longer in the list (removed, or first launch): fall back to primary.
       if (!current || !orgs.some((o) => o.id === current)) {
         current = orgs[0]?.id ?? null;
         if (current) localStorage.setItem(CURRENT_ORG_KEY, current);
@@ -507,25 +446,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const cur = orgs.find((o) => o.id === current);
       const role = cur?.role ?? null;
       set({ orgs, currentOrgId: current, currentRole: role });
-      // Pin the Rust active-org header + unlock the right DEK for the active
-      // org BEFORE the relay / any pull, so a borrowed org decrypts on restart
-      // (previously you had to manually re-switch to re-unlock its DEK). Bump
-      // the sync epoch first so any pull started under the old scope is
-      // invalidated and this pivot's own pull is the authoritative one.
+      // Pin the active org + DEK before the relay/pull; bump the epoch so older pulls are discarded.
       syncEpoch++;
       if (current) await applyOrgScope(current, cur?.isOwner ?? false);
-      // Now that we know the active org, make sure the relay is pointed at
-      // it (rather than the primary-org fallback used at startup).
       get().ensureRelay();
-      // Materialise the remote server list for a sub-user on startup. fetchOrgs
-      // restores the borrowed org + DEK but used to never pull, so a sub-user
-      // reopening the app saw "no servers shared with you" until the owner
-      // pushed a change (audit finding). Owners pull too — harmless (their list
-      // comes from local Docker) and keeps the cached SyncResult warm.
+      // Materialise the remote list on startup (a sub-user otherwise saw nothing until a push).
       void get().syncPull();
-      // Owner side: seal the org DEK to any member who's published a key but
-      // isn't granted yet, so teammates can decrypt our org's servers. 403s
-      // (not owner) are swallowed inside the command.
+      // Owner: seal the org DEK to members waiting for a grant (403s are swallowed).
       for (const o of orgs) {
         if (o.isOwner) void invoke('cloud_process_grants', { orgId: o.id }).catch(() => {});
       }
@@ -540,15 +467,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // Optimistic UI flip so the switcher highlights the new org immediately.
     localStorage.setItem(CURRENT_ORG_KEY, orgId);
     set({ currentOrgId: orgId, currentRole: o.role });
-    // Gate sync until the Rust active-org header + decryption DEK have actually
-    // pivoted (applyOrgScope does DEK-then-header), so a pull/push can't run
-    // against a half-applied org+key pair. The switch then pulls once itself.
+    // Gate sync until the org + DEK have pivoted; the switch pulls once itself.
     orgSwitchInFlight = true;
     syncEpoch++;
     void (async () => {
       await applyOrgScope(orgId, o.isOwner);
       orgSwitchInFlight = false;
-      // Owner: seal the org DEK to any members still waiting (best-effort).
       if (o.isOwner) void invoke('cloud_process_grants', { orgId }).catch(() => {});
       get().ensureRelay();
       void get().syncPull();
@@ -557,20 +481,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   ensureRelay: () => {
     const { me, orgs, currentOrgId } = get();
-    // NB: the active-org HTTP header is set by `applyOrgScope` (in
-    // fetchOrgs / setCurrentOrg) and cleared in logout() — NOT here. ensureRelay
-    // used to also call cloud_set_active_org, which raced the explicit call and
-    // could briefly point the header at a stale org. It now only manages the
-    // relay socket.
+    // The active-org header is owned by applyOrgScope / logout; this only manages the socket.
     if (!me) {
       relayOrg = null;
       return;
     }
     const cur = orgs.find((o) => o.id === currentOrgId);
-    // Owner of the active org needs their OWN paid plan; a sub-user (member)
-    // is allowed through — the cloud gates them on the host owner being on
-    // Team and 402s otherwise (the loop then just backs off). Before orgs
-    // load, fall back to "own plan must be paid" + the Rust primary-org.
+    // An owner needs their own paid plan; a member is gated by the cloud on the host owner's Team plan.
     const allowed = cur
       ? cur.isOwner
         ? me.subscription.plan !== 'free'
@@ -587,11 +504,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const target = orgId ?? '__primary__';
     if (target === relayOrg) return; // already connected there
     relayOrg = target;
-    // Revert on failure: cloud_relay_start can reject before the Rust reconnect
-    // loop starts (unauthenticated, or fetch_org_id failing when orgId is
-    // omitted). Leaving relayOrg pinned made every later ensureRelay compute
-    // the same target and early-return "already connected there", so the relay
-    // stayed dead for the whole session (audit finding).
+    // Revert on failure so a later ensureRelay retries instead of seeing "already connected".
     void invoke('cloud_relay_start', { orgId }).catch(() => {
       if (relayOrg === target) relayOrg = null;
     });
@@ -610,9 +523,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  // -------------------------------------------------------------------------
   // Envelope-encryption sync key
-  // -------------------------------------------------------------------------
   syncKeyStatus: null,
   openSyncKeyTick: 0,
   openSyncKeyDialog: () => set((s) => ({ openSyncKeyTick: s.openSyncKeyTick + 1 })),
@@ -623,8 +534,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ syncKeyStatus: s });
       return s;
     } catch {
-      // Treat any failure as not-yet-known; the dialog stays hidden
-      // rather than nagging the user about a transient network blip.
+      // Unknown on failure; don't nag about a transient blip.
       return get().syncKeyStatus;
     }
   },
@@ -634,6 +544,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await invoke<void>('cloud_sync_key_setup', { secret });
       await get().refreshSyncKeyStatus();
+      void get().syncNodes();
       return true;
     } catch (e) {
       set({ error: asErr(e) });
@@ -646,11 +557,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await invoke<void>('cloud_sync_key_unlock', { secret });
       await get().refreshSyncKeyStatus();
+      // The DEK just became available: restore any nodes paired on another desktop.
+      void get().syncNodes();
       return true;
     } catch (e) {
       const ae = asErr(e);
-      // wrong_secret is the expected non-failure path — let the UI
-      // re-prompt cleanly without showing it as a global error.
+      // wrong_secret is the expected re-prompt path, not a global error.
       if (ae.code === 'wrong_secret') return false;
       set({ error: ae });
       return false;

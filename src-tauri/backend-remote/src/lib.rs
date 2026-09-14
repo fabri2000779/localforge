@@ -1,11 +1,5 @@
-//! Remote [`NodeBackend`] implementation — talks to a `localforge-agent`
-//! over HTTPS + WebSocket.
-//!
-//! TLS strategy:
-//!   - If a SHA-256 fingerprint is configured we pin it (the agent's
-//!     self-signed default).
-//!   - Otherwise we fall back to the system WebPKI roots (the
-//!     "agent terminates Let's Encrypt at a real domain" case).
+//! Remote [`NodeBackend`] talking to a `localforge-agent` over HTTPS + WebSocket. TLS pins the
+//! agent's self-signed cert by SHA-256 fingerprint, or falls back to the WebPKI roots.
 
 mod pinning;
 
@@ -29,8 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
-/// Configuration for a remote agent connection. Persisted on disk and
-/// pasted by the user into the "Add Node" form.
+/// Remote agent connection settings, persisted on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteAgentConfig {
     /// Base URL, e.g. `https://1.2.3.4:7878`.
@@ -138,8 +131,7 @@ impl RemoteAgentBackend {
 }
 
 fn build_tls_config(fingerprint: Option<&str>) -> Result<Arc<ClientConfig>> {
-    // Ensure the default crypto provider is installed for this process.
-    // It's idempotent — repeated installs after the first are no-ops.
+    // Idempotent; harmless if another crate already installed a provider.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let cfg = if let Some(fp) = fingerprint {
@@ -209,10 +201,7 @@ fn parse_error_body(body: &str) -> Option<String> {
     serde_json::from_str::<ErrorBody>(body).ok().map(|e| e.error)
 }
 
-// ===========================================================================
-// NodeBackend impl — each method is a one-shot HTTP call mapping to the
-// agent route of the matching name.
-// ===========================================================================
+// NodeBackend impl: one HTTP call per agent route.
 
 #[derive(Serialize)]
 struct CreateBody<'a> {
@@ -273,6 +262,37 @@ struct LogsResponseBody {
     logs: Vec<String>,
 }
 
+/// `GET /v1/health` body; the version gates features older agents mis-handle.
+#[derive(Deserialize)]
+struct AgentHealth {
+    #[serde(default)]
+    version: String,
+}
+
+/// First agent release whose `DELETE /v1/servers/{id}` honours `?keep_data`; older agents
+/// ignore the flag and wipe the data dir.
+const KEEP_DATA_MIN_AGENT: (u64, u64, u64) = (0, 1, 58);
+
+fn agent_supports_keep_data(version: &str) -> bool {
+    let mut parts = version.trim().split('.').map(|p| {
+        // Tolerate pre-release / build suffixes ("0.1.58-rc1").
+        p.split(|c: char| !c.is_ascii_digit())
+            .next()
+            .unwrap_or("")
+            .parse::<u64>()
+            .unwrap_or(0)
+    });
+    let v = (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    );
+    v >= KEEP_DATA_MIN_AGENT
+}
+
+/// Budget for requests that move a whole world (backups, file transfers).
+const LONG_OP_TIMEOUT: Duration = Duration::from_secs(6 * 3600);
+
 #[derive(Deserialize)]
 struct WsLogFrame {
     server_id: Option<String>,
@@ -283,8 +303,7 @@ struct WsLogFrame {
 #[async_trait]
 impl NodeBackend for RemoteAgentBackend {
     async fn ping(&self) -> Result<()> {
-        // /v1/health is public — no token needed, but we still send it so
-        // the server can log who connected.
+        // Public route; the token is sent anyway so the agent can log who connected.
         let url = self.endpoint("/v1/health")?;
         let resp = self
             .http
@@ -363,6 +382,18 @@ impl NodeBackend for RemoteAgentBackend {
         self.delete(&format!("/v1/servers/{}", id)).await
     }
 
+    async fn delete_server_keep_data(&self, id: &str) -> Result<()> {
+        // Older agents ignore the flag and do a FULL delete, so refuse unless the version is known-good.
+        let health: AgentHealth = self.get("/v1/health").await?;
+        if !agent_supports_keep_data(&health.version) {
+            return Err(BackendError::Other(format!(
+                "this agent (v{}) doesn't support keeping world data on delete — update it, or choose \"Delete everything\"",
+                health.version
+            )));
+        }
+        self.delete(&format!("/v1/servers/{}?keep_data=true", id)).await
+    }
+
     async fn start_server(&self, id: &str) -> Result<ServerStatus> {
         let url = self.endpoint(&format!("/v1/servers/{}/start", id))?;
         let resp = self
@@ -403,9 +434,17 @@ impl NodeBackend for RemoteAgentBackend {
     // ----- backups -------------------------------------------------------
 
     async fn create_backup(&self, id: &str, target: &BackupTarget) -> Result<String> {
-        let r: KeyResp = self
-            .post_json(&format!("/v1/servers/{}/backup", id), target)
-            .await?;
+        let url = self.endpoint(&format!("/v1/servers/{}/backup", id))?;
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(&self.token)
+            .timeout(LONG_OP_TIMEOUT)
+            .json(target)
+            .send()
+            .await
+            .map_err(transport)?;
+        let r: KeyResp = decode_json(resp).await?;
         Ok(r.key)
     }
 
@@ -420,6 +459,7 @@ impl NodeBackend for RemoteAgentBackend {
             .http
             .post(url)
             .bearer_auth(&self.token)
+            .timeout(LONG_OP_TIMEOUT)
             .json(&RestoreReq { target, key })
             .send()
             .await
@@ -428,8 +468,7 @@ impl NodeBackend for RemoteAgentBackend {
     }
 
     async fn delete_backup(&self, id: &str, target: &BackupTarget, key: &str) -> Result<()> {
-        // Server-scoped: the agent confines the delete to this server's backup
-        // prefix, so the real id must travel in the path.
+        // Server-scoped so the agent can confine the delete to this server's prefix.
         let url = self.endpoint(&format!("/v1/servers/{}/backups/delete", id))?;
         let resp = self
             .http
@@ -442,8 +481,7 @@ impl NodeBackend for RemoteAgentBackend {
         ensure_ok(resp).await
     }
 
-    /// Provision the full backup-target list onto the agent (replaces whatever
-    /// it had). Pushed over this direct HTTPS channel — never the relay.
+    /// Replace the agent's backup-target list over direct HTTPS (never the relay).
     async fn set_backup_targets(&self, targets: &[OrgBackupTarget]) -> Result<()> {
         let url = self.endpoint("/v1/backup-targets")?;
         let resp = self
@@ -642,6 +680,7 @@ impl NodeBackend for RemoteAgentBackend {
             .http
             .get(url)
             .bearer_auth(&self.token)
+            .timeout(LONG_OP_TIMEOUT)
             .send()
             .await
             .map_err(transport)?;
@@ -658,15 +697,14 @@ impl NodeBackend for RemoteAgentBackend {
 
     async fn upload_file(&self, path: &str, body: ByteStream) -> Result<()> {
         let url = self.endpoint(&format!("/v1/fs/upload?path={}", urlencoding(path)))?;
-        // reqwest wants a stream of Result<Bytes, std::io::Error> for
-        // wrap_stream; map our BackendError into io::Error so the
-        // streaming body builder is happy.
+        // reqwest's streaming body wants io::Error items.
         let mapped =
             body.map(|r| r.map_err(|e| std::io::Error::other(e.to_string())));
         let resp = self
             .http
             .put(url)
             .bearer_auth(&self.token)
+            .timeout(LONG_OP_TIMEOUT)
             .header("content-type", "application/octet-stream")
             .body(reqwest::Body::wrap_stream(mapped))
             .send()
@@ -676,9 +714,7 @@ impl NodeBackend for RemoteAgentBackend {
     }
 }
 
-/// Minimal URL encoding for the path query parameter (we just escape the
-/// characters that would actually break the URL; query parsers accept the
-/// rest as-is).
+/// Minimal percent-encoding for the `path` query parameter.
 fn urlencoding(s: &str) -> String {
     s.chars()
         .map(|c| match c {
@@ -695,9 +731,7 @@ fn urlencoding(s: &str) -> String {
         .collect()
 }
 
-// ===========================================================================
-// WebSocket log streaming
-// ===========================================================================
+// WebSocket streams
 
 async fn ws_install_stream(
     base_url: Url,
@@ -755,8 +789,7 @@ async fn ws_install_stream(
         .filter_map(|item| async move {
             match item {
                 Ok(Message::Text(text)) => {
-                    // Detect an error frame and bubble it as Err; otherwise
-                    // parse as InstallEvent.
+                    // An error frame bubbles up as Err; anything else parses as InstallEvent.
                     #[derive(serde::Deserialize)]
                     struct ErrFrame {
                         kind: String,
@@ -798,7 +831,6 @@ async fn ws_log_stream(
     use tokio_tungstenite::tungstenite::http::HeaderValue;
     use tokio_tungstenite::{connect_async_tls_with_config, Connector};
 
-    // Build the wss:// URL from the agent base URL.
     let mut ws_url = base_url.clone();
     let new_scheme = match base_url.scheme() {
         "https" => "wss",
@@ -861,4 +893,22 @@ async fn ws_log_stream(
         .boxed();
 
     Ok(mapped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::agent_supports_keep_data;
+
+    #[test]
+    fn keep_data_gate_by_agent_version() {
+        assert!(!agent_supports_keep_data("0.1.50"));
+        assert!(!agent_supports_keep_data("0.1.57"));
+        assert!(agent_supports_keep_data("0.1.58"));
+        assert!(agent_supports_keep_data("0.1.58-rc1"));
+        assert!(agent_supports_keep_data("0.2.0"));
+        assert!(agent_supports_keep_data("1.0.0"));
+        // Unparseable → treated as too old (refuse, never wipe).
+        assert!(!agent_supports_keep_data(""));
+        assert!(!agent_supports_keep_data("dev"));
+    }
 }

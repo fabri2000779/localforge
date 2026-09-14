@@ -1,27 +1,15 @@
-//! Backup Tauri commands (multi-target).
-//!
-//! The org's S3 targets live as a named list (id + label + credentials) in the
-//! OS keychain and are synced E2E with the cloud under the org DEK. Agents are
-//! provisioned with the full list over direct HTTPS. The secret key is never
-//! returned to the frontend; only redacted `OrgBackupTargetView`s are surfaced.
+//! Backup commands: org S3 targets (keychain, synced E2E) and backup operations on any node.
 
 use crate::backend::NodeRegistry;
 use crate::commands::require_backend;
 use localforge_core::types::{BackupEntry, BackupTarget, OrgBackupTarget, OrgBackupTargetView};
 use tauri::State;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Best-effort: push the full target list to every linked node so relay-triggered
-/// backups work even when this desktop is offline. The secret travels only over
-/// each agent's existing direct-HTTPS channel — never the relay/cloud.
+/// Push the full target list to every linked agent over its direct HTTPS channel (never the relay).
 async fn provision_all_nodes(state: &State<'_, NodeRegistry>) {
     let targets = crate::backups::load_targets();
     for rec in state.list_records().await {
-        // The local backend resolves credentials from the keychain directly;
-        // set_backup_targets is a no-op there, so skip it (saves an await + log).
+        // The local backend resolves credentials from the keychain itself.
         if rec.id.is_local() {
             continue;
         }
@@ -39,10 +27,6 @@ fn require_target(id: Option<&str>) -> Result<BackupTarget, String> {
         .map(|(_, t)| t)
         .ok_or_else(|| "No backup storage configured. Add one in the Backups tab first.".into())
 }
-
-// ---------------------------------------------------------------------------
-// Target CRUD commands
-// ---------------------------------------------------------------------------
 
 /// All configured backup targets (no secret keys in the response).
 #[tauri::command(rename_all = "camelCase")]
@@ -79,9 +63,7 @@ pub async fn cloud_remove_backup_target(
     Ok(())
 }
 
-/// Pull all org backup targets from the cloud (decrypt with org DEK), cache
-/// locally, and provision agents. Returns the redacted list. Best-effort —
-/// falls back to whatever is already local on 402 / no DEK / error.
+/// Pull the org's targets from the cloud, cache them and provision agents; falls back to the local list.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn cloud_pull_backup_targets(
     state: State<'_, NodeRegistry>,
@@ -102,55 +84,7 @@ pub async fn cloud_pull_backup_targets(
     }
 }
 
-// ── Legacy single-target commands kept for older relay paths ───────────────
-
-/// @deprecated — prefer `cloud_add_backup_target` with an explicit id/name.
-/// Kept so the desktop BackupsPanel's "Save credentials" still works.
-#[tauri::command(rename_all = "camelCase")]
-pub async fn cloud_set_backup_target(
-    target: OrgBackupTarget,
-    state: State<'_, NodeRegistry>,
-) -> Result<(), String> {
-    crate::backups::upsert_target(target.clone())?;
-    provision_all_nodes(&state).await;
-    if let Err(e) = crate::cloud::sync::push_backup_target(&target).await {
-        tracing::info!("backup target not synced to cloud: {}", e);
-    }
-    Ok(())
-}
-
-/// @deprecated — prefer `cloud_list_backup_targets`.
-#[tauri::command(rename_all = "camelCase")]
-pub async fn cloud_get_backup_target() -> Result<Option<OrgBackupTargetView>, String> {
-    Ok(crate::backups::load_targets().first().map(|t| t.view()))
-}
-
-/// @deprecated — prefer `cloud_remove_backup_target`.
-#[tauri::command(rename_all = "camelCase")]
-pub async fn cloud_clear_backup_target(state: State<'_, NodeRegistry>) -> Result<(), String> {
-    crate::backups::clear_targets()?;
-    provision_all_nodes(&state).await;
-    if let Err(e) = crate::cloud::sync::clear_backup_target_remote().await {
-        tracing::info!("backup targets not cleared from cloud: {}", e);
-    }
-    Ok(())
-}
-
-/// @deprecated — kept for pre-multi-target callers.
-#[tauri::command(rename_all = "camelCase")]
-pub async fn cloud_pull_backup_target(
-    state: State<'_, NodeRegistry>,
-) -> Result<Option<OrgBackupTargetView>, String> {
-    let v = cloud_pull_backup_targets(state).await?;
-    Ok(v.into_iter().next())
-}
-
-// ---------------------------------------------------------------------------
-// Backup operation commands
-// ---------------------------------------------------------------------------
-
-/// Archive the server's data dir and upload it. Optional `target_id` picks
-/// which org target to use; defaults to the first one in the list.
+/// Archive and upload the server's data dir; `target_id` defaults to the first target.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn cloud_backup_now(
     server_id: String,

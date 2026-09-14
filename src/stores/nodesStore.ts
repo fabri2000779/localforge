@@ -1,6 +1,4 @@
-// Nodes store — tracks the local and remote LocalForge nodes the user
-// has paired with. Persistence lives on the Rust side; this store just
-// caches the latest snapshot.
+// Local + remote nodes the user has paired with; persistence lives on the Rust side.
 
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
@@ -21,8 +19,7 @@ export interface ClusterSummary {
   images: number;
 }
 
-/** An agent enrolled for direct cloud-relay control. `online` is live
- *  (the relay's socket set); `id` matches the local NodeRecord.id. */
+/** Agent enrolled for direct relay control; `online` is live from the relay. */
 export interface CloudNodeSummary {
   id: string;
   name: string;
@@ -45,8 +42,7 @@ interface NodesState {
   error: string | null;
   activeNodeId: string;
   clusterSummary: ClusterSummary | null;
-  /// Latest host stats per node id. Sparse — only populated for nodes
-  /// the UI has actively asked about.
+  /** Latest host stats per node id (sparse). */
   nodeStats: Record<string, NodeStats>;
 
   fetchNodes: () => Promise<void>;
@@ -57,14 +53,9 @@ interface NodesState {
   addRemote: (req: AddRemoteNodeRequest) => Promise<NodeRecord>;
   removeNode: (id: string) => Promise<void>;
   reconnectNode: (id: string) => Promise<void>;
-  /** Rename THIS machine (the local node). Updates the persisted
-   *  identity on the Rust side, then re-fetches so the label refreshes
-   *  everywhere. The machine's stable id is never changed. */
+  /** Rename THIS machine; the stable id never changes. */
   renameMachine: (name: string) => Promise<void>;
-  /** Record that the first-run "name this machine" prompt was handled
-   *  (accepted or skipped). Persisted in `this_machine.toml` so it
-   *  survives WebView resets / reinstalls / dev↔prod, unlike
-   *  localStorage. */
+  /** Record that the first-run "name this machine" prompt was handled (persisted in this_machine.toml). */
   dismissMachineNamePrompt: () => Promise<void>;
   installCommand: (params: {
     domain?: string;
@@ -72,19 +63,11 @@ interface NodesState {
     version?: string;
   }) => Promise<{ linux: string; windows: string }>;
 
-  // Every machine in the org (desktops + agents) — the cross-machine fleet
-  // a sub-user (or the owner from another desktop) can see and target.
-  // Sourced from the cloud, so it spans machines this install can't reach
-  // directly. Empty when signed out / free / offline.
+  // Every machine in the org (desktops + agents), from the cloud; empty when signed out/free/offline.
   cloudMachines: Machine[];
   fetchMachines: () => Promise<void>;
 
-  // This desktop's stable identity (id + name). The `id` is the GLOBAL
-  // device id the cloud/relay address THIS machine by — i.e. the
-  // synced-server `node_id` of every server hosted on the local Docker.
-  // Used to tell "my own machine" apart from the rest of the fleet so the
-  // local servers stay on the fast direct-Docker path while everything
-  // else routes over the relay. `null` until the local node is installed.
+  // This desktop's stable identity; `id` is the global device id the cloud/relay address it by.
   thisMachine: ThisMachine | null;
   fetchThisMachine: () => Promise<void>;
 
@@ -95,17 +78,8 @@ interface NodesState {
   revokeCloudNode: (nodeId: string) => Promise<void>;
 }
 
-/**
- * The local Docker node is *always* present — it's the user's own
- * machine and the backend's `list_nodes` always returns at least this
- * entry. Pre-populating it in initial state means the UI doesn't flash
- * "Loading…" while the first `fetchNodes` round-trips, and if that fetch
- * ever fails the user still sees a working entry for their own box
- * instead of being stuck on a loading placeholder forever.
- *
- * The real `list_nodes` response will overwrite this array (still
- * including the local node, plus any remotes the user has paired).
- */
+/** The local node is always present; pre-populating it avoids a "Loading…" flash and keeps the UI
+ *  usable if the first fetch fails. The real list overwrites it. */
 const LOCAL_NODE_FALLBACK: NodeRecord = {
   id: 'local',
   label: 'This machine',
@@ -124,15 +98,12 @@ export const useNodesStore = create<NodesState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const nodes = await invoke<NodeRecord[]>('list_nodes');
-      // Defensive: if the backend somehow returns an empty list, fall
-      // back to the local node so the dropdown is never empty.
       set({
         nodes: nodes.length > 0 ? nodes : [LOCAL_NODE_FALLBACK],
         isLoading: false,
       });
     } catch (e) {
-      // Keep whatever we already have (which at minimum is the local
-      // fallback) so the UI keeps working when offline.
+      // Keep what we have (at minimum the local fallback) so the UI works offline.
       set({ error: String(e), isLoading: false });
     }
   },
@@ -153,8 +124,7 @@ export const useNodesStore = create<NodesState>((set, get) => ({
         nodeStats: { ...state.nodeStats, [nodeId]: stats },
       }));
     } catch (e) {
-      // Offline / not connected nodes throw — silently drop their cached
-      // entry so the UI shows "no data" rather than stale numbers.
+      // Offline nodes throw: drop the cached entry so the UI shows "no data", not stale numbers.
       set((state) => {
         const { [nodeId]: _dropped, ...rest } = state.nodeStats;
         return { nodeStats: rest };
@@ -170,12 +140,15 @@ export const useNodesStore = create<NodesState>((set, get) => ({
 
   addRemote: async (req) => {
     const node = await invoke<NodeRecord>('add_remote_node', { req });
+    // Like servers, node configs follow the owner's account (best-effort; no-op for sub-users).
+    void invoke('cloud_sync_nodes_now').catch(() => {});
     await get().fetchNodes();
     return node;
   },
 
   removeNode: async (id: string) => {
     await invoke('remove_node', { nodeId: id });
+    void invoke('cloud_sync_delete_node', { nodeId: id }).catch(() => {});
     await get().fetchNodes();
   },
 
@@ -190,8 +163,7 @@ export const useNodesStore = create<NodesState>((set, get) => ({
   },
 
   dismissMachineNamePrompt: async () => {
-    // Returns the updated ThisMachine — fold it into the store directly so
-    // every subscriber sees the new timestamp without a separate refetch.
+    // Fold the returned ThisMachine straight into the store.
     const thisMachine = await invoke<ThisMachine>('set_machine_name_prompt_dismissed');
     set({ thisMachine });
   },

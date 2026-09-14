@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, RefreshCw, Server, Cloud } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { useServerStore } from '../stores/serverStore';
+import { tombstoneInCloud, useServerStore } from '../stores/serverStore';
 import { useNodesStore } from '../stores/nodesStore';
 import {
   useCanAct,
@@ -34,26 +34,21 @@ export function Servers() {
   const nodes = useNodesStore((s) => s.nodes);
   const setActiveNode = useNodesStore((s) => s.setActiveNode);
 
-  // Owner with more than one paired node → aggregate every machine's
-  // servers into one cross-machine view (matches the mobile app). Solo
-  // owners and sub-users fall through to the single-source path below.
+  // Owner with 2+ nodes: aggregate every machine's servers (matches the mobile app).
   const useOwner = !isSubUser && nodes.length >= 2;
   const ownerFleet = useOwnerFleet(useOwner);
 
-  // The single-source list: owner → local Docker; sub-user → the owner's
-  // cloud-synced servers (decrypted, live status from relay discovery).
+  // Owner → local Docker; sub-user → the owner's cloud-synced servers.
   const displayed = useDisplayedServers();
   const subMachineInfo = useServerMachineInfo();
   const { isLoading, fetchServers } = useServerStore();
-  // Sub-users below admin role can't create servers on the owner's host;
-  // hide the CTA for them. Always true for the owner / local mode.
+  // Sub-users below admin can't create servers on the owner's host.
   const canCreate = useCanAct('server.create');
 
   const [filter, setFilter] = useState<string>(ALL);
   const [actionErr, setActionErr] = useState<string | null>(null);
 
-  // Node-targeted action for the owner fleet: act on the server's OWN node
-  // (not the globally-active one), then refresh so the badge catches up.
+  // Act on the server's OWN node, then refresh so the badge catches up.
   function ownerAction(e: FleetEntry, action: 'start' | 'stop' | 'delete') {
     const cmd =
       action === 'start'
@@ -68,10 +63,12 @@ export function Servers() {
     setActionErr(null);
     void invoke(cmd, args)
       .then(() => {
-        // Mirror the store path's side effects — this fleet path used to skip
-        // the audit trail + cloud sync and swallow every error (audit finding).
+        // Mirror the store path's side effects (audit trail + cloud sync).
         emitAudit(`server.${action}`, e.server.id);
-        if (action === 'delete') void invoke('cloud_sync_now').catch(() => {});
+        if (action === 'delete') {
+          tombstoneInCloud(e.server.id);
+          void invoke('cloud_sync_now').catch(() => {});
+        }
       })
       .catch((err) => setActionErr(`${action} failed on ${e.server.name}: ${String(err)}`))
       .finally(() => setTimeout(() => ownerFleet.refresh(), 800));
@@ -84,8 +81,7 @@ export function Servers() {
         machineId: e.machineId,
         machineName: e.machineName,
         machineKind: e.machineKind,
-        // Open detail by first focusing the server's node so the (active-
-        // node-scoped) detail screen resolves it.
+        // Focus the server's node first so the node-scoped detail screen resolves it.
         onOpen: () => {
           setActiveNode(e.machineId);
           navigate(`/servers/${e.server.id}`);
@@ -93,8 +89,7 @@ export function Servers() {
         onAction: (a) => ownerAction(e, a),
       }));
     }
-    // Owner-solo or sub-user: default ServerCard routing (serverStore /
-    // relay) + default navigation works as-is.
+    // Solo owner or sub-user: default ServerCard routing.
     return displayed.map((s) => {
       const m = subMachineInfo[s.id];
       return {

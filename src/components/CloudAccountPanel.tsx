@@ -1,16 +1,5 @@
-/**
- * Account / billing panel embedded in the Settings page. Renders one of
- * three states based on auth + plan:
- *
- *   - Signed out  → tagline + "Sign in" button
- *   - Signed in, free → plan card with "Upgrade" CTAs (Hobby + Team)
- *   - Signed in, paid → plan card with "Manage billing" (opens portal)
- *
- * No screen-changing happens for billing actions — checkout + portal
- * both open in the system browser (the user pays / cancels there, then
- * comes back to the desktop; Stripe webhooks update our cloud state and
- * the app picks it up via cloud_me).
- */
+/** Account / billing panel (Settings): signed out, free (upgrade CTAs) or paid (manage billing).
+ *  Checkout and the portal open in the system browser; cloud_me picks up the result. */
 import { useEffect, useState } from 'react';
 import {
   Cloud, ExternalLink, Mail, ShieldCheck, AlertTriangle, LogOut,
@@ -42,9 +31,10 @@ export function CloudAccountPanel() {
   const [resendOk, setResendOk] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [keyDialog, setKeyDialog] = useState<'show' | 'import' | null>(null);
+  // Mount-time clock for the day-granular retention countdown (keeps Date.now() out of render).
+  const [now] = useState(() => Date.now());
 
-  // Re-pull /me when the panel mounts so the displayed plan is fresh
-  // (the user might have just upgraded in a browser tab and come back).
+  // Re-pull /me on mount so the plan is fresh after an upgrade in the browser.
   useEffect(() => {
     void refreshMe();
     void refreshSyncKeyStatus();
@@ -78,10 +68,8 @@ export function CloudAccountPanel() {
   const purgeAt = me.subscription.purgeAt;
   const planLabel = plan[0]!.toUpperCase() + plan.slice(1);
 
-  // Retention warning thresholds (matches the cloud cron's email
-  // schedule: T-7 / T-1). Surface a banner inline regardless of the
-  // emails since the user might be ignoring email.
-  const purgeDays = purgeAt ? Math.max(0, Math.ceil((purgeAt - Date.now()) / 86_400_000)) : null;
+  // Retention banner thresholds match the cloud cron's emails (T-7 / T-1).
+  const purgeDays = purgeAt ? Math.max(0, Math.ceil((purgeAt - now) / 86_400_000)) : null;
   const showPurgeBanner = purgeAt && purgeDays !== null && purgeDays <= 14;
 
   async function withBusy(key: string, fn: () => Promise<unknown>): Promise<void> {
@@ -218,8 +206,6 @@ export function CloudAccountPanel() {
             onClick={() => withBusy('export', async () => {
               const path = await exportData();
               if (path) {
-                // Quietly let the user know where it went. Tooltip-grade
-                // notification — we don't have a full toast system.
                 console.log('[export] saved to', path);
               }
             })}

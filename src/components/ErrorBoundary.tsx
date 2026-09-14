@@ -1,14 +1,4 @@
-/**
- * Last-resort safety net. React 19 in production silently renders
- * nothing when a component throws — which is how the
- * "useNavigate-outside-Router" bug in App.tsx looked like a blank
- * window. With this wrapper around the tree, a thrown component
- * lands here and the user at least sees the error + a "reload" button
- * instead of an opaque black screen.
- *
- * Errors are logged to console for devs running with stderr captured.
- * Not auto-reported anywhere yet — would be the next iteration.
- */
+/** Last-resort boundary: React 19 production renders nothing on a throw, so show the error + reload instead. */
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { AlertOctagon } from 'lucide-react';
 

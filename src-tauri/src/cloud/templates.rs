@@ -1,9 +1,4 @@
-//! Desktop community-template gallery commands.
-//!
-//! Thin adapters over the cloud `/v1/templates` endpoints (publish / browse /
-//! fetch / unpublish), reading the bearer token from the OS keychain. A
-//! "template" is a Custom Game definition (the JSON `export_game` produces);
-//! importing one feeds it straight into `import_game`.
+//! Community template gallery commands (`/v1/templates`); a template is an exported Custom Game.
 
 use super::{api, auth};
 
@@ -31,8 +26,7 @@ struct PublishResp {
     id: String,
 }
 
-/// Publish a Custom Game definition to the community gallery. `config` is the
-/// JSON from `export_game`. Returns the new template id.
+/// Publish an exported Custom Game; returns the template id.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn cloud_template_publish(
     name: String,
@@ -67,6 +61,9 @@ pub struct TemplateSummary {
     pub description: Option<String>,
     pub downloads: i64,
     pub created_at: i64,
+    /// Published by the caller, so the gallery can offer "Unpublish".
+    #[serde(default)]
+    pub mine: bool,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -75,15 +72,12 @@ pub struct TemplateList {
     pub templates: Vec<TemplateSummary>,
     #[serde(default)]
     pub next_before: Option<i64>,
-    /// Rowid tiebreaker for the composite cursor — pass back alongside
-    /// `next_before` so a template sharing the boundary millisecond isn't
-    /// skipped (audit finding; mirrors the audit feed's cursor).
+    /// Rowid tiebreaker for the composite cursor.
     #[serde(default)]
     pub next_before_id: Option<i64>,
 }
 
-/// Browse the gallery (newest first, cursor-paged by the composite
-/// `(before, beforeId)` cursor).
+/// Browse the gallery, newest first, paged by `(before, beforeId)`.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn cloud_templates_list(
     before: Option<i64>,
@@ -114,10 +108,15 @@ pub async fn cloud_template_get(id: String) -> Result<String, api::ApiError> {
     Ok(r.config)
 }
 
-/// Unpublish one of your own templates.
+#[derive(serde::Deserialize)]
+struct DeleteResp {
+    deleted: bool,
+}
+
+/// Unpublish one of the caller's own templates; `false` when it isn't theirs or is already gone.
 #[tauri::command(rename_all = "camelCase")]
-pub async fn cloud_template_delete(id: String) -> Result<(), api::ApiError> {
+pub async fn cloud_template_delete(id: String) -> Result<bool, api::ApiError> {
     let token = auth::current_token().ok_or_else(unauth)?;
-    let _: serde_json::Value = api::delete(&format!("/v1/templates/{id}"), Some(&token)).await?;
-    Ok(())
+    let r: DeleteResp = api::delete(&format!("/v1/templates/{id}"), Some(&token)).await?;
+    Ok(r.deleted)
 }
