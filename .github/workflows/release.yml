@@ -516,3 +516,30 @@ jobs:
           set -euo pipefail
           gh release upload "$TAG" latest.json \
             --repo "$GITHUB_REPOSITORY" --clobber
+
+      # Version-less copies of the installers so the landing can link
+      # https://github.com/<repo>/releases/latest/download/<stable-name> and always hand the
+      # visitor the current installer for their OS — no API call, no release page.
+      - name: Publish stable-name installer aliases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p installers aliases
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir installers \
+            --pattern '*_x64-setup.exe' --pattern '*_universal.dmg' --pattern '*_amd64.AppImage' \
+            --pattern '*_amd64.deb' --pattern '*.x86_64.rpm'
+          alias() {  # <glob> <stable-name>
+            local src
+            src=$(ls installers/$1 2>/dev/null | head -n1 || true)
+            if [ -n "$src" ]; then cp "$src" "aliases/$2"; else echo "::warning::no installer matched $1"; fi
+          }
+          alias '*_x64-setup.exe'  LocalForge-windows-x64-setup.exe
+          alias '*_universal.dmg'  LocalForge-macos-universal.dmg
+          alias '*_amd64.AppImage' LocalForge-linux-x86_64.AppImage
+          alias '*_amd64.deb'      LocalForge-linux-amd64.deb
+          alias '*.x86_64.rpm'     LocalForge-linux-x86_64.rpm
+          ls -la aliases
+          gh release upload "$TAG" aliases/* --repo "$GITHUB_REPOSITORY" --clobber
