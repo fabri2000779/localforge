@@ -427,8 +427,9 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
     }
   };
 
-  const handleCopy = (cut: boolean = false) => {
-    const paths = Array.from(selectedItems);
+  // `paths` lets the context menu name its target explicitly: setSelectedItems() hasn't applied yet
+  // inside the same click handler, so reading `selectedItems` there copied the PREVIOUS selection.
+  const handleCopy = (cut: boolean = false, paths: string[] = Array.from(selectedItems)) => {
     if (paths.length > 0) {
       setClipboard({ paths, operation: cut ? 'cut' : 'copy' });
     }
@@ -800,7 +801,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
               <button
                 onClick={() => {
                   setSelectedItems(new Set([contextMenu.entry!.path]));
-                  handleCopy(false);
+                  handleCopy(false, [contextMenu.entry!.path]);
                 }}
                 className="w-full px-3 py-1.5 text-left hover:bg-zinc-700 flex items-center gap-2"
               >
@@ -809,7 +810,7 @@ export function FileManager({ rootPath, serverName }: FileManagerProps) {
               <button
                 onClick={() => {
                   setSelectedItems(new Set([contextMenu.entry!.path]));
-                  handleCopy(true);
+                  handleCopy(true, [contextMenu.entry!.path]);
                 }}
                 className="w-full px-3 py-1.5 text-left hover:bg-zinc-700 flex items-center gap-2"
               >

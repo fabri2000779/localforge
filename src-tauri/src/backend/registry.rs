@@ -388,7 +388,7 @@ impl NodeRegistry {
         if state
             .this_machine
             .as_ref()
-            .map_or(false, |m| m.id.as_str() == id.as_str())
+            .is_some_and(|m| m.id.as_str() == id.as_str())
         {
             return state.backends.get(&NodeId::local()).cloned();
         }

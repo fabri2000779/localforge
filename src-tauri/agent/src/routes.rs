@@ -41,6 +41,7 @@ pub fn router(state: AppState) -> Router {
         .route("/servers", get(list_servers).post(create_server))
         .route("/servers/{id}", get(get_server).delete(delete_server))
         .route("/servers/{id}/config", patch(update_server_config))
+        .route("/servers/{id}/apply-config", post(apply_server_config))
         .route("/servers/{id}/start", post(start_server))
         .route("/servers/{id}/stop", post(stop_server))
         .route("/servers/{id}/status", get(server_status))
@@ -213,6 +214,24 @@ async fn update_server_config(
 ) -> Result<Json<Server>, ApiError> {
     s.backend
         .update_server_config(&id, body.config)
+        .await
+        .map(Json)
+        .map_err(map_err)
+}
+
+#[derive(Deserialize)]
+struct ApplyConfigBody {
+    game: GameConfig,
+}
+
+/// Render the game's config files and refresh the container so the saved settings take effect.
+async fn apply_server_config(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<ApplyConfigBody>,
+) -> Result<Json<Server>, ApiError> {
+    s.backend
+        .apply_server_config(&id, body.game)
         .await
         .map(Json)
         .map_err(map_err)

@@ -101,6 +101,11 @@ pub async fn start_server(
         }
     }
 
+    // Settings saved while the server was running (or written by a fresh install) apply now.
+    if let Ok(Some(current)) = backend.get_server(&server_id).await {
+        apply_server_config(&backend, &current, &games_state).await;
+    }
+
     let status = backend
         .start_server(&server_id)
         .await
@@ -305,17 +310,41 @@ pub async fn update_server_config(
     config: HashMap<String, String>,
     node_id: Option<String>,
     state: State<'_, NodeRegistry>,
+    games_state: State<'_, GamesState>,
 ) -> Result<ServerResponse, String> {
-    let server = require_backend(&state, node_id.as_deref())
-        .await?
+    let backend = require_backend(&state, node_id.as_deref()).await?;
+    let mut server = backend
         .update_server_config(&server_id, config)
         .await
         .map_err(|e| e.to_string())?;
+    if let Some(applied) = apply_server_config(&backend, &server, &games_state).await {
+        server = applied;
+    }
     Ok(ServerResponse {
         success: true,
         server: Some(server),
         error: None,
     })
+}
+
+/// Push the saved config into the game's files and container (best-effort: an agent built before
+/// this route existed answers 404, so the server keeps running with what it had and we log the miss).
+async fn apply_server_config(
+    backend: &crate::backend::DynBackend,
+    server: &localforge_core::Server,
+    games_state: &GamesState,
+) -> Option<localforge_core::Server> {
+    let game = {
+        let games_manager = games_state.manager.lock().await;
+        games_manager.get_game(&server.game_type)
+    }?;
+    match backend.apply_server_config(&server.id, game).await {
+        Ok(applied) => Some(applied),
+        Err(e) => {
+            tracing::warn!("apply_server_config({}): {}", server.id, e);
+            None
+        }
+    }
 }
 
 // Log streaming

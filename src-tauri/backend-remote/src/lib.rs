@@ -215,6 +215,11 @@ struct ConfigBody<'a> {
 }
 
 #[derive(Serialize)]
+struct ApplyConfigBody<'a> {
+    game: &'a GameConfig,
+}
+
+#[derive(Serialize)]
 struct CommandBody<'a> {
     command: &'a str,
 }
@@ -374,6 +379,14 @@ impl NodeBackend for RemoteAgentBackend {
         self.patch_json(
             &format!("/v1/servers/{}/config", id),
             &ConfigBody { config: &config },
+        )
+        .await
+    }
+
+    async fn apply_server_config(&self, id: &str, game: GameConfig) -> Result<Server> {
+        self.post_json(
+            &format!("/v1/servers/{}/apply-config", id),
+            &ApplyConfigBody { game: &game },
         )
         .await
     }

@@ -48,6 +48,8 @@ interface AuthState {
   error: AuthError | null;
   /** Hydrate from OS keychain. Call once at app startup. */
   hydrate: () => Promise<void>;
+  /** Post-sign-in bootstrap shared by every entry point (hydrate, OAuth event, e-mail login/signup). */
+  completeSignIn: (me: Me) => void;
   /** Subscribe to deep-link / OAuth events. Returns an unsubscribe fn. */
   subscribeToEvents: () => Promise<() => void>;
   signupEmail: (email: string, password: string, displayName?: string) => Promise<boolean>;
@@ -186,21 +188,27 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   loading: false,
   error: null,
 
+  completeSignIn: (me) => {
+    relayOrg = null;
+    set({ me, error: null, loading: false });
+    // Relay on the primary org first; fetchOrgs re-points it at the active org.
+    get().ensureRelay();
+    void get().fetchOrgs();
+    // refreshSyncKeyStatus drives the SyncKeyDialog for OAuth users without a local DEK.
+    void get().refreshSyncKeyStatus();
+    void invoke('cloud_claim_desktop').catch(() => {});
+    void get().syncNodes();
+  },
+
   hydrate: async () => {
     set({ loading: true, error: null });
     try {
       const me = await invoke<Me | null>('cloud_me');
-      relayOrg = null;
-      set({ me, loading: false });
-      // Connect the relay on startup (primary org; fetchOrgs re-points it at the active org).
       if (me) {
-        get().ensureRelay();
-      }
-      if (me) {
-        void get().fetchOrgs();
-        void get().refreshSyncKeyStatus();
-        void invoke('cloud_claim_desktop').catch(() => {});
-        void get().syncNodes();
+        get().completeSignIn(me);
+      } else {
+        relayOrg = null;
+        set({ me, loading: false });
       }
     } catch (e) {
       // Land in "not signed in" rather than a stuck loading state.
@@ -210,14 +218,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   subscribeToEvents: async () => {
     const unSignedIn = await listen<Me>('cloud://signed-in', (event) => {
-      relayOrg = null;
-      set({ me: event.payload, error: null, loading: false });
-      get().ensureRelay();
-      void get().fetchOrgs();
-      // refreshSyncKeyStatus drives the SyncKeyDialog for OAuth users without a local DEK.
-      void get().refreshSyncKeyStatus();
-      void invoke('cloud_claim_desktop').catch(() => {});
-      void get().syncNodes();
+      get().completeSignIn(event.payload);
     });
     const unPartial = await listen('cloud://signed-in-partial', () => {
       // OAuth landed but /me failed — pull fresh once so the UI catches up.
@@ -242,8 +243,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const me = await invoke<Me>('cloud_signup', { email, password, displayName });
-      set({ me, loading: false });
-      void invoke('cloud_claim_desktop').catch(() => {});
+      get().completeSignIn(me);
       return true;
     } catch (e) {
       set({ loading: false, error: asErr(e) });
@@ -255,8 +255,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const me = await invoke<Me>('cloud_login', { email, password });
-      set({ me, loading: false });
-      void invoke('cloud_claim_desktop').catch(() => {});
+      get().completeSignIn(me);
       return true;
     } catch (e) {
       set({ loading: false, error: asErr(e) });

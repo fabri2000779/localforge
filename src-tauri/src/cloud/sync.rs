@@ -174,12 +174,14 @@ async fn pull(
     key: &[u8; 32],
     local_ids: &std::collections::HashSet<String>,
 ) -> Result<Vec<RemoteServer>, api::ApiError> {
+    // The API returns raw rows (snake_case); the aliases also accept a camelCase shape.
     #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
     struct PullEntryRaw {
         id: String,
         name: String,
+        #[serde(alias = "encryptedBlob")]
         encrypted_blob: String,
+        #[serde(alias = "updatedAt")]
         updated_at: i64,
     }
     #[derive(Deserialize)]
@@ -631,11 +633,12 @@ async fn pull_nodes(
     state: &NodeRegistry,
     local: &[RemoteNodeForSync],
 ) -> Result<usize, api::ApiError> {
+    // Raw rows (snake_case) from the API; the alias also accepts a camelCase shape.
     #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
     struct Entry {
         id: String,
         label: String,
+        #[serde(alias = "encryptedBlob")]
         encrypted_blob: String,
     }
     #[derive(Deserialize)]

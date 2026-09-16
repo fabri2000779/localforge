@@ -203,13 +203,14 @@ export function ServerDetail() {
     };
   }, [id, activeNodeId, isSubUser, fetchServers, startStatsPolling, stopStatsPolling]);
 
-  // Initialize editing config when server loads
+  // Seed the settings form from the server, but never while the user is editing: the 10 s refresh
+  // replaces the server objects and re-seeding would silently discard unsaved edits.
   useEffect(() => {
-    if (server?.config) {
+    if (server?.config && !isEditingConfig) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setEditingConfig(server.config);
     }
-  }, [server?.config]);
+  }, [server?.config, isEditingConfig]);
 
   // Uptime is measured from when we SAW the server enter 'running' (created_at is the install date);
   // unknown start (mounted onto a running server) → hidden. prevStatusRef is declared before the first

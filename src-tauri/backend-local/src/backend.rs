@@ -14,7 +14,10 @@ use localforge_core::types::{
     FileEntry, GameConfig, InstallEvent, MetricPoint, NodeStats, Player, PlayerAction, Schedule,
     Server, ServerStatus,
 };
-use localforge_core::{build_env_vars, detect_oauth_url, PortConfig as CorePortConfig};
+use localforge_core::{
+    apply_config_files, build_env_vars, detect_oauth_url, PortConfig as CorePortConfig,
+    SystemMapping,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -80,6 +83,28 @@ impl LocalDockerBackend {
             std::io::ErrorKind::NotFound => BackendError::not_found(format!("server '{}'", id)),
             _ => BackendError::io(e),
         })
+    }
+
+    /// Docker container for `server` as the game currently defines it (image, env, ports, startup).
+    async fn create_container_for(&self, server: &Server, game: &GameConfig) -> Result<String> {
+        let env = build_env_vars(game, server.memory_mb, server.port, &server.config);
+        let extra_ports: Vec<CorePortConfig> = game.ports.iter().skip(1).cloned().collect();
+        let startup_command = render_startup(game, &env);
+        self.docker
+            .create_container(CreateContainerSpec {
+                name: &server.id,
+                image: &game.docker_image,
+                port: server.port,
+                container_port: container_port_for(game, server.port),
+                data_path: &server.data_path,
+                env: &env,
+                extra_ports: &extra_ports,
+                volume_path: Some(&game.volume_path),
+                memory_mb: Some(server.memory_mb),
+                startup_command: startup_command.as_deref(),
+            })
+            .await
+            .map_err(BackendError::docker)
     }
 }
 
@@ -315,6 +340,7 @@ impl NodeBackend for LocalDockerBackend {
     async fn move_path(&self, from: &str, to: &str) -> Result<()> {
         let from = confine_path(&self.data_root, from)?;
         let to = confine_path(&self.data_root, to)?;
+        ensure_not_nested(&from, &to)?;
         // For cross-volume moves, fall back to copy + delete.
         if std::fs::rename(&from, &to).is_ok() {
             return Ok(());
@@ -331,6 +357,7 @@ impl NodeBackend for LocalDockerBackend {
     async fn copy_path(&self, from: &str, to: &str) -> Result<()> {
         let from = confine_path(&self.data_root, from)?;
         let to = confine_path(&self.data_root, to)?;
+        ensure_not_nested(&from, &to)?;
         if from.is_dir() {
             copy_dir_recursive(&from, &to).map_err(BackendError::io)
         } else {
@@ -367,53 +394,22 @@ impl NodeBackend for LocalDockerBackend {
 
         create_server_data_dir(&data_path)?;
 
-        let user_config = request.config.clone().unwrap_or_default();
-        let env = build_env_vars(&game, memory_mb, port, &user_config);
-
-        let extra_ports: Vec<CorePortConfig> =
-            game.ports.iter().skip(1).cloned().collect();
-
-        let startup_command = if game.startup.is_empty() {
-            None
-        } else {
-            let mut startup = game.startup.clone();
-            for (key, value) in &env {
-                startup = startup.replace(&format!("{{{{{}}}}}", key), value);
-            }
-            Some(startup)
-        };
-
-        let container_id = self
-            .docker
-            .create_container(CreateContainerSpec {
-                name: &server_id,
-                image: &game.docker_image,
-                port,
-                data_path: &data_path,
-                env: &env,
-                extra_ports: &extra_ports,
-                volume_path: Some(&game.volume_path),
-                memory_mb: Some(memory_mb),
-                startup_command: startup_command.as_deref(),
-            })
-            .await
-            .map_err(BackendError::docker)?;
-
-        let server = Server {
+        let mut server = Server {
             id: server_id,
             name: request.name,
             game_type: request.game_type,
             status: ServerStatus::Stopped,
-            container_id: Some(container_id),
+            container_id: None,
             port,
             memory_mb,
             data_path,
             created_at: chrono::Utc::now(),
-            config: user_config,
+            config: request.config.clone().unwrap_or_default(),
             installed: false,
             install_container_id: None,
             restart_policy: Default::default(),
         };
+        server.container_id = Some(self.create_container_for(&server, &game).await?);
 
         persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
         Ok(server)
@@ -427,6 +423,52 @@ impl NodeBackend for LocalDockerBackend {
         let mut server = self.require_server(id)?;
         server.config = config;
         persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
+        Ok(server)
+    }
+
+    async fn apply_server_config(&self, id: &str, game: GameConfig) -> Result<Server> {
+        let mut server = self.require_server(id)?;
+        let env = build_env_vars(&game, server.memory_mb, server.port, &server.config);
+        // Config files live in the bind mount, so the game picks them up on its next start.
+        for path in apply_config_files(&server.data_path, &game, &env).map_err(BackendError::io)? {
+            tracing::info!("server {}: applied {}", id, path);
+        }
+        // Env, command and the port binding are frozen into the container: recreate it when they no
+        // longer match — only while stopped; a live container is left alone.
+        let Some(container_id) = server.container_id.clone() else {
+            return Ok(server);
+        };
+        let status = self
+            .docker
+            .get_container_status(&container_id)
+            .await
+            .map_err(BackendError::docker)?;
+        if status != ServerStatus::Stopped && status != ServerStatus::Error {
+            return Ok(server);
+        }
+        let startup_command = render_startup(&game, &env);
+        let matches = self
+            .docker
+            .container_matches(
+                &container_id,
+                &env,
+                startup_command.as_deref(),
+                Some(&game.volume_path),
+                server.port,
+                container_port_for(&game, server.port),
+            )
+            .await
+            .map_err(BackendError::docker)?;
+        if matches {
+            return Ok(server);
+        }
+        self.docker
+            .remove_container(&container_id)
+            .await
+            .map_err(BackendError::docker)?;
+        server.container_id = Some(self.create_container_for(&server, &game).await?);
+        persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
+        tracing::info!("server {}: container recreated with the current configuration", id);
         Ok(server)
     }
 
@@ -670,6 +712,8 @@ impl NodeBackend for LocalDockerBackend {
             .clone()
             .unwrap_or_else(|| game.docker_image.clone());
         let volume_path = game.volume_path.clone();
+        // The installer reads the same variables as the runtime (version, build, jar name…).
+        let env = build_env_vars(&game, server.memory_mb, server.port, &server.config);
 
         // Mark Installing so status queries reflect it mid-install.
         let mut server = server;
@@ -693,6 +737,7 @@ impl NodeBackend for LocalDockerBackend {
                 install_image,
                 volume_path,
                 install_script,
+                env,
                 tx.clone(),
             )
             .await;
@@ -1011,6 +1056,43 @@ fn create_server_data_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Reject a destination equal to or inside the source: copying a folder into itself recurses into the
+/// copy it is creating, and moving would delete the source out from under it.
+fn ensure_not_nested(from: &Path, to: &Path) -> Result<()> {
+    if to == from || to.starts_with(from) {
+        return Err(BackendError::invalid(
+            "the destination is inside the source",
+        ));
+    }
+    Ok(())
+}
+
+/// The port the game listens on INSIDE the container: the chosen port when the game reads it from a
+/// `SystemMapping::Port` variable, otherwise the image's fixed default (Minecraft's 25565, …).
+fn container_port_for(game: &GameConfig, port: u16) -> u16 {
+    let configurable = game
+        .variables
+        .iter()
+        .any(|v| matches!(v.system_mapping, Some(SystemMapping::Port)));
+    if configurable {
+        port
+    } else {
+        game.ports.first().map(|p| p.container_port).unwrap_or(port)
+    }
+}
+
+/// The game's startup command with `{{VAR}}` placeholders filled in; `None` when the image's CMD runs.
+fn render_startup(game: &GameConfig, env: &HashMap<String, String>) -> Option<String> {
+    if game.startup.is_empty() {
+        return None;
+    }
+    let mut startup = game.startup.clone();
+    for (key, value) in env {
+        startup = startup.replace(&format!("{{{{{}}}}}", key), value);
+    }
+    Some(startup)
+}
+
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
@@ -1036,6 +1118,7 @@ async fn run_install_inner(
     install_image: String,
     volume_path: String,
     install_script: String,
+    env: HashMap<String, String>,
     tx: tokio::sync::mpsc::UnboundedSender<Result<InstallEvent>>,
 ) -> Result<()> {
     // Persist the install container id immediately so log recovery works if interrupted.
@@ -1064,6 +1147,7 @@ async fn run_install_inner(
             &server_data_path,
             &volume_path,
             &install_script,
+            &env,
             on_container_created,
             on_output,
         )

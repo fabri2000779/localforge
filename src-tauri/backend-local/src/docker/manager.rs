@@ -37,7 +37,10 @@ pub struct DockerManager {
 pub struct CreateContainerSpec<'a> {
     pub name: &'a str,
     pub image: &'a str,
+    /// Host port the players connect to.
     pub port: u16,
+    /// Port the game listens on inside the container (`port` is published onto it, TCP + UDP).
+    pub container_port: u16,
     pub data_path: &'a Path,
     pub env: &'a HashMap<String, String>,
     pub extra_ports: &'a [PortConfig],
@@ -111,6 +114,7 @@ impl DockerManager {
             name,
             image,
             port,
+            container_port,
             data_path,
             env,
             extra_ports,
@@ -143,9 +147,9 @@ impl DockerManager {
         let mut port_bindings = HashMap::new();
         let mut exposed_ports: Vec<String> = Vec::new();
 
-        // Main port (both TCP and UDP)
-        let container_port_tcp = format!("{}/tcp", port);
-        let container_port_udp = format!("{}/udp", port);
+        // Main port (both TCP and UDP): host `port` → the game's in-container port.
+        let container_port_tcp = format!("{}/tcp", container_port);
+        let container_port_udp = format!("{}/udp", container_port);
 
         port_bindings.insert(
             container_port_tcp.clone(),
@@ -281,6 +285,53 @@ impl DockerManager {
         });
         self.docker.stop_container(container_id, options).await?;
         Ok(())
+    }
+
+    /// Whether the container still carries the inputs `create_container` froze in: every desired env
+    /// var, the same startup command (when one is set) and the main port binding. `false` means the
+    /// saved configuration only takes effect after a recreate.
+    pub async fn container_matches(
+        &self,
+        container_id: &str,
+        env: &HashMap<String, String>,
+        startup_command: Option<&str>,
+        volume_path: Option<&str>,
+        port: u16,
+        container_port: u16,
+    ) -> Result<bool, DockerError> {
+        let info = self
+            .docker
+            .inspect_container(
+                container_id,
+                None::<bollard::query_parameters::InspectContainerOptions>,
+            )
+            .await?;
+        let config = info.config.unwrap_or_default();
+        let have: std::collections::HashSet<String> =
+            config.env.unwrap_or_default().into_iter().collect();
+        if !env.iter().all(|(k, v)| have.contains(&format!("{}={}", k, v))) {
+            return Ok(false);
+        }
+        if let Some(startup) = startup_command.filter(|s| !s.is_empty()) {
+            let want = vec![
+                "/bin/bash".to_string(),
+                "-c".to_string(),
+                format!("cd {} && exec {}", volume_path.unwrap_or("/data"), startup),
+            ];
+            if config.cmd.as_deref() != Some(want.as_slice()) {
+                return Ok(false);
+            }
+        }
+        let bindings = info
+            .host_config
+            .and_then(|h| h.port_bindings)
+            .unwrap_or_default();
+        let bound = bindings
+            .get(&format!("{}/tcp", container_port))
+            .and_then(|b| b.as_ref())
+            .map(|list| list.iter().any(|pb| pb.host_port.as_deref() == Some(port.to_string().as_str())))
+            .unwrap_or(false);
+        Ok(bound)
     }
 
     pub async fn remove_container(&self, container_id: &str) -> Result<(), DockerError> {
@@ -511,12 +562,14 @@ impl DockerManager {
 
     /// Run `script` in a one-off container, streaming its output; returns `(exit_code, container_id)`.
     /// `on_container_created` receives the id before start so it can be persisted for log recovery.
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_script<F, C>(
         &self,
         image: &str,
         data_path: &std::path::Path,
         volume_path: &str,
         script: &str,
+        env: &HashMap<String, String>,
         on_container_created: C,
         mut on_output: F,
     ) -> Result<(i64, String), DockerError>
@@ -566,6 +619,7 @@ impl DockerManager {
         let config = ContainerCreateBody {
             image: Some(image.to_string()),
             cmd: Some(vec!["/bin/sh".to_string(), "-c".to_string(), cmd]),
+            env: Some(env.iter().map(|(k, v)| format!("{}={}", k, v)).collect()),
             host_config: Some(host_config),
             working_dir: Some(volume_path.to_string()),
             tty: Some(false),

@@ -154,7 +154,7 @@ async fn enforce_retention(
         .list_backups(server_id, target)
         .await
         .map_err(|e| e.to_string())?;
-    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.created_at));
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut deleted = 0u32;
     for (i, e) in entries.iter().enumerate() {

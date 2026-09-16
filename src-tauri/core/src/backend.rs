@@ -140,6 +140,10 @@ pub trait NodeBackend: Send + Sync {
         config: HashMap<String, String>,
     ) -> Result<Server>;
 
+    /// Make the saved config take effect: render the game's config files into the data dir and, while
+    /// the server is stopped, recreate the container when its env / command / port binding differ.
+    async fn apply_server_config(&self, id: &str, game: GameConfig) -> Result<Server>;
+
     /// Stop and remove the container, then delete the data directory and record.
     async fn delete_server(&self, id: &str) -> Result<()>;
 
