@@ -334,6 +334,26 @@ impl DockerManager {
         Ok(bound)
     }
 
+    /// Give a container a new name (names are unique per daemon; the id never changes).
+    pub async fn rename_container(&self, container_id: &str, name: &str) -> Result<(), DockerError> {
+        let options = bollard::query_parameters::RenameContainerOptionsBuilder::default()
+            .name(name)
+            .build();
+        self.docker.rename_container(container_id, options).await?;
+        Ok(())
+    }
+
+    /// Whether a container with this id or name exists, in any state.
+    pub async fn container_exists(&self, name_or_id: &str) -> bool {
+        self.docker
+            .inspect_container(
+                name_or_id,
+                None::<bollard::query_parameters::InspectContainerOptions>,
+            )
+            .await
+            .is_ok()
+    }
+
     pub async fn remove_container(&self, container_id: &str) -> Result<(), DockerError> {
         tracing::info!("Removing container: {}", container_id);
         let options = Some(RemoveContainerOptions {

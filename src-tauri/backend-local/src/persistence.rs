@@ -1,6 +1,7 @@
-//! Server records under `<root>/config/<id>.json`; world data lives in `<root>/servers/<game>/<id>/`.
+//! Server records under `<root>/config/<id>.json`; world data lives in `<root>/servers/<game>/<id>/`;
+//! the game definition each server was last created/installed/configured with under `<root>/games/<id>.json`.
 
-use localforge_core::Server;
+use localforge_core::{GameConfig, Server};
 use std::path::{Path, PathBuf};
 
 pub fn servers_data_root(root: &Path) -> PathBuf {
@@ -47,7 +48,32 @@ pub fn delete_server_record(root: &Path, server_id: &str) -> std::io::Result<()>
     if path.exists() {
         std::fs::remove_file(path)?;
     }
+    let _ = std::fs::remove_file(game_snapshot_path(root, server_id));
     Ok(())
+}
+
+fn game_snapshot_path(root: &Path, server_id: &str) -> PathBuf {
+    root.join("games").join(format!("{}.json", server_id))
+}
+
+/// Remember the game definition so a plain `start_server(id)` (agent REST/relay, schedules, crash
+/// restarts) can re-apply the saved configuration without the caller knowing the game.
+pub fn save_game_snapshot(root: &Path, server_id: &str, game: &GameConfig) -> std::io::Result<()> {
+    let dir = root.join("games");
+    std::fs::create_dir_all(&dir)?;
+    let body = serde_json::to_string_pretty(game)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let tmp = dir.join(format!(".{}.json.tmp", server_id));
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, body)?;
+    std::fs::rename(&tmp, game_snapshot_path(root, server_id))
+}
+
+/// `None` for servers created before snapshots existed (until their next save/apply/start from a
+/// client that knows the game).
+pub fn load_game_snapshot(root: &Path, server_id: &str) -> Option<GameConfig> {
+    let body = std::fs::read_to_string(game_snapshot_path(root, server_id)).ok()?;
+    serde_json::from_str(&body).ok()
 }
 
 pub fn list_servers(root: &Path) -> std::io::Result<Vec<Server>> {

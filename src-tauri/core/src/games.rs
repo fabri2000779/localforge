@@ -599,7 +599,7 @@ echo "[LocalForge] Sons of the Forest installed successfully!"
             config_files: vec![
                 ConfigFile {
                     path: "serverconfig/dedicatedserver.cfg".to_string(),
-                    format: ConfigFileFormat::Properties,
+                    format: ConfigFileFormat::Json,
                     variables: {
                         let mut m = HashMap::new();
                         m.insert("GameMode".to_string(), "{{GAME_MODE}}".to_string());
@@ -1632,7 +1632,7 @@ echo "[LocalForge] Satisfactory installed successfully!"
                     format: ConfigFileFormat::Ini,
                     variables: {
                         let mut m = HashMap::new();
-                        m.insert("MaxPlayers".to_string(), "{{MAX_PLAYERS}}".to_string());
+                        m.insert("[/Script/Engine.GameSession]MaxPlayers".to_string(), "{{MAX_PLAYERS}}".to_string());
                         m
                     },
                 },
@@ -1641,9 +1641,9 @@ echo "[LocalForge] Satisfactory installed successfully!"
                     format: ConfigFileFormat::Ini,
                     variables: {
                         let mut m = HashMap::new();
-                        m.insert("mNumRotatingAutosaves".to_string(), "{{NUM_AUTOSAVES}}".to_string());
-                        m.insert("InitialConnectTimeout".to_string(), "{{INIT_CONNECT_TIMEOUT}}".to_string());
-                        m.insert("ConnectionTimeout".to_string(), "{{CONNECT_TIMEOUT}}".to_string());
+                        m.insert("[/Script/FactoryGame.FGSaveSession]mNumRotatingAutosaves".to_string(), "{{NUM_AUTOSAVES}}".to_string());
+                        m.insert("[/Script/OnlineSubsystemUtils.IpNetDriver]InitialConnectTimeout".to_string(), "{{INIT_CONNECT_TIMEOUT}}".to_string());
+                        m.insert("[/Script/OnlineSubsystemUtils.IpNetDriver]ConnectionTimeout".to_string(), "{{CONNECT_TIMEOUT}}".to_string());
                         m
                     },
                 },

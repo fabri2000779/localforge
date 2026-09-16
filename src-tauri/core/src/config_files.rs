@@ -77,30 +77,47 @@ fn separator(sep: char) -> &'static str {
     if sep == ':' { ": " } else { "=" }
 }
 
-/// Line-based `key<sep>value` editing: existing keys are replaced in place (comments, blank lines and
-/// `[sections]` are kept), Unreal-style `Name=(A=1,B=2)` tuples are edited inside the parentheses, and
-/// keys that appear nowhere are appended.
+/// Line-based `key<sep>value` editing. Existing keys are replaced in place (comments, blank lines and
+/// `[sections]` are kept) and Unreal-style `Name=(A=1,B=2)` tuples are edited inside the parentheses.
+/// A key may be section-qualified as `[Section]Key`: it then only matches inside that section and is
+/// added right under its header (the section is created at the end when missing). Unqualified keys
+/// that appear nowhere go into the file's single tuple when it has one, else at the end.
 fn set_key_values(text: &str, values: &[(String, String)], sep: char) -> String {
     let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
-    let mut seen = vec![false; values.len()];
+    let targets: Vec<(Option<&str>, &str, &str)> = values
+        .iter()
+        .map(|(key, value)| {
+            let (section, key) = split_section(key);
+            (section, key, value.as_str())
+        })
+        .collect();
+    let mut seen = vec![false; targets.len()];
 
+    let mut current: Option<String> = None;
     for line in lines.iter_mut() {
         let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') || trimmed.starts_with('[') {
+        if let Some(header) = trimmed.strip_prefix('[') {
+            current = header.split(']').next().map(str::to_string);
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
             continue;
         }
         if let Some(pos) = trimmed.find(sep) {
             let key = trimmed[..pos].trim();
-            if let Some(i) = values.iter().position(|(k, _)| k == key) {
+            let hit = targets
+                .iter()
+                .position(|(section, k, _)| *k == key && in_section(*section, current.as_deref()));
+            if let Some(i) = hit {
                 let indent = &line[..line.len() - trimmed.len()];
-                *line = format!("{indent}{key}{}{}", separator(sep), values[i].1);
+                *line = format!("{indent}{key}{}{}", separator(sep), targets[i].2);
                 seen[i] = true;
                 continue;
             }
         }
-        for (i, (key, value)) in values.iter().enumerate() {
-            if seen[i] {
+        for (i, (section, key, value)) in targets.iter().enumerate() {
+            if seen[i] || !in_section(*section, current.as_deref()) {
                 continue;
             }
             if let Some(updated) = replace_tuple_field(line, key, value) {
@@ -110,16 +127,84 @@ fn set_key_values(text: &str, values: &[(String, String)], sep: char) -> String 
         }
     }
 
-    for (i, (key, value)) in values.iter().enumerate() {
-        if !seen[i] {
-            lines.push(format!("{key}{}{value}", separator(sep)));
+    // Unqualified keys first: tuple edits and appends never shift earlier line indexes.
+    let tuple_line = single_tuple_line(&lines);
+    for (i, (section, key, value)) in targets.iter().enumerate() {
+        if seen[i] || section.is_some() {
+            continue;
+        }
+        match tuple_line {
+            Some(t) if sep == '=' => lines[t] = insert_tuple_field(&lines[t], key, value),
+            _ => lines.push(format!("{key}{}{value}", separator(sep))),
         }
     }
+    for (i, (section, key, value)) in targets.iter().enumerate() {
+        let Some(section) = section else { continue };
+        if seen[i] {
+            continue;
+        }
+        let entry = format!("{key}{}{value}", separator(sep));
+        match section_header_index(&lines, section) {
+            Some(header) => lines.insert(header + 1, entry),
+            None => {
+                if !lines.last().is_none_or(|l| l.trim().is_empty()) {
+                    lines.push(String::new());
+                }
+                lines.push(format!("[{section}]"));
+                lines.push(entry);
+            }
+        }
+    }
+
     let mut out = lines.join(eol);
     if text.ends_with('\n') || text.is_empty() {
         out.push_str(eol);
     }
     out
+}
+
+/// `[Section]Key` → (Some(section), key); anything else is unqualified.
+fn split_section(key: &str) -> (Option<&str>, &str) {
+    if let Some(rest) = key.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            return (Some(&rest[..end]), &rest[end + 1..]);
+        }
+    }
+    (None, key)
+}
+
+fn in_section(wanted: Option<&str>, current: Option<&str>) -> bool {
+    wanted.is_none() || wanted == current
+}
+
+fn section_header_index(lines: &[String], section: &str) -> Option<usize> {
+    lines.iter().position(|l| {
+        let t = l.trim();
+        t.strip_prefix('[').and_then(|r| r.strip_suffix(']')) == Some(section)
+    })
+}
+
+/// The only `Name=(...)` line in the file, when there is exactly one — missing keys belong inside it.
+fn single_tuple_line(lines: &[String]) -> Option<usize> {
+    let mut found = None;
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        if t.contains("=(") && t.ends_with(')') && !t.starts_with('#') && !t.starts_with(';') {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(i);
+        }
+    }
+    found
+}
+
+/// Add `key=value` before the tuple's closing parenthesis.
+fn insert_tuple_field(line: &str, key: &str, value: &str) -> String {
+    let close = line.rfind(')').unwrap_or(line.len());
+    let body = &line[..close];
+    let comma = if body.trim_end().ends_with('(') { "" } else { "," };
+    format!("{body}{comma}{key}={value}{}", &line[close..])
 }
 
 /// `(key=` or `,key=` inside a tuple, value running to the next `,` or `)`.
@@ -205,6 +290,29 @@ mod tests {
         let values = vec![("RCONEnabled".to_string(), "True".to_string())];
         let out = set_key_values(text, &values, '=');
         assert_eq!(out, "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(Difficulty=None,RCONEnabled=True,RCONPort=25575)\n");
+    }
+
+    #[test]
+    fn ini_missing_tuple_field_is_inserted_into_the_tuple() {
+        let text = "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(Difficulty=None,RCONPort=25575)\n";
+        let values = vec![("RCONEnabled".to_string(), "True".to_string())];
+        let out = set_key_values(text, &values, '=');
+        assert_eq!(out, "[/Script/Pal.PalGameWorldSettings]\nOptionSettings=(Difficulty=None,RCONPort=25575,RCONEnabled=True)\n");
+    }
+
+    #[test]
+    fn ini_section_qualified_keys_stay_in_their_section() {
+        let text = "[A]\nTimeout=1\n\n[/Script/Net.Driver]\nTimeout=1\n";
+        let values = vec![
+            ("[/Script/Net.Driver]Timeout".to_string(), "300".to_string()),
+            ("[/Script/Net.Driver]Initial".to_string(), "60".to_string()),
+            ("[Missing]Flag".to_string(), "on".to_string()),
+        ];
+        let out = set_key_values(text, &values, '=');
+        assert_eq!(
+            out,
+            "[A]\nTimeout=1\n\n[/Script/Net.Driver]\nInitial=60\nTimeout=300\n\n[Missing]\nFlag=on\n"
+        );
     }
 
     #[test]

@@ -106,6 +106,81 @@ impl LocalDockerBackend {
             .await
             .map_err(BackendError::docker)
     }
+
+    /// Bring a server in line with `game` + its saved config: config files are re-rendered into the
+    /// data dir, a missing container is created, and a stopped container whose env / command / port
+    /// binding drifted is swapped for a fresh one. The old container is only parked (renamed) until
+    /// its replacement exists, so a failed image pull or create never leaves the server without one.
+    async fn apply_game_config(&self, server: &mut Server, game: &GameConfig) -> Result<()> {
+        let env = build_env_vars(game, server.memory_mb, server.port, &server.config);
+        for path in apply_config_files(&server.data_path, game, &env).map_err(BackendError::io)? {
+            tracing::info!("server {}: applied {}", server.id, path);
+        }
+
+        let Some(container_id) = server.container_id.clone() else {
+            server.container_id = Some(self.create_container_for(server, game).await?);
+            persistence::save_server(&self.data_root, server).map_err(BackendError::io)?;
+            return Ok(());
+        };
+        let status = match self.docker.get_container_status(&container_id).await {
+            Ok(status) => status,
+            Err(e) => {
+                // The record points at a container Docker no longer has (pruned by hand, failed
+                // swap on an older build): give the server a new one.
+                tracing::warn!("server {}: container {} unavailable ({}); creating a new one", server.id, container_id, e);
+                server.container_id = Some(self.create_container_for(server, game).await?);
+                persistence::save_server(&self.data_root, server).map_err(BackendError::io)?;
+                return Ok(());
+            }
+        };
+        if status != ServerStatus::Stopped && status != ServerStatus::Error {
+            return Ok(());
+        }
+        let startup_command = render_startup(game, &env);
+        let matches = self
+            .docker
+            .container_matches(
+                &container_id,
+                &env,
+                startup_command.as_deref(),
+                Some(&game.volume_path),
+                server.port,
+                container_port_for(game, server.port),
+            )
+            .await
+            .map_err(BackendError::docker)?;
+        if matches {
+            return Ok(());
+        }
+
+        let parked = format!("{}-previous", server.id);
+        if self.docker.container_exists(&parked).await {
+            // Leftover of an interrupted swap.
+            self.docker.remove_container(&parked).await.map_err(BackendError::docker)?;
+        }
+        // Pull first: the most likely failure (offline, image gone) then costs nothing.
+        self.docker.pull_image(&game.docker_image).await.map_err(BackendError::docker)?;
+        self.docker
+            .rename_container(&container_id, &parked)
+            .await
+            .map_err(BackendError::docker)?;
+        let new_id = match self.create_container_for(server, game).await {
+            Ok(id) => id,
+            Err(e) => {
+                if let Err(restore) = self.docker.rename_container(&container_id, &server.id).await {
+                    tracing::error!("server {}: swap failed and the old container kept the parked name: {}", server.id, restore);
+                }
+                return Err(e);
+            }
+        };
+        server.container_id = Some(new_id);
+        persistence::save_server(&self.data_root, server).map_err(BackendError::io)?;
+        if let Err(e) = self.docker.remove_container(&container_id).await {
+            tracing::warn!("server {}: previous container {} not removed: {}", server.id, container_id, e);
+        }
+        tracing::info!("server {}: container recreated with the current configuration", server.id);
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -412,6 +487,8 @@ impl NodeBackend for LocalDockerBackend {
         server.container_id = Some(self.create_container_for(&server, &game).await?);
 
         persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
+        persistence::save_game_snapshot(&self.data_root, &server.id, &game)
+            .map_err(BackendError::io)?;
         Ok(server)
     }
 
@@ -428,47 +505,8 @@ impl NodeBackend for LocalDockerBackend {
 
     async fn apply_server_config(&self, id: &str, game: GameConfig) -> Result<Server> {
         let mut server = self.require_server(id)?;
-        let env = build_env_vars(&game, server.memory_mb, server.port, &server.config);
-        // Config files live in the bind mount, so the game picks them up on its next start.
-        for path in apply_config_files(&server.data_path, &game, &env).map_err(BackendError::io)? {
-            tracing::info!("server {}: applied {}", id, path);
-        }
-        // Env, command and the port binding are frozen into the container: recreate it when they no
-        // longer match — only while stopped; a live container is left alone.
-        let Some(container_id) = server.container_id.clone() else {
-            return Ok(server);
-        };
-        let status = self
-            .docker
-            .get_container_status(&container_id)
-            .await
-            .map_err(BackendError::docker)?;
-        if status != ServerStatus::Stopped && status != ServerStatus::Error {
-            return Ok(server);
-        }
-        let startup_command = render_startup(&game, &env);
-        let matches = self
-            .docker
-            .container_matches(
-                &container_id,
-                &env,
-                startup_command.as_deref(),
-                Some(&game.volume_path),
-                server.port,
-                container_port_for(&game, server.port),
-            )
-            .await
-            .map_err(BackendError::docker)?;
-        if matches {
-            return Ok(server);
-        }
-        self.docker
-            .remove_container(&container_id)
-            .await
-            .map_err(BackendError::docker)?;
-        server.container_id = Some(self.create_container_for(&server, &game).await?);
-        persistence::save_server(&self.data_root, &server).map_err(BackendError::io)?;
-        tracing::info!("server {}: container recreated with the current configuration", id);
+        persistence::save_game_snapshot(&self.data_root, id, &game).map_err(BackendError::io)?;
+        self.apply_game_config(&mut server, &game).await?;
         Ok(server)
     }
 
@@ -522,6 +560,14 @@ impl NodeBackend for LocalDockerBackend {
 
     async fn start_server(&self, id: &str) -> Result<ServerStatus> {
         let mut server = self.require_server(id)?;
+        // Saved settings reach the game here whoever triggers the start (UI, agent REST/relay,
+        // schedules, crash restarts). Best effort: an offline image pull must not stop a server
+        // from starting the way it was.
+        if let Some(game) = persistence::load_game_snapshot(&self.data_root, id) {
+            if let Err(e) = self.apply_game_config(&mut server, &game).await {
+                tracing::warn!("server {}: configuration not applied before start: {}", id, e);
+            }
+        }
         let container_id = server
             .container_id
             .clone()
@@ -687,6 +733,7 @@ impl NodeBackend for LocalDockerBackend {
 
     async fn run_install(&self, id: &str, game: GameConfig) -> Result<InstallStream> {
         let server = self.require_server(id)?;
+        persistence::save_game_snapshot(&self.data_root, id, &game).map_err(BackendError::io)?;
 
         // A second concurrent install would run over the same bind-mount and corrupt it.
         let install_guard = InstallGuard::acquire(&self.installing, id).ok_or_else(|| {
