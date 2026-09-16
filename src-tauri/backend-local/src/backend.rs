@@ -107,34 +107,89 @@ impl LocalDockerBackend {
             .map_err(BackendError::docker)
     }
 
+    /// Do not expose a replacement to callers (or retire its predecessor) until its id is durable.
+    fn persist_container(&self, server: &mut Server, container_id: String) -> Result<()> {
+        let mut next = server.clone();
+        next.container_id = Some(container_id);
+        persistence::save_server(&self.data_root, &next).map_err(BackendError::io)?;
+        *server = next;
+        Ok(())
+    }
+
+    async fn retire_previous_container(&self, current_id: &str, previous_id: &str) -> Result<()> {
+        if current_id == previous_id {
+            return Ok(());
+        }
+        // A recovery must never force-remove a predecessor that another caller started.
+        let status = self.docker.get_container_status(previous_id).await.map_err(BackendError::docker)?;
+        if status != ServerStatus::Stopped && status != ServerStatus::Error {
+            return Err(BackendError::invalid("previous container is still active"));
+        }
+        self.docker.remove_container(previous_id).await.map_err(BackendError::docker)
+    }
+
     /// Bring a server in line with `game` + its saved config: config files are re-rendered into the
-    /// data dir, a missing container is created, and a stopped container whose env / command / port
-    /// binding drifted is swapped for a fresh one. The old container is only parked (renamed) until
-    /// its replacement exists, so a failed image pull or create never leaves the server without one.
-    async fn apply_game_config(&self, server: &mut Server, game: &GameConfig) -> Result<()> {
+    /// data dir, a missing container is created, and — when `may_swap` — a stopped container whose
+    /// env / command / port binding drifted is swapped for a fresh one. The old container is only
+    /// parked (renamed) until its replacement exists, so a failed image pull or create never leaves
+    /// the server without one, and an interrupted swap is picked up where it stopped. `may_swap` is
+    /// false for guessed definitions (see [`persistence::GameSource`]): rebuilding a container from
+    /// a guess could swap in the wrong image.
+    async fn apply_game_config(
+        &self,
+        server: &mut Server,
+        game: &GameConfig,
+        may_swap: bool,
+    ) -> Result<()> {
         let env = build_env_vars(game, server.memory_mb, server.port, &server.config);
         for path in apply_config_files(&server.data_path, game, &env).map_err(BackendError::io)? {
             tracing::info!("server {}: applied {}", server.id, path);
         }
 
-        let Some(container_id) = server.container_id.clone() else {
-            server.container_id = Some(self.create_container_for(server, game).await?);
-            persistence::save_server(&self.data_root, server).map_err(BackendError::io)?;
-            return Ok(());
+        let canonical = format!("localforge-{}", server.id);
+        let parked = format!("{}-previous", server.id);
+        let recorded = match server.container_id.as_deref() {
+            Some(id) => self.docker.container_id(id).await.map_err(BackendError::docker)?,
+            None => None,
         };
-        let status = match self.docker.get_container_status(&container_id).await {
-            Ok(status) => status,
-            Err(e) => {
-                // The record points at a container Docker no longer has (pruned by hand, failed
-                // swap on an older build): give the server a new one.
-                tracing::warn!("server {}: container {} unavailable ({}); creating a new one", server.id, container_id, e);
-                server.container_id = Some(self.create_container_for(server, game).await?);
-                persistence::save_server(&self.data_root, server).map_err(BackendError::io)?;
-                return Ok(());
+        let canonical_id = self.docker.container_id(&canonical).await.map_err(BackendError::docker)?;
+
+        // A create may have completed just before the process died or saving the new id failed.
+        // Adopt the existing replacement before removing anything, rather than creating a second
+        // container with the same name. A still-running recorded container remains authoritative.
+        if let Some(id) = canonical_id.as_ref().filter(|id| recorded.as_ref() != Some(*id)) {
+            if let Some(previous_id) = &recorded {
+                let status = self.docker.get_container_status(previous_id).await.map_err(BackendError::docker)?;
+                if status != ServerStatus::Stopped && status != ServerStatus::Error {
+                    return Ok(());
+                }
             }
-        };
+            self.persist_container(server, id.clone())?;
+            if let Some(previous_id) = &recorded {
+                if let Err(e) = self.retire_previous_container(id, previous_id).await {
+                    tracing::warn!("server {}: previous container not removed: {}", server.id, e);
+                }
+            }
+        } else if recorded.is_none() {
+            // Also recover the old container when a previous build left only the parked name.
+            let id = match self.docker.container_id(&parked).await.map_err(BackendError::docker)? {
+                Some(id) => id,
+                None => self.create_container_for(server, game).await?,
+            };
+            self.persist_container(server, id)?;
+        }
+
+        let container_id = server.container_id.clone().ok_or_else(|| BackendError::invalid("server has no container"))?;
+        let status = self.docker.get_container_status(&container_id).await.map_err(BackendError::docker)?;
         if status != ServerStatus::Stopped && status != ServerStatus::Error {
             return Ok(());
+        }
+
+        // Cleanup after a committed swap is safe only when the parked id is not the current one.
+        // If the process died just after rename, these ids are equal and it is our ONLY container.
+        let parked_id = self.docker.container_id(&parked).await.map_err(BackendError::docker)?;
+        if let Some(previous_id) = parked_id.as_ref().filter(|id| *id != &container_id) {
+            self.retire_previous_container(&container_id, previous_id).await?;
         }
         let startup_command = render_startup(game, &env);
         let matches = self
@@ -152,30 +207,33 @@ impl LocalDockerBackend {
         if matches {
             return Ok(());
         }
-
-        let parked = format!("{}-previous", server.id);
-        if self.docker.container_exists(&parked).await {
-            // Leftover of an interrupted swap.
-            self.docker.remove_container(&parked).await.map_err(BackendError::docker)?;
+        if !may_swap {
+            tracing::info!(
+                "server {}: container differs from the guessed game definition; kept until the desktop applies the real one",
+                server.id
+            );
+            return Ok(());
         }
+
         // Pull first: the most likely failure (offline, image gone) then costs nothing.
         self.docker.pull_image(&game.docker_image).await.map_err(BackendError::docker)?;
-        self.docker
-            .rename_container(&container_id, &parked)
-            .await
-            .map_err(BackendError::docker)?;
+        if parked_id.as_ref() != Some(&container_id) {
+            self.docker
+                .rename_container(&container_id, &parked)
+                .await
+                .map_err(BackendError::docker)?;
+        }
         let new_id = match self.create_container_for(server, game).await {
             Ok(id) => id,
             Err(e) => {
-                if let Err(restore) = self.docker.rename_container(&container_id, &server.id).await {
+                if let Err(restore) = self.docker.rename_container(&container_id, &canonical).await {
                     tracing::error!("server {}: swap failed and the old container kept the parked name: {}", server.id, restore);
                 }
                 return Err(e);
             }
         };
-        server.container_id = Some(new_id);
-        persistence::save_server(&self.data_root, server).map_err(BackendError::io)?;
-        if let Err(e) = self.docker.remove_container(&container_id).await {
+        self.persist_container(server, new_id.clone())?;
+        if let Err(e) = self.retire_previous_container(&new_id, &container_id).await {
             tracing::warn!("server {}: previous container {} not removed: {}", server.id, container_id, e);
         }
         tracing::info!("server {}: container recreated with the current configuration", server.id);
@@ -506,7 +564,7 @@ impl NodeBackend for LocalDockerBackend {
     async fn apply_server_config(&self, id: &str, game: GameConfig) -> Result<Server> {
         let mut server = self.require_server(id)?;
         persistence::save_game_snapshot(&self.data_root, id, &game).map_err(BackendError::io)?;
-        self.apply_game_config(&mut server, &game).await?;
+        self.apply_game_config(&mut server, &game, true).await?;
         Ok(server)
     }
 
@@ -561,12 +619,18 @@ impl NodeBackend for LocalDockerBackend {
     async fn start_server(&self, id: &str) -> Result<ServerStatus> {
         let mut server = self.require_server(id)?;
         // Saved settings reach the game here whoever triggers the start (UI, agent REST/relay,
-        // schedules, crash restarts). Best effort: an offline image pull must not stop a server
-        // from starting the way it was.
-        if let Some(game) = persistence::load_game_snapshot(&self.data_root, id) {
-            if let Err(e) = self.apply_game_config(&mut server, &game).await {
-                tracing::warn!("server {}: configuration not applied before start: {}", id, e);
+        // schedules, crash restarts). Best effort: an offline image pull or an unknown custom game
+        // must not stop a server from starting the way it was. Servers from before snapshots
+        // existed get a guessed definition (config files only, no container rebuild) until the
+        // desktop saves or applies their real one.
+        match persistence::resolve_game(&self.data_root, &server) {
+            Ok(resolved) => {
+                let may_swap = resolved.source == persistence::GameSource::Snapshot;
+                if let Err(e) = self.apply_game_config(&mut server, &resolved.game, may_swap).await {
+                    tracing::warn!("server {}: configuration not applied before start: {}", id, e);
+                }
             }
+            Err(e) => tracing::warn!("server {}: configuration not applied before start: {}", id, e),
         }
         let container_id = server
             .container_id

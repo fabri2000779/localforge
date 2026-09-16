@@ -343,15 +343,19 @@ impl DockerManager {
         Ok(())
     }
 
-    /// Whether a container with this id or name exists, in any state.
-    pub async fn container_exists(&self, name_or_id: &str) -> bool {
-        self.docker
+    /// Resolve a name or id without treating daemon/transport failures as a missing container.
+    pub async fn container_id(&self, name_or_id: &str) -> Result<Option<String>, DockerError> {
+        match self.docker
             .inspect_container(
                 name_or_id,
                 None::<bollard::query_parameters::InspectContainerOptions>,
             )
             .await
-            .is_ok()
+        {
+            Ok(info) => Ok(info.id),
+            Err(bollard::errors::Error::DockerResponseServerError { status_code: 404, .. }) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub async fn remove_container(&self, container_id: &str) -> Result<(), DockerError> {

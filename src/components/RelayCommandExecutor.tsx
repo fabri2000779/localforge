@@ -6,6 +6,7 @@ import { listen } from '@tauri-apps/api/event';
 import { roleAtLeast, type OrgRole } from '../stores/authStore';
 import { tombstoneInCloud, useServerStore } from '../stores/serverStore';
 import { describeError } from '../utils/errors';
+import type { ServerResponse } from '../types';
 
 interface RelayCmd {
   type: 'cmd';
@@ -49,19 +50,25 @@ export function RelayCommandExecutor() {
       const msg = event.payload;
       // state.snapshot: every server with status, for the mobile's row badges (replies with its own event kind).
       if (msg.cmd === 'state.snapshot') {
-        // Report the LOCAL node's servers (those are what get synced), whichever node is active.
+        // Read the requested node directly (the store may be showing another Docker host). A
+        // `disc:` request addressed to THIS desktop carries its device id, which is no node of the
+        // registry — that, like any unknown id, means the local Docker.
+        const requestedNode = (msg.args?.nodeId as string | undefined) ?? 'local';
         type SnapServer = { id: string; status: string; container_id?: string | null };
-        let servers: SnapServer[];
         try {
-          servers = await invoke<SnapServer[]>('list_servers', { nodeId: 'local' });
-        } catch {
-          servers = useServerStore.getState().servers;
-        }
-        try {
+          let nodeId = requestedNode;
+          let servers: SnapServer[];
+          try {
+            servers = await invoke<SnapServer[]>('list_servers', { nodeId });
+          } catch {
+            nodeId = 'local';
+            servers = await invoke<SnapServer[]>('list_servers', { nodeId });
+          }
           await invoke('cloud_relay_send_event', {
             payload: {
               kind: 'state_snapshot',
               request_id: msg.request_id,
+              nodeId,
               servers: servers.map((s) => ({
                 id: s.id,
                 status: s.status,
@@ -70,7 +77,7 @@ export function RelayCommandExecutor() {
             },
           });
         } catch (e) {
-          console.error('[relay] state.snapshot reply failed', e);
+          await respond(msg, { success: false, error: describeError(e) });
         }
         return;
       }
@@ -152,9 +159,10 @@ export function RelayCommandExecutor() {
         }
         const nodeId = (msg.args?.nodeId as string | undefined) ?? 'local';
         try {
-          await invoke('stop_server', { serverId: msg.target, nodeId });
-          await invoke('start_server', { serverId: msg.target, nodeId });
-          respond(msg, { success: true });
+          const stopped = await invoke<ServerResponse>('stop_server', { serverId: msg.target, nodeId });
+          if (!stopped.success) throw new Error(stopped.error ?? 'Could not stop server');
+          const started = await invoke<ServerResponse>('start_server', { serverId: msg.target, nodeId });
+          await respondWithServerState(msg, started);
         } catch (e) {
           respond(msg, { success: false, error: describeError(e) });
         }
@@ -170,8 +178,12 @@ export function RelayCommandExecutor() {
       }
       try {
         const args = handler.argTransform ? handler.argTransform(msg) : {};
-        await invoke(handler.tauri, args);
-        respond(msg, { success: true });
+        const result = await invoke(handler.tauri, args);
+        if (msg.cmd === 'server.start' || msg.cmd === 'server.stop') {
+          await respondWithServerState(msg, result as ServerResponse);
+        } else {
+          await respond(msg, { success: true });
+        }
         afterMutatingCmd(msg);
       } catch (e) {
         respond(msg, { success: false, error: describeError(e) });
@@ -202,9 +214,29 @@ function afterMutatingCmd(msg: RelayCmd): void {
   });
 }
 
+/** Return the backend's final state even when the desktop is displaying another node. */
+async function respondWithServerState(msg: RelayCmd, result: ServerResponse): Promise<void> {
+  if (!result.success) throw new Error(result.error ?? 'Server action failed');
+  const status = result.server?.status;
+  await respond(msg, { success: true, ...(status ? { status } : {}) });
+  if (!status) return;
+  try {
+    await invoke('cloud_relay_send_event', {
+      payload: {
+        kind: 'server.state_changed',
+        target: msg.target,
+        nodeId: msg.args?.nodeId ?? 'local',
+        status,
+      },
+    });
+  } catch (e) {
+    console.error('[relay] failed to send server state', e);
+  }
+}
+
 async function respond(
   msg: RelayCmd,
-  result: { success: boolean; error?: string },
+  result: { success: boolean; error?: string; status?: string },
 ): Promise<void> {
   if (!msg.request_id) return; // fire-and-forget
   try {
@@ -215,6 +247,7 @@ async function respond(
         request_id: msg.request_id,
         cmd: msg.cmd,
         target: msg.target,
+        nodeId: msg.args?.nodeId ?? 'local',
         ...result,
       },
     });

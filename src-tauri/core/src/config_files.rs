@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Component, Path};
 
-use crate::types::{ConfigFileFormat, GameConfig};
+use crate::types::{ConfigFileFormat, FieldType, GameConfig};
 
 /// Substitute every `{{VAR}}` in `template` with its value from `env`; unknown variables become "".
 pub fn render_template(template: &str, env: &HashMap<String, String>) -> String {
@@ -60,10 +60,15 @@ pub fn apply_config_files(
         let next = match file.format {
             ConfigFileFormat::Properties | ConfigFileFormat::Ini => set_key_values(&current, &values, '='),
             ConfigFileFormat::Yaml => set_key_values(&current, &values, ':'),
-            ConfigFileFormat::Json => match set_json_values(&current, &values) {
-                Some(text) => text,
-                None => continue,
-            },
+            ConfigFileFormat::Json => {
+                let types = file.variables.iter()
+                    .map(|(key, template)| (key.clone(), template_json_type(template, game)))
+                    .collect();
+                match set_json_values(&current, &values, &types) {
+                    Some(text) => text,
+                    None => continue,
+                }
+            }
         };
         if next != current {
             std::fs::write(&path, next)?;
@@ -223,8 +228,46 @@ fn replace_tuple_field(line: &str, key: &str, value: &str) -> Option<String> {
     None
 }
 
-/// Set dotted-path keys on a JSON object document; `None` when the file isn't a JSON object.
-fn set_json_values(text: &str, values: &[(String, String)]) -> Option<String> {
+#[derive(Clone, Copy)]
+enum JsonScalarType {
+    String,
+    Number,
+    Boolean,
+    Inferred,
+}
+
+/// Missing keys have no existing JSON type, so use the variable declaration for a single-variable
+/// template. Composite templates are text; literal values and undeclared variables retain inference.
+fn template_json_type(template: &str, game: &GameConfig) -> JsonScalarType {
+    let name = template.strip_prefix("{{")
+        .and_then(|s| s.strip_suffix("}}"))
+        .filter(|s| !s.contains("{{") && !s.contains("}}"));
+    let Some(name) = name else {
+        return if template.contains("{{") { JsonScalarType::String } else { JsonScalarType::Inferred };
+    };
+    match game.variables.iter().find(|v| v.env == name.trim()) {
+        Some(variable) => match variable.field_type {
+            FieldType::Text | FieldType::Password => JsonScalarType::String,
+            FieldType::Number => JsonScalarType::Number,
+            FieldType::Select => {
+                match variable.options.as_deref().filter(|options| !options.is_empty()) {
+                    Some(options) if options.iter().all(|o| matches!(o.value.as_str(), "true" | "false")) => JsonScalarType::Boolean,
+                    Some(options) if options.iter().all(|o| json_number(&o.value).is_some()) => JsonScalarType::Number,
+                    _ => JsonScalarType::String,
+                }
+            }
+        },
+        None => JsonScalarType::Inferred,
+    }
+}
+
+/// Set dotted-path keys on a JSON object document, preserving existing scalar types. `None` when the
+/// file isn't a JSON object or an intermediate path isn't an object.
+fn set_json_values(
+    text: &str,
+    values: &[(String, String)],
+    types: &HashMap<String, JsonScalarType>,
+) -> Option<String> {
     let mut root: serde_json::Value = serde_json::from_str(text).ok()?;
     if !root.is_object() {
         return None;
@@ -239,21 +282,38 @@ fn set_json_values(text: &str, values: &[(String, String)]) -> Option<String> {
                 .entry((*part).to_string())
                 .or_insert_with(|| serde_json::Value::Object(Default::default()));
         }
-        cursor.as_object_mut()?.insert((*last).to_string(), json_scalar(value));
+        let object = cursor.as_object_mut()?;
+        let kind = match object.get(*last) {
+            Some(serde_json::Value::String(_)) => JsonScalarType::String,
+            Some(serde_json::Value::Number(_)) => JsonScalarType::Number,
+            Some(serde_json::Value::Bool(_)) => JsonScalarType::Boolean,
+            Some(serde_json::Value::Array(_) | serde_json::Value::Object(_)) => continue,
+            _ => types.get(key).copied().unwrap_or(JsonScalarType::Inferred),
+        };
+        // Invalid scalar input must not turn a numeric/boolean setting into a string or null.
+        if let Some(value) = json_scalar(value, kind) {
+            object.insert((*last).to_string(), value);
+        }
     }
     serde_json::to_string_pretty(&root).ok()
 }
 
-/// Booleans and numbers keep their JSON type; everything else is a string.
-fn json_scalar(value: &str) -> serde_json::Value {
-    match value {
-        "true" => serde_json::Value::Bool(true),
-        "false" => serde_json::Value::Bool(false),
-        _ => value
-            .parse::<i64>()
-            .map(serde_json::Value::from)
-            .or_else(|_| value.parse::<f64>().map(serde_json::Value::from))
-            .unwrap_or_else(|_| serde_json::Value::String(value.to_string())),
+fn json_number(value: &str) -> Option<serde_json::Value> {
+    value.parse::<i64>().ok().map(serde_json::Value::from)
+        .or_else(|| value.parse::<u64>().ok().map(serde_json::Value::from))
+        .or_else(|| value.parse::<f64>().ok()
+            .and_then(serde_json::Number::from_f64)
+            .map(serde_json::Value::Number))
+}
+
+fn json_scalar(value: &str, kind: JsonScalarType) -> Option<serde_json::Value> {
+    match kind {
+        JsonScalarType::String => Some(serde_json::Value::String(value.to_string())),
+        JsonScalarType::Number => json_number(value),
+        JsonScalarType::Boolean => value.parse::<bool>().ok().map(serde_json::Value::Bool),
+        JsonScalarType::Inferred => Some(value.parse::<bool>().ok().map(serde_json::Value::Bool)
+            .or_else(|| json_number(value))
+            .unwrap_or_else(|| serde_json::Value::String(value.to_string()))),
     }
 }
 
@@ -323,11 +383,117 @@ mod tests {
             ("Nested.Flag".to_string(), "false".to_string()),
             ("Name".to_string(), "Forge".to_string()),
         ];
-        let out: serde_json::Value = serde_json::from_str(&set_json_values(text, &values).unwrap()).unwrap();
+        let out: serde_json::Value = serde_json::from_str(&set_json_values(text, &values, &HashMap::new()).unwrap()).unwrap();
         assert_eq!(out["MaxPlayers"], 32);
         assert_eq!(out["Nested"]["Keep"], true);
         assert_eq!(out["Nested"]["Flag"], false);
         assert_eq!(out["Name"], "Forge");
-        assert!(set_json_values("[1,2]", &values).is_none());
+        assert!(set_json_values("[1,2]", &values, &HashMap::new()).is_none());
+    }
+
+    #[test]
+    fn json_keeps_existing_strings_numbers_booleans_and_nested_objects() {
+        let text = r#"{"Password":"","Name":"Forge","Nested":{"Enabled":true,"Rate":1.5,"Slots":4,"Keep":{"Value":1}}}"#;
+        let values = vec![
+            ("Password".to_string(), "001234".to_string()),
+            ("Name".to_string(), "false".to_string()),
+            ("Nested.Enabled".to_string(), "false".to_string()),
+            ("Nested.Rate".to_string(), "2.75".to_string()),
+            ("Nested.Slots".to_string(), "16".to_string()),
+            ("Nested.Keep".to_string(), "accidental scalar".to_string()),
+        ];
+        let out: serde_json::Value = serde_json::from_str(
+            &set_json_values(text, &values, &HashMap::new()).unwrap(),
+        ).unwrap();
+        assert_eq!(out["Password"], "001234");
+        assert_eq!(out["Name"], "false");
+        assert_eq!(out["Nested"]["Enabled"], false);
+        assert_eq!(out["Nested"]["Rate"], 2.75);
+        assert_eq!(out["Nested"]["Slots"], 16);
+        assert_eq!(out["Nested"]["Keep"]["Value"], 1);
+    }
+
+    #[test]
+    fn json_invalid_typed_input_does_not_change_the_existing_type() {
+        let text = r#"{"Count":8,"Enabled":true}"#;
+        let values = vec![
+            ("Count".to_string(), "NaN".to_string()),
+            ("Enabled".to_string(), "not a boolean".to_string()),
+        ];
+        let out: serde_json::Value = serde_json::from_str(
+            &set_json_values(text, &values, &HashMap::new()).unwrap(),
+        ).unwrap();
+        assert_eq!(out, serde_json::from_str::<serde_json::Value>(text).unwrap());
+    }
+
+    struct TestDir(std::path::PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let path = std::env::temp_dir().join(format!("localforge-json-{}-{stamp}-{sequence}", std::process::id()));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn sotf_config_preserves_defaults_and_text_types_for_existing_and_missing_keys() {
+        let game = crate::get_builtin_games().into_iter()
+            .find(|g| g.game_type.0 == "sons-of-the-forest").unwrap();
+        let dir = TestDir::new();
+        let path = dir.0.join(&game.config_files[0].path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let initial = r#"{"MaxPlayers":8,"ServerName":"Dedicated","GameMode":"Normal","Password":"","SaveSlot":1}"#;
+        for contents in [initial, "{}"] {
+            for overrides in [
+                HashMap::new(),
+                env(&[("SRV_PW", "001234"), ("SRV_NAME", "123")]),
+                env(&[("SRV_PW", "true"), ("SRV_NAME", "false")]),
+                env(&[("SRV_PW", "false"), ("SRV_NAME", "true")]),
+            ] {
+                std::fs::write(&path, contents).unwrap();
+                let variables = crate::build_env_vars(&game, 8192, 8766, &overrides);
+                assert_eq!(apply_config_files(&dir.0, &game, &variables).unwrap(), vec![game.config_files[0].path.clone()]);
+                let actual: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                assert_eq!(actual["Password"], serde_json::Value::String(variables["SRV_PW"].clone()));
+                assert_eq!(actual["ServerName"], serde_json::Value::String(variables["SRV_NAME"].clone()));
+                assert_eq!(actual["GameMode"], "Normal");
+                assert_eq!(actual["MaxPlayers"], 8);
+                assert_eq!(actual["SaveSlot"], 1);
+                assert!(apply_config_files(&dir.0, &game, &variables).unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn json_missing_keys_use_declared_number_and_boolean_select_types() {
+        let mut game = crate::get_builtin_games().into_iter()
+            .find(|g| g.game_type.0 == "sons-of-the-forest").unwrap();
+        game.config_files[0].variables = env(&[
+            ("Nested.Enabled", "{{SKIP_TESTS}}"),
+            ("Nested.Port", "{{SERVER_PORT}}"),
+            ("Nested.Composite", "{{SRV_NAME}}{{SRV_PW}}"),
+        ]);
+        let dir = TestDir::new();
+        let path = dir.0.join(&game.config_files[0].path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{}").unwrap();
+        let variables = crate::build_env_vars(&game, 8192, 8766, &env(&[
+            ("SRV_NAME", "00"), ("SRV_PW", "1234"), ("SKIP_TESTS", "false"),
+        ]));
+        apply_config_files(&dir.0, &game, &variables).unwrap();
+        let actual: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(actual["Nested"]["Enabled"], false);
+        assert_eq!(actual["Nested"]["Port"], 8766);
+        assert_eq!(actual["Nested"]["Composite"], "001234");
     }
 }
