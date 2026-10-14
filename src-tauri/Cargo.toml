@@ -3,7 +3,7 @@ members = [".", "core", "backend-local", "backend-remote", "agent", "cloud-clien
 resolver = "2"
 
 [workspace.package]
-version = "1.0.2"
+version = "1.0.3"
 authors = ["Fabrizio"]
 edition = "2021"
 license = "MIT"
@@ -53,7 +53,9 @@ tauri-plugin-process = "2"
 tauri-plugin-opener = "2"
 # Lets us register the `localforge://` URL scheme + receive the deep-link
 # from the OS after an OAuth redirect from the cloud API.
-tauri-plugin-deep-link = "2"
+# 2.6.2 fails to compile on Linux with rust-ini 0.21.3 (incomplete
+# ParseOption initializer). Remove the pin once an upstream fix is released.
+tauri-plugin-deep-link = "=2.6.1"
 # Pairs with deep-link on Linux/Windows: a second launch of LocalForge
 # (which is what the OS does when handling a localforge:// URL) gets
 # intercepted, its CLI args (including the URL) forwarded to the
