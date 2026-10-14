@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useDockerStore } from './stores/dockerStore';
 import { useGamesStore } from './stores/gamesStore';
@@ -7,12 +7,6 @@ import { useAuthStore } from './stores/authStore';
 import { TitleBar } from './components/TitleBar';
 import { Sidebar } from './components/Sidebar';
 import { Home } from './pages/Home';
-import { Servers } from './pages/Servers';
-import { CreateServer } from './pages/CreateServer';
-import { ServerDetail } from './pages/ServerDetail';
-import { GamesPage } from './pages/Games';
-import { Settings } from './pages/Settings';
-import { NodesPage } from './pages/Nodes';
 import { DockerRequired } from './components/DockerRequired';
 import { OAuthToast } from './components/OAuthToast';
 import { AcceptInviteToast } from './components/AcceptInviteToast';
@@ -27,10 +21,18 @@ import { OnboardingWizard } from './components/OnboardingWizard';
 import { AppDialog } from './components/AppDialog';
 import './App.css';
 
+const Servers = lazy(() => import('./pages/Servers').then((m) => ({ default: m.Servers })));
+const CreateServer = lazy(() => import('./pages/CreateServer').then((m) => ({ default: m.CreateServer })));
+const ServerDetail = lazy(() => import('./pages/ServerDetail').then((m) => ({ default: m.ServerDetail })));
+const GamesPage = lazy(() => import('./pages/Games').then((m) => ({ default: m.GamesPage })));
+const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
+const NodesPage = lazy(() => import('./pages/Nodes').then((m) => ({ default: m.NodesPage })));
+
 function App() {
-  const { status, checkStatus } = useDockerStore();
-  const { fetchGames } = useGamesStore();
-  const { fetchServers } = useServerStore();
+  const status = useDockerStore((s) => s.status);
+  const checkStatus = useDockerStore((s) => s.checkStatus);
+  const fetchGames = useGamesStore((s) => s.fetchGames);
+  const fetchServers = useServerStore((s) => s.fetchServers);
   const hydrateAuth = useAuthStore((s) => s.hydrate);
   const subscribeToAuthEvents = useAuthStore((s) => s.subscribeToEvents);
 
@@ -66,16 +68,18 @@ function App() {
           ) : (
             <main className="main-content">
               <div className="page-container">
-                <Routes>
-                  <Route path="/" element={<Home />} />
-                  <Route path="/servers" element={<Servers />} />
-                  <Route path="/servers/create" element={<CreateServer />} />
-                  <Route path="/servers/:id" element={<ServerDetail />} />
-                  <Route path="/games" element={<GamesPage />} />
-                  <Route path="/nodes" element={<NodesPage />} />
-                  <Route path="/settings" element={<Settings />} />
-                  <Route path="*" element={<Navigate to="/" replace />} />
-                </Routes>
+                <Suspense fallback={<div role="status" className="p-6 text-sm text-slate-400">Loading page…</div>}>
+                  <Routes>
+                    <Route path="/" element={<Home />} />
+                    <Route path="/servers" element={<Servers />} />
+                    <Route path="/servers/create" element={<CreateServer />} />
+                    <Route path="/servers/:id" element={<ServerDetail />} />
+                    <Route path="/games" element={<GamesPage />} />
+                    <Route path="/nodes" element={<NodesPage />} />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="*" element={<Navigate to="/" replace />} />
+                  </Routes>
+                </Suspense>
               </div>
             </main>
           )}

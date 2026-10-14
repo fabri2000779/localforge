@@ -19,14 +19,12 @@ function navClass({ isActive }: { isActive: boolean }) {
 }
 
 export function Sidebar() {
-  const { servers } = useServerStore();
-  const { status, info } = useDockerStore();
-  const { games } = useGamesStore();
-  const { nodes } = useNodesStore();
-
-  const runningCount = servers.filter((s) => s.status === 'running').length;
-  const customGamesCount = games.filter((g) => g.is_custom).length;
-  const remoteCount = nodes.filter((n) => n.kind.kind === 'remote').length;
+  const serverCount = useServerStore((s) => s.servers.length);
+  const runningCount = useServerStore((s) => s.servers.filter((server) => server.status === 'running').length);
+  const dockerRunning = useDockerStore((s) => s.status?.running);
+  const dockerVersion = useDockerStore((s) => s.info?.version);
+  const customGamesCount = useGamesStore((s) => s.games.filter((game) => game.is_custom).length);
+  const remoteCount = useNodesStore((s) => s.nodes.filter((node) => node.kind.kind === 'remote').length);
 
   return (
     <aside className="app-sidebar">
@@ -47,8 +45,8 @@ export function Sidebar() {
         <NavLink to="/servers" className={navClass}>
           <Server size={16} strokeWidth={2} className="shrink-0" />
           <span className="flex-1">My Servers</span>
-          {servers.length > 0 && (
-            <span className="sidebar-badge">{servers.length}</span>
+          {serverCount > 0 && (
+            <span className="sidebar-badge">{serverCount}</span>
           )}
         </NavLink>
 
@@ -92,11 +90,11 @@ export function Sidebar() {
         <div className="flex items-center gap-2">
           <span
             className={`status-dot ${
-              status?.running ? 'status-running' : 'status-error'
+              dockerRunning ? 'status-running' : 'status-error'
             }`}
           />
           <span className="text-[11.5px] font-medium text-slate-300">
-            {status?.running ? 'Docker connected' : 'Docker offline'}
+            {dockerRunning ? 'Docker connected' : 'Docker offline'}
           </span>
         </div>
         {runningCount > 0 && (
@@ -105,9 +103,9 @@ export function Sidebar() {
             {runningCount} server{runningCount !== 1 ? 's' : ''} running
           </div>
         )}
-        {info && (
+        {dockerVersion != null && (
           <div className="text-[10.5px] text-slate-600 font-mono tracking-tight">
-            Docker {info.version}
+            Docker {dockerVersion}
           </div>
         )}
       </div>
