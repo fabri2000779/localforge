@@ -1,6 +1,6 @@
 {
   "name": "localforge",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Run game servers locally with a single click",
   "author": "Fabrizio",
   "license": "MIT",
@@ -22,28 +22,28 @@
     "@tauri-apps/plugin-process": "^2.4.0",
     "@tauri-apps/plugin-shell": "^2.5.0",
     "@tauri-apps/plugin-updater": "^2.14.0",
-    "lucide-react": "^1.57.0",
+    "lucide-react": "^1.61.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.4",
-    "zustand": "^5.0.15"
+    "zustand": "^5.0.16"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.3.3",
-    "@tauri-apps/cli": "^2.12.3",
+    "@tauri-apps/cli": "^2.12.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "esbuild": "^0.28.2",
-    "eslint": "^10.12.0",
+    "eslint": "^10.13.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.13.0",
     "prettier": "^3.9.10",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.71.2",
-    "vite": "^8.3.4"
+    "typescript-eslint": "^8.72.1",
+    "vite": "^8.3.5"
   }
 }
